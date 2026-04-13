@@ -1,0 +1,2757 @@
+<!DOCTYPE html>
+<html lang="ja" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>Drop the Pin!</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/exif-js@2.3.0"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; overflow: hidden; font-family: "Yu Gothic", "Hiragino Sans", sans-serif; }
+    a { color: #1565c0; }
+    :root, [data-theme="light"] {
+      --bg:#fff; --surface:#f5f5f5; --surface2:#e8e8e8; --text:#212121; --text-sub:#757575;
+      --border:#ddd; --accent:#2e7d32; --warn:#ff9800; --danger:#d32f2f;
+      --overlay:rgba(0,0,0,0.44); --sheet-bg:rgba(255,255,255,0.98); --topbar-bg:rgba(255,255,255,0.92);
+      --shadow:0 8px 24px rgba(0,0,0,0.15);
+    }
+    [data-theme="dark"] {
+      --bg:#121212; --surface:#1f1f24; --surface2:#2b2b34; --text:#ececec; --text-sub:#a0a0aa;
+      --border:#3c3c48; --accent:#7cb342; --warn:#ffb300; --danger:#ef5350;
+      --overlay:rgba(0,0,0,0.6); --sheet-bg:rgba(31,31,36,0.98); --topbar-bg:rgba(18,18,18,0.92);
+      --shadow:0 12px 32px rgba(0,0,0,0.4);
+    }
+    body { background: var(--bg); color: var(--text); }
+    #topbar {
+      position: fixed; inset: 0 0 auto 0; z-index: 1200; height: 52px; display: flex; align-items: center; justify-content: space-between;
+      gap: 8px; padding: 0 12px; background: var(--topbar-bg); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border);
+    }
+    .topbar-title { font-size: 15px; font-weight: 700; white-space: nowrap; }
+    .topbar-actions { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    #map { position: fixed; inset: 0; z-index: 1; }
+    #side-panel {
+      display: none; position: fixed; top: 52px; right: 0; bottom: 0; z-index: 700; width: 280px; overflow-y: auto;
+      background: var(--sheet-bg); border-left: 1px solid var(--border); box-shadow: var(--shadow);
+    }
+    @media (min-width: 900px) {
+      body:not(.panel-hidden) #side-panel { display: block; }
+      body:not(.panel-hidden) #map { right: 280px; }
+    }
+    body.panel-visible #side-panel { display: block; }
+    body.panel-visible #map { right: 280px; }
+    body.panel-hidden #side-panel { display: none !important; }
+    body.panel-hidden #map { right: 0 !important; }
+    .icon-btn, .text-btn, .ghost-btn, .danger-btn {
+      border: 1px solid var(--border); background: rgba(255,255,255,0.75); color: var(--text); border-radius: 10px; cursor: pointer;
+    }
+    [data-theme="dark"] .icon-btn, [data-theme="dark"] .text-btn, [data-theme="dark"] .ghost-btn { background: rgba(31,31,36,0.9); }
+    .icon-btn { width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; }
+    .text-btn, .ghost-btn, .danger-btn { padding: 8px 12px; font-size: 12px; font-weight: 700; }
+    .danger-btn { color: #fff; background: var(--danger); border-color: transparent; }
+    .ghost-btn { background: transparent; }
+    .badge {
+      font-size: 11px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--text-sub);
+      white-space: nowrap;
+    }
+    body.edit-mode #mode-badge { color: var(--warn); background: rgba(255,152,0,0.12); border-color: rgba(255,152,0,0.35); }
+    #fab, #unplaced-badge {
+      position: fixed; right: 16px; z-index: 900; display: none; align-items: center; justify-content: center;
+      border: none; border-radius: 999px; box-shadow: var(--shadow); cursor: pointer;
+    }
+    #fab { bottom: 20px; padding: 14px 20px; background: var(--accent); color: #fff; font-size: 14px; font-weight: 700; }
+    #unplaced-badge { bottom: 78px; padding: 8px 14px; background: var(--warn); color: #fff; font-size: 12px; font-weight: 700; }
+    body.edit-mode #fab { display: inline-flex; }
+    .sheet-overlay {
+      position: fixed; inset: 0; z-index: 1400; display: none; align-items: flex-end; justify-content: center;
+      background: var(--overlay); padding: 14px;
+    }
+    .sheet-overlay.open { display: flex; }
+    @media (min-width: 900px) { .sheet-overlay { align-items: center; } }
+    .sheet-body {
+      width: min(100%, 520px); max-height: min(90vh, 860px); overflow-y: auto; background: var(--sheet-bg);
+      border: 1px solid var(--border); border-radius: 22px; box-shadow: var(--shadow); padding: 18px 16px 20px;
+    }
+    .sheet-handle { width: 42px; height: 4px; border-radius: 999px; background: var(--border); margin: 0 auto 14px; }
+    .sheet-title { font-size: 17px; font-weight: 800; margin-bottom: 14px; }
+    .sheet-subtitle, .muted { font-size: 12px; line-height: 1.5; color: var(--text-sub); }
+    .section-card { margin-bottom: 14px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; }
+    .form-group { margin-bottom: 14px; }
+    .form-label { display: block; margin-bottom: 5px; font-size: 12px; font-weight: 700; color: var(--text-sub); }
+    .form-input, .form-textarea {
+      width: 100%; padding: 11px 12px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); border-radius: 12px; font-size: 14px;
+    }
+    .form-textarea { min-height: 88px; resize: vertical; }
+    .inline-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .btn-primary {
+      width: 100%; padding: 13px 14px; border: none; border-radius: 12px; background: var(--accent); color: #fff; font-size: 15px; font-weight: 800; cursor: pointer;
+    }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .color-palette { display: flex; flex-wrap: wrap; gap: 8px; }
+    .color-swatch { width: 30px; height: 30px; border-radius: 50%; border: 3px solid transparent; cursor: pointer; }
+    .color-swatch.selected { border-color: var(--text); transform: scale(1.12); }
+    .file-drop {
+      border: 2px dashed var(--border); border-radius: 14px; padding: 18px 14px; text-align: center; background: var(--surface); color: var(--text-sub); cursor: pointer;
+    }
+    .file-drop.has-file { border-color: var(--accent); color: var(--text); }
+    #upload-preview, #pin-detail-image { width: 100%; max-height: 220px; object-fit: cover; border-radius: 14px; display: none; margin-top: 10px; }
+    .folder-picker { margin-top: 8px; padding: 10px; border-radius: 14px; border: 1px solid var(--border); background: var(--surface); }
+    .folder-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .folder-item, .list-item {
+      width: 100%; display: flex; align-items: center;
+      color: var(--text); text-align: left; cursor: pointer;
+    }
+    .folder-item {
+      gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: rgba(255,255,255,0.8);
+    }
+    [data-theme="dark"] .folder-item, [data-theme="dark"] .list-item { background: rgba(31,31,36,0.92); }
+    .list-item {
+      gap: 8px; padding: 8px 10px; margin-bottom: 6px;
+      border: 1px solid var(--border); border-radius: 12px; background: rgba(255,255,255,0.8);
+    }
+    .list-item.is-linked-highlight {
+      animation: linked-card-lift 1.1s ease-out 1, linked-card-pulse 1.1s ease-out 1;
+      border-color: rgba(46,125,50,0.34);
+      box-shadow: 0 0 0 1px rgba(46,125,50,0.12), 0 10px 24px rgba(46,125,50,0.14);
+      transform: translateY(-2px);
+      position: relative;
+      z-index: 1;
+    }
+    .pin-icon-visual {
+      position: relative;
+      width: 30px;
+      height: 46px;
+      display: block;
+      transform-origin: center bottom;
+    }
+    .pin-icon-visual svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      position: relative;
+      z-index: 1;
+      overflow: visible;
+    }
+    .leaflet-marker-icon.is-linked-highlight {
+      z-index: 640 !important;
+    }
+    .leaflet-marker-icon.is-linked-highlight .pin-icon-visual {
+      animation: linked-marker-pulse 1.5s ease-in-out infinite;
+      transform: translateY(-3px) scale(1.06);
+      filter: drop-shadow(0 0 8px rgba(46,125,50,0.22)) drop-shadow(0 0 14px rgba(46,125,50,0.12));
+      transition: transform 180ms ease, filter 180ms ease;
+    }
+    .leaflet-marker-icon.is-linked-highlight .pin-icon-visual::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 1px;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: 2px solid rgba(46,125,50,0.28);
+      transform: translateX(-50%) scale(0.92);
+      transform-origin: center center;
+      animation: linked-marker-ripple 1.5s ease-out infinite;
+      opacity: 0.9;
+      pointer-events: none;
+      z-index: 0;
+    }
+    .list-thumb {
+      width: 40px; height: 40px; border-radius: 999px; flex: 0 0 40px; overflow: hidden; display: flex; align-items: center; justify-content: center;
+      background: transparent;
+    }
+    .list-thumb.has-photo { padding: 2px; background: var(--thumb-accent, transparent); }
+    .list-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; border-radius: 999px; }
+    .list-thumb-icon { width: 18px; height: 18px; display: block; }
+    .list-meta { min-width: 0; flex: 1; }
+    .list-title { font-size: 12px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .list-subtitle { margin-top: 2px; font-size: 10px; color: var(--text-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .side-section { padding: 12px; border-bottom: 1px solid var(--border); }
+    .side-title { margin-bottom: 8px; font-size: 11px; font-weight: 800; color: var(--text-sub); text-transform: uppercase; letter-spacing: 0.06em; }
+    .empty-note { padding: 8px 4px; font-size: 12px; color: var(--text-sub); line-height: 1.5; }
+    .url-row { display: flex; gap: 8px; margin-bottom: 8px; }
+    .url-input { flex: 1; }
+    .remove-url-btn {
+      width: 38px; flex: 0 0 38px; border: 1px solid var(--border); background: var(--surface); color: var(--text-sub); border-radius: 10px; cursor: pointer;
+    }
+    .pin-link {
+      display: block; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+      text-decoration: none; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere;
+    }
+    .menu-actions { display: flex; flex-direction: column; gap: 8px; }
+    .menu-actions button { width: 100%; }
+    #hint-bar {
+      position: fixed; top: 62px; left: 50%; transform: translateX(-50%); z-index: 1350; min-width: min(90vw, 360px); max-width: 90vw;
+      display: none; padding: 10px 16px; text-align: center; border-radius: 999px; border: 1px solid var(--border); background: var(--sheet-bg); box-shadow: var(--shadow); font-size: 13px;
+    }
+    #placement-bar {
+      position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 1300; display: none; gap: 10px; padding: 10px 12px;
+      width: auto; max-width: calc(100vw - 28px); border: 1px solid var(--border); border-radius: 18px; background: var(--sheet-bg); box-shadow: var(--shadow);
+    }
+    #placement-bar.open { display: flex; }
+    #placement-bar button { flex: 0 0 auto; min-width: 120px; }
+    #placement-confirm { background: var(--accent); color: #fff; border-color: transparent; }
+    #placement-cancel { background: #fff7d6; color: #5d4300; border-color: #f0cf59; }
+    [data-theme="dark"] #placement-cancel { background: #473700; color: #ffe08a; border-color: #8c7112; }
+    .toggle-switch { width: 44px; height: 24px; border: none; border-radius: 999px; background: var(--border); cursor: pointer; position: relative; }
+    .toggle-switch::after {
+      content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: transform 0.15s ease;
+    }
+    .toggle-switch.on { background: var(--accent); }
+    .toggle-switch.on::after { transform: translateX(20px); }
+    .leaflet-control-container .leaflet-bottom.leaflet-left { margin-bottom: 84px; }
+    #dnd-delete-zone {
+      position: fixed; top: 62px; left: 50%; transform: translateX(-50%);
+      z-index: 1310; display: none; padding: 10px 24px;
+      background: var(--danger); color: #fff; font-size: 13px; font-weight: 700;
+      border-radius: 999px; box-shadow: var(--shadow);
+      min-width: 200px; text-align: center; white-space: nowrap;
+      transition: transform 0.1s, background 0.1s;
+    }
+    #dnd-delete-zone.active { display: block; }
+    #dnd-delete-zone.dragover { background: #b71c1c; transform: translateX(-50%) scale(1.06); }
+    .dnd-drop-target.dragover {
+      outline: 2px dashed var(--accent); background: rgba(46,125,50,0.08); border-radius: 8px;
+    }
+    .pin-tooltip {
+      background: var(--sheet-bg, #fff);
+      color: var(--text, #111);
+      border: 1px solid rgba(0,0,0,0.12);
+      border-radius: 8px;
+      padding: 4px 10px;
+      font-size: 13px;
+      font-weight: 500;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      white-space: nowrap;
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .pin-tooltip::before { display: none; }
+    .tag-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+    .tag-chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(46,125,50,0.1); color: var(--accent); border: 1px solid rgba(46,125,50,0.25); white-space: nowrap; }
+    #share-tag-chips .tag-chips { margin-top: 0; }
+    .color-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+    .color-chip { width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgba(0,0,0,0.18); display: inline-block; }
+    .share-link-item {
+      padding: 12px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface);
+    }
+    .share-link-item + .share-link-item { margin-top: 10px; }
+    .share-link-head {
+      display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+    }
+    .share-link-title { font-size: 14px; font-weight: 800; word-break: break-word; }
+    .share-link-meta { margin-top: 4px; font-size: 11px; color: var(--text-sub); }
+    .share-link-url {
+      margin-top: 8px; font-size: 11px; color: var(--text-sub); word-break: break-all;
+    }
+    .share-link-actions { display: flex; flex-wrap: wrap; gap: 6px; flex: 0 0 auto; }
+    .share-link-actions .text-btn,
+    .share-link-actions .danger-btn { padding: 6px 10px; font-size: 11px; }
+    .share-link-tags { margin-top: 8px; }
+    .status-badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(255,152,0,0.12); color: var(--warn); border: 1px solid rgba(255,152,0,0.3); white-space: nowrap; margin-top: 4px; }
+    .form-select { width: 100%; padding: 11px 12px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); border-radius: 12px; font-size: 14px; }
+    .filter-tag-chip {
+      font-size: 11px; padding: 3px 9px; border-radius: 999px;
+      background: var(--surface); color: var(--text-sub);
+      border: 1px solid var(--border); cursor: pointer; white-space: nowrap;
+    }
+    .filter-tag-chip.active {
+      background: rgba(46,125,50,0.1); color: var(--accent);
+      border-color: rgba(46,125,50,0.25);
+    }
+    .color-filter-swatch {
+      width: 20px; height: 20px; border-radius: 50%;
+      border: 2px solid transparent; cursor: pointer; flex-shrink: 0;
+    }
+    .color-filter-swatch.active { border-color: var(--text); transform: scale(1.2); }
+    .share-banner {
+      position: fixed; top: 52px; inset-inline: 0; z-index: 1100;
+      display: none; padding: 6px 12px; text-align: center;
+      background: #1565c0; color: #fff; font-size: 12px; font-weight: 700;
+    }
+    @keyframes linked-card-lift {
+      0% { transform: translateY(0) scale(1); }
+      45% { transform: translateY(-3px) scale(1.015); }
+      100% { transform: translateY(-2px) scale(1); }
+    }
+    @keyframes linked-card-pulse {
+      0% {
+        box-shadow: 0 0 0 0 rgba(46,125,50,0.0), 0 10px 24px rgba(46,125,50,0.08);
+      }
+      50% {
+        box-shadow: 0 0 0 8px rgba(46,125,50,0.08), 0 12px 28px rgba(46,125,50,0.14);
+      }
+      100% {
+        box-shadow: 0 0 0 0 rgba(46,125,50,0.0), 0 10px 24px rgba(46,125,50,0.08);
+      }
+    }
+    @keyframes linked-marker-pulse {
+      0%, 100% {
+        transform: translateY(-3px) scale(1.05);
+        filter: drop-shadow(0 0 7px rgba(46,125,50,0.18)) drop-shadow(0 0 12px rgba(46,125,50,0.08));
+      }
+      50% {
+        transform: translateY(-4px) scale(1.075);
+        filter: drop-shadow(0 0 10px rgba(46,125,50,0.28)) drop-shadow(0 0 18px rgba(46,125,50,0.16));
+      }
+    }
+    @keyframes linked-marker-ripple {
+      0% {
+        transform: translateX(-50%) scale(0.92);
+        opacity: 0.42;
+      }
+      70% {
+        transform: translateX(-50%) scale(1.34);
+        opacity: 0.14;
+      }
+      100% {
+        transform: translateX(-50%) scale(1.46);
+        opacity: 0;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .list-item.is-linked-highlight,
+      .leaflet-marker-icon.is-linked-highlight .pin-icon-visual {
+        animation: none;
+        transition: border-color 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease, transform 0.12s ease;
+      }
+      .list-item.is-linked-highlight {
+        transform: none;
+        box-shadow: 0 0 0 1px rgba(46,125,50,0.16), 0 0 0 4px rgba(46,125,50,0.08);
+      }
+      .leaflet-marker-icon.is-linked-highlight .pin-icon-visual {
+        transform: translateY(-2px) scale(1.03);
+        filter: drop-shadow(0 0 3px rgba(46,125,50,0.16));
+      }
+      .leaflet-marker-icon.is-linked-highlight .pin-icon-visual::after {
+        animation: none;
+        transform: translateX(-50%) scale(1.06);
+        opacity: 0.28;
+      }
+    }
+    body.share-mode .share-banner { display: block; }
+    body.share-mode #edit-toggle,
+    body.share-mode #settings-toggle,
+    body.share-mode #fab,
+    body.share-mode #unplaced-badge,
+    body.share-mode #mode-badge,
+    body.share-mode #share-open-btn,
+    body.share-mode #bulk-action-bar { display: none !important; }
+    body.share-mode #map { top: calc(52px + 32px); }
+    body.share-mode #side-panel { top: calc(52px + 32px); }
+    body.share-mode #pin-detail-share { display: none !important; }
+    #map-search-bar {
+      position: fixed;
+      top: calc(52px + 8px);
+      left: 12px;
+      z-index: 800;
+      width: min(320px, calc(100vw - 24px));
+      background: var(--sheet-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    #map-search-bar-row1 {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    #map-search-input { flex: 1; min-width: 0; }
+    #map-search-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      align-items: center;
+    }
+    #map-tag-filter-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 4px;
+      font-size: 11px;
+      color: var(--text-sub);
+    }
+    #map-tag-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+    #map-color-filter { display: flex; flex-wrap: wrap; gap: 5px; }
+    .map-filter-btn.filter-active {
+      border-color: var(--accent);
+      color: var(--accent);
+      font-weight: 700;
+    }
+  </style>
+</head>
+<body>
+  <div id="topbar">
+    <span class="topbar-title">📍 Drop the Pin!</span>
+    <div class="topbar-actions">
+      <button id="theme-toggle" class="icon-btn" type="button" title="テーマ切替">🌙</button>
+      <button id="panel-toggle" class="icon-btn" type="button" title="リスト表示/非表示">🗺️</button>
+      <button id="share-open-btn" class="icon-btn" type="button" title="共有リンク生成">🔗</button>
+      <button id="settings-toggle" class="icon-btn" type="button" title="設定">⚙️</button>
+      <span id="mode-badge" class="badge">閲覧中</span>
+      <button id="edit-toggle" class="text-btn" type="button">編集モード</button>
+    </div>
+  </div>
+  <div class="share-banner">📤 共有ビュー（閲覧のみ）— 編集・追加はできません</div>
+  <div id="share-empty-msg"
+    style="display:none;position:fixed;top:calc(52px + 32px + 8px);left:50%;transform:translateX(-50%);
+           z-index:1100;padding:12px 20px;border-radius:14px;border:1px solid var(--border);
+           background:var(--sheet-bg);box-shadow:var(--shadow);font-size:13px;max-width:90vw;text-align:center;">
+  </div>
+  <div id="map" class="dnd-drop-target"></div>
+  <div id="map-search-bar">
+    <div id="map-search-bar-row1">
+      <input id="map-search-input" class="form-input" type="search"
+             placeholder="タイトル・説明・タグで検索">
+      <button id="map-search-toggle" class="icon-btn" type="button"
+              title="フィルタ・ソート">▼</button>
+    </div>
+    <div id="map-search-expanded" style="display:none;">
+      <div id="map-search-controls">
+        <select id="map-sort" class="form-select"
+                style="padding:7px 8px;font-size:12px;">
+          <option value="newest">新しい順</option>
+          <option value="oldest">古い順</option>
+          <option value="title">タイトル順</option>
+        </select>
+        <button id="map-filter-status-btn" class="ghost-btn map-filter-btn"
+                type="button" style="display:none;font-size:12px;">状態で検索</button>
+        <button id="map-filter-color-btn" class="ghost-btn map-filter-btn"
+                type="button" style="font-size:12px;">色で検索</button>
+        <button id="map-filter-tag-btn" class="ghost-btn map-filter-btn"
+                type="button" style="font-size:12px;">タグで検索</button>
+        <button id="map-filter-clear-btn" class="ghost-btn map-filter-btn"
+                type="button" style="font-size:12px;">条件をクリア</button>
+      </div>
+      <div id="map-filter-status-detail" style="display:none;margin-top:4px;">
+        <select id="map-status-filter" class="form-select"
+                style="padding:7px 8px;font-size:12px;width:100%;">
+          <option value="all">状態: すべて</option>
+          <option value="未対応">未対応</option>
+          <option value="対応中">対応中</option>
+          <option value="完了">完了</option>
+          <option value="保留">保留</option>
+        </select>
+      </div>
+      <div id="map-filter-color-detail" style="display:none;margin-top:4px;">
+        <div id="map-color-filter"></div>
+      </div>
+      <div id="map-filter-tag-detail" style="display:none;margin-top:4px;">
+        <div id="map-tag-filter-header">
+          <span>タグ絞り込み</span>
+          <button id="map-tag-mode-btn" class="ghost-btn" type="button"
+                  style="padding:2px 8px;font-size:11px;min-width:36px;">OR</button>
+        </div>
+        <div id="map-tag-chips"></div>
+      </div>
+    </div>
+  </div>
+  <aside id="side-panel">
+    <div class="side-section">
+      <div class="side-title">設定</div>
+      <div class="inline-actions">
+        <a id="side-root-drive-link" class="ghost-btn" href="#" target="_blank" rel="noopener noreferrer">Drive</a>
+      </div>
+    </div>
+    <div class="side-section dnd-drop-target" id="side-unplaced"></div>
+    <div class="side-section dnd-drop-target" id="side-placed"></div>
+  </aside>
+  <div id="bulk-action-bar" style="display:none;position:fixed;bottom:0;left:0;right:0;z-index:1250;padding:12px 16px;background:var(--sheet-bg);border-top:1px solid var(--border);box-shadow:0 -4px 12px rgba(0,0,0,0.1);display:none;align-items:center;gap:10px;">
+    <span id="bulk-count" style="font-size:13px;font-weight:700;flex:1;"></span>
+    <select id="bulk-status-select" class="form-select" style="width:110px;padding:7px 8px;font-size:12px;">
+      <option value="未対応">未対応</option>
+      <option value="対応中">対応中</option>
+      <option value="完了">完了</option>
+      <option value="保留">保留</option>
+    </select>
+    <button id="bulk-apply-btn" class="text-btn" type="button" style="white-space:nowrap;">一括変更</button>
+    <button id="bulk-cancel-btn" class="ghost-btn" type="button">解除</button>
+  </div>
+  <button id="fab" type="button">＋ ピンを追加</button>
+  <button id="unplaced-badge" type="button">📋 未配置 0件</button>
+  <div id="hint-bar"></div>
+  <div id="dnd-delete-zone">🗑️ ここに入れると削除</div>
+  <div id="placement-bar">
+    <button id="placement-confirm" class="text-btn" type="button">配置</button>
+    <button id="placement-cancel" class="ghost-btn" type="button">戻る</button>
+  </div>
+
+  <div id="upload-overlay" class="sheet-overlay" role="dialog" aria-modal="true"><div class="sheet-body">
+    <div class="sheet-handle"></div><div class="sheet-title">＋ ピンを追加</div>
+    <div class="sheet-subtitle">写真は任意です。タイトルだけでも保存できます。</div>
+    <div class="section-card">
+      <label class="form-label">写真（任意）</label>
+      <div id="file-drop" class="file-drop">📷 写真をタップして選択</div>
+      <input type="file" id="file-input" accept="image/*" style="display:none">
+      <img id="upload-preview" alt="プレビュー">
+      <div class="inline-actions" style="margin-top:10px;"><button id="clear-photo-btn" class="ghost-btn" type="button">写真を外す</button></div>
+    </div>
+    <div class="form-group"><label class="form-label" for="upload-title">タイトル</label><input id="upload-title" class="form-input" type="text" maxlength="80"><div id="upload-rename-note" class="muted" style="display:none;margin-top:6px;"></div></div>
+    <div class="form-group"><label class="form-label" for="upload-desc">説明</label><textarea id="upload-desc" class="form-textarea" maxlength="400"></textarea></div>
+    <div class="form-group" id="upload-status-group" style="display:none"><label class="form-label" for="upload-status">状態</label><select id="upload-status" class="form-select"><option value="未対応">未対応</option><option value="対応中">対応中</option><option value="完了">完了</option><option value="保留">保留</option></select></div>
+    <div class="form-group" id="upload-tags-group"><label class="form-label" for="upload-tags">タグ <span class="muted">（例: #tree #bird、最大5件）</span></label><input id="upload-tags" class="form-input" type="text" maxlength="200" placeholder="#tree #bird"></div>
+    <div class="form-group"><label class="form-label">参考URL</label><div id="upload-links"></div></div>
+    <div class="form-group"><label class="form-label">ピンの色</label><div id="upload-color-palette" class="color-palette"></div></div>
+    <div class="section-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;"><label class="form-label" style="margin-bottom:0;">保存先フォルダ</label><button id="folder-back-btn" class="ghost-btn" type="button" style="display:none;">← 戻る</button></div>
+      <div id="folder-breadcrumb" class="muted" style="margin-top:6px;"></div>
+      <div class="folder-picker"><div id="folder-list"></div></div>
+      <div class="folder-links">
+        <a id="root-drive-link" class="ghost-btn" href="#" target="_blank" rel="noopener noreferrer">Driveを開く</a>
+        <a id="current-drive-link" class="ghost-btn" href="#" target="_blank" rel="noopener noreferrer">現在のフォルダを開く</a>
+      </div>
+    </div>
+    <div class="inline-actions">
+      <button id="upload-submit" class="btn-primary" type="button">送信</button>
+      <button id="upload-save-unplaced" class="text-btn" type="button">未配置で保存</button>
+      <button id="upload-cancel" class="ghost-btn" type="button">キャンセル</button>
+    </div>
+  </div></div>
+
+  <div id="settings-overlay" class="sheet-overlay" role="dialog" aria-modal="true"><div class="sheet-body">
+    <div class="sheet-handle"></div><div class="sheet-title">設定</div>
+    <div class="section-card" style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+      <div><div style="font-size:14px;font-weight:800;">タイトル変更時に写真名も変更</div><div class="muted">写真付きピンの新規保存時と編集時に適用されます。</div></div>
+      <button id="rename-sync-toggle" class="toggle-switch" type="button" aria-label="写真名同期"></button>
+    </div>
+    <div class="section-card"><div class="muted">保存先フォルダ</div><div class="inline-actions" style="margin-top:10px;"><a id="settings-root-drive-link" class="ghost-btn" href="#" target="_blank" rel="noopener noreferrer">Driveを開く</a></div></div>
+    <div class="inline-actions"><button id="settings-save" class="btn-primary" type="button">保存</button><button id="settings-cancel" class="ghost-btn" type="button">閉じる</button></div>
+  </div></div>
+
+  <div id="location-choice-overlay" class="sheet-overlay" role="dialog" aria-modal="true"><div class="sheet-body">
+    <div class="sheet-handle"></div><div class="sheet-title">📍 位置情報がありません</div>
+    <div id="location-choice-message" class="sheet-subtitle"></div>
+    <div class="menu-actions">
+      <button id="location-place-now" class="btn-primary" type="button">今すぐ場所を指定</button>
+      <button id="location-save-later" class="text-btn" type="button">未配置で保存</button>
+      <button id="location-choice-cancel" class="ghost-btn" type="button">キャンセル</button>
+    </div>
+  </div></div>
+
+  <div id="pin-detail-overlay" class="sheet-overlay" role="dialog" aria-modal="true"><div class="sheet-body">
+    <div class="sheet-handle"></div><img id="pin-detail-image" alt="ピン画像">
+    <div id="pin-detail-title" class="sheet-title" style="margin-top:10px;"></div>
+    <div id="pin-detail-status" style="display:none;margin-bottom:6px;"></div>
+    <div id="pin-detail-tags" style="margin-bottom:8px;"></div>
+    <div id="pin-detail-desc" class="sheet-subtitle"></div>
+    <div id="pin-detail-links" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px;"></div>
+    <div id="pin-detail-drive" class="inline-actions" style="margin-bottom:12px;"></div>
+    <div id="pin-detail-time" class="muted" style="margin-bottom:14px;"></div>
+    <div class="inline-actions"><button id="pin-detail-goto" class="ghost-btn" type="button" style="display:none;">この場所に移動</button><button id="pin-detail-share" class="ghost-btn" type="button">このピンを共有</button><button id="pin-detail-close" class="ghost-btn" type="button">閉じる</button></div>
+  </div></div>
+
+  <div id="unplaced-overlay" class="sheet-overlay" role="dialog" aria-modal="true"><div class="sheet-body">
+    <div class="sheet-handle"></div><div class="sheet-title">📋 未配置ピン</div>
+    <div class="sheet-subtitle">タップで詳細、長押しまたは右クリックで操作メニューを開けます。</div>
+    <div id="unplaced-list"></div>
+    <div class="inline-actions" style="margin-top:14px;"><button id="unplaced-close" class="ghost-btn" type="button">閉じる</button></div>
+  </div></div>
+
+  <div id="pin-menu-overlay" class="sheet-overlay" role="dialog" aria-modal="true"><div class="sheet-body" style="max-width:360px;">
+    <div class="sheet-handle"></div><div id="pin-menu-title" class="sheet-title"></div>
+    <div class="menu-actions">
+      <button id="pin-menu-edit" class="text-btn" type="button">編集</button>
+      <button id="pin-menu-unplace" class="text-btn" type="button">未配置に戻す</button>
+      <button id="pin-menu-place" class="text-btn" type="button">配置開始</button>
+      <button id="pin-menu-delete" class="danger-btn" type="button">削除</button>
+      <button id="pin-menu-close" class="ghost-btn" type="button">閉じる</button>
+    </div>
+  </div></div>
+
+  <div id="edit-overlay" class="sheet-overlay" role="dialog" aria-modal="true"><div class="sheet-body">
+    <div class="sheet-handle"></div><div class="sheet-title">ピンを編集</div>
+    <div class="form-group"><label class="form-label" for="edit-title">タイトル</label><input id="edit-title" class="form-input" type="text" maxlength="80"><div id="edit-rename-note" class="muted" style="display:none;margin-top:6px;"></div></div>
+    <div class="form-group"><label class="form-label" for="edit-desc">説明</label><textarea id="edit-desc" class="form-textarea" maxlength="400"></textarea></div>
+    <div class="form-group"><label class="form-label" for="edit-status">状態</label><select id="edit-status" class="form-select"><option value="未対応">未対応</option><option value="対応中">対応中</option><option value="完了">完了</option><option value="保留">保留</option></select></div>
+    <div class="form-group"><label class="form-label" for="edit-tags">タグ <span class="muted">（例: #tree #bird、最大5件）</span></label><input id="edit-tags" class="form-input" type="text" maxlength="200" placeholder="#tree #bird"></div>
+    <div class="form-group"><label class="form-label">参考URL</label><div id="edit-links"></div></div>
+    <div class="form-group"><label class="form-label">ピンの色</label><div id="edit-color-palette" class="color-palette"></div></div>
+    <div id="edit-drive-area" class="section-card" style="display:none;"></div>
+    <div class="inline-actions"><button id="edit-save" class="btn-primary" type="button">保存</button><button id="edit-cancel" class="ghost-btn" type="button">キャンセル</button></div>
+  </div></div>
+
+  <div id="delete-overlay" class="sheet-overlay" role="dialog" aria-modal="true"><div class="sheet-body" style="max-width:360px;">
+    <div class="sheet-handle"></div><div class="sheet-title">ピンを削除</div><div id="delete-message" class="sheet-subtitle"></div>
+    <div class="menu-actions"><button id="delete-confirm" class="danger-btn" type="button">削除する</button><button id="delete-cancel" class="ghost-btn" type="button">キャンセル</button></div>
+  </div></div>
+
+  <div id="share-overlay" class="sheet-overlay" role="dialog" aria-modal="true"><div class="sheet-body">
+    <div class="sheet-handle"></div><div class="sheet-title">共有リンクを管理</div>
+    <div class="section-card">
+      <div class="form-group">
+        <label class="form-label" for="share-link-label">表示名</label>
+        <input id="share-link-label" class="form-input" type="text" maxlength="80" placeholder="未入力なら Drop the Pin!">
+      </div>
+      <div class="form-group" style="margin-bottom:12px;">
+        <div class="form-label">対象タグ</div>
+        <div id="share-tag-chips"></div>
+      </div>
+      <div class="form-group" style="margin-bottom:12px;">
+        <div class="form-label">対象のピン色</div>
+        <div id="share-color-filter"></div>
+      </div>
+      <div class="inline-actions">
+        <button id="share-tag-mode-btn" class="ghost-btn" type="button" style="min-width:64px;">OR</button>
+        <button id="share-filter-clear-btn" class="ghost-btn" type="button">条件をクリア</button>
+        <button id="share-create-btn" class="btn-primary" type="button">共有リンクを作成</button>
+      </div>
+    </div>
+    <div class="section-card">
+      <div class="side-title">発行済みリンク</div>
+      <div id="share-links-list"></div>
+    </div>
+    <div class="inline-actions" style="margin-top:12px;">
+      <button id="share-close" class="ghost-btn" type="button">閉じる</button>
+    </div>
+  </div></div>
+
+  <div id="dup-warning-overlay" class="sheet-overlay" role="dialog" aria-modal="true"><div class="sheet-body" style="max-width:460px;">
+  <div class="sheet-handle"></div>
+  <div class="sheet-title">⚠️ 近接した同名ピンがあります</div>
+  <div class="sheet-subtitle" style="margin-bottom:12px;">以下のピンがすでに近くに登録されています。そのまま保存することも可能です。</div>
+  <div id="dup-warning-list" style="margin-bottom:14px;"></div>
+  <div class="menu-actions">
+    <button id="dup-save-anyway" class="btn-primary" type="button">そのまま保存</button>
+    <button id="dup-cancel-btn" class="ghost-btn" type="button">キャンセル</button>
+  </div>
+</div></div>
+
+  <script>
+    const SAFE_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+    const URL_RE = /^https?:\/\/\S+$/i;
+    const PIN_COLORS = [
+      { hex: '#e53935', label: '赤' }, { hex: '#e91e63', label: 'ピンク' }, { hex: '#9c27b0', label: '紫' }, { hex: '#3f51b5', label: '藍' }, { hex: '#2196f3', label: '青' },
+      { hex: '#00bcd4', label: '水色' }, { hex: '#009688', label: 'ティール' }, { hex: '#4caf50', label: '緑' }, { hex: '#8bc34a', label: '黄緑' }, { hex: '#ffeb3b', label: '黄' },
+      { hex: '#ff9800', label: '橙' }, { hex: '#ff5722', label: '朱' }, { hex: '#795548', label: '茶' }, { hex: '#607d8b', label: 'グレー' }, { hex: '#212121', label: '黒' }
+    ];
+
+    const state = {
+      editMode: false,
+      pins: [],
+      markers: {},
+      appSettings: { rootFolderId: '', rootFolderUrl: '#', renameFileWithTitle: false },
+      upload: { file: null, lat: null, lng: null, color: PIN_COLORS[0].hex },
+      editColor: PIN_COLORS[0].hex,
+      contextPinId: null,
+      editingPinId: null,
+      placement: null,
+      suppressClickUntil: 0,
+      draggedPinId: null,
+      pointerX: 0,
+      pointerY: 0,
+      listQuery: '',
+      listStatusFilter: 'all',
+      listSort: 'newest',
+      selectedPinIds: new Set(),
+      listTagFilter: [],        // string[] — フィルタ中のタグ（正規化なし）
+      listTagMode: 'or',        // 'and' | 'or'
+      listColorFilter: [],      // string[] — hex colors
+      linkedCardHighlightPinId: null,
+      linkedCardHighlightTimer: null,
+      shareManager: { tags: [], colors: [], tagMode: 'or', links: [], loading: false, previewing: false },
+      shareMode: false,
+      shareBasePins: null,      // null = 通常モード / Pin[] = 共有モードの固定集合（share-mode中はpins変更不可）
+      shownPinId: null
+    };
+
+    function clearLinkedCardHighlight() {
+      if (state.linkedCardHighlightTimer) {
+        clearTimeout(state.linkedCardHighlightTimer);
+        state.linkedCardHighlightTimer = null;
+      }
+      state.linkedCardHighlightPinId = null;
+      document.querySelectorAll('.list-item.is-linked-highlight').forEach(function(el) {
+        el.classList.remove('is-linked-highlight');
+      });
+    }
+
+    function clearLinkedMarkerHighlight() {
+      document.querySelectorAll('.leaflet-marker-icon.is-linked-highlight').forEach(function(el) {
+        el.classList.remove('is-linked-highlight');
+      });
+    }
+
+    function getMarkerElementByPinId(pinId) {
+      const marker = state.markers[pinId];
+      return marker ? marker.getElement() : null;
+    }
+
+    function getCardElementByPinId(pinId) {
+      return document.querySelector('.list-item[data-pin-id="' + pinId + '"]');
+    }
+
+    function isElementVisibleInContainer(element, container) {
+      if (!element || !container) return false;
+      const rect = element.getBoundingClientRect();
+      const parentRect = container.getBoundingClientRect();
+      return rect.bottom > parentRect.top && rect.top < parentRect.bottom;
+    }
+
+    function isMarkerVisible(pinId) {
+      const pin = getPinById(pinId);
+      if (!pin || pin.lat == null || pin.lng == null) return false;
+      if (!map.getBounds().contains([pin.lat, pin.lng])) return false;
+      return !!getMarkerElementByPinId(pinId);
+    }
+
+    function isCardVisible(pinId) {
+      const card = getCardElementByPinId(pinId);
+      const panel = document.getElementById('side-panel');
+      return isElementVisibleInContainer(card, panel);
+    }
+
+    function highlightLinkedMarker(pinId) {
+      clearLinkedMarkerHighlight();
+      if (!isMarkerVisible(pinId)) return;
+      const el = getMarkerElementByPinId(pinId);
+      if (el) el.classList.add('is-linked-highlight');
+    }
+
+    function highlightLinkedCard(pinId, duration) {
+      clearLinkedCardHighlight();
+      if (!isCardVisible(pinId)) return;
+      const el = getCardElementByPinId(pinId);
+      if (!el) return;
+      state.linkedCardHighlightPinId = pinId;
+      el.classList.add('is-linked-highlight');
+      if (duration === false) return;
+      state.linkedCardHighlightTimer = setTimeout(function() {
+        clearLinkedCardHighlight();
+      }, duration == null ? 1000 : duration);
+    }
+
+    function haversineDistance(lat1, lng1, lat2, lng2) {
+      const R = 6371000;
+      const toRad = function(deg) { return deg * Math.PI / 180; };
+      const dLat = toRad(lat2 - lat1);
+      const dLng = toRad(lng2 - lng1);
+      const a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
+        + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2))
+        * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    function findNearbyDuplicates(title, lat, lng, excludeId) {
+      if (lat == null || lng == null) return [];
+      const normalizedTitle = String(title || '').trim().toLowerCase();
+      if (!normalizedTitle) return [];
+      return state.pins.filter(function(pin) {
+        if (excludeId && pin.id === excludeId) return false;
+        if (pin.lat == null || pin.lng == null) return false;
+        if (String(pin.title || '').trim().toLowerCase() !== normalizedTitle) return false;
+        return haversineDistance(lat, lng, pin.lat, pin.lng) <= 50;
+      });
+    }
+
+    function openDupWarning(dupItems, onSaveAnyway) {
+      const list = document.getElementById('dup-warning-list');
+      list.innerHTML = '';
+      dupItems.forEach(function(item) {
+        const pin = item.pin;
+        const dist = item.dist;
+        const card = document.createElement('div');
+        card.className = 'section-card';
+        card.style.marginBottom = '8px';
+        const hasCoords = pin.lat != null && pin.lng != null;
+        card.innerHTML = '<div style="font-size:13px;font-weight:800;">' + escHtml(pin.title) + '</div>'
+          + '<div class="muted" style="margin-top:3px;">距離: 約 ' + Math.round(dist) + ' m</div>'
+          + (hasCoords ? '<button class="ghost-btn dup-goto-btn" type="button" style="margin-top:6px;font-size:12px;">地図で見る</button>' : '');
+        if (hasCoords) {
+          card.querySelector('.dup-goto-btn').addEventListener('click', function() {
+            closeOverlay('dup-warning-overlay');
+            map.flyTo([pin.lat, pin.lng], Math.max(map.getZoom(), 16));
+          });
+        }
+        list.appendChild(card);
+      });
+      document.getElementById('dup-save-anyway').onclick = function() {
+        closeOverlay('dup-warning-overlay');
+        try { onSaveAnyway(); } catch(e) { console.error(e); }
+      };
+      document.getElementById('dup-cancel-btn').onclick = function() {
+        closeOverlay('dup-warning-overlay');
+      };
+      openOverlay('dup-warning-overlay');
+    }
+
+    function checkDupsThenRun(title, lat, lng, excludeId, onProceed) {
+      if (lat == null || lng == null) { try { onProceed(); } catch(e) { console.error(e); } return; }
+      const dups = findNearbyDuplicates(title, lat, lng, excludeId);
+      if (!dups.length) { try { onProceed(); } catch(e) { console.error(e); } return; }
+      const dupItems = dups.map(function(pin) {
+        return { pin: pin, dist: haversineDistance(lat, lng, pin.lat, pin.lng) };
+      });
+      openDupWarning(dupItems, onProceed);
+    }
+
+    function normalizeSearchTerm(value) {
+      return String(value || '').toLowerCase().replace(/^#/, '').trim();
+    }
+
+    function matchesSearch(pin, query) {
+      if (!query) return true;
+      const q = normalizeSearchTerm(query);
+      if (!q) return true;
+      if (String(pin.title || '').toLowerCase().includes(q)) return true;
+      if (String(pin.description || '').toLowerCase().includes(q)) return true;
+      if ((pin.tags || []).some(function(t) { return t.toLowerCase().includes(q); })) return true;
+      return false;
+    }
+
+    function matchesTagFilter(pin, tags, mode) {
+      if (!tags || !tags.length) return true;
+      const pinTags = (pin.tags || []).map(function(t) { return t.toLowerCase(); });
+      if (mode === 'and') {
+        return tags.every(function(t) { return pinTags.includes(t.toLowerCase()); });
+      }
+      return tags.some(function(t) { return pinTags.includes(t.toLowerCase()); });
+    }
+
+    function matchesColorFilter(pin, colors) {
+      if (!colors || !colors.length) return true;
+      return colors.includes(pin.color || '');
+    }
+
+    function getBasePins() {
+      return (state.shareMode && state.shareBasePins) ? state.shareBasePins : state.pins;
+    }
+
+    function getActivePinFilterState() {
+      if (state.shareManager.previewing) {
+        return {
+          query: '',
+          status: 'all',
+          tags: state.shareManager.tags,
+          tagMode: state.shareManager.tagMode,
+          colors: state.shareManager.colors,
+          sort: state.listSort
+        };
+      }
+      return {
+        query: state.listQuery,
+        status: state.listStatusFilter,
+        tags: state.listTagFilter,
+        tagMode: state.listTagMode,
+        colors: state.listColorFilter,
+        sort: state.listSort
+      };
+    }
+
+    function matchesStatusFilter(pin, filter) {
+      if (filter === 'all') return true;
+      return pin.status === filter;
+    }
+
+    function sortPins(pins, sortKey) {
+      const copy = pins.slice();
+      if (sortKey === 'oldest') {
+        copy.sort(function(a, b) { return String(a.timestamp).localeCompare(String(b.timestamp)); });
+      } else if (sortKey === 'title') {
+        copy.sort(function(a, b) { return String(a.title || '').localeCompare(String(b.title || ''), 'ja'); });
+      } else {
+        copy.sort(function(a, b) { return String(b.timestamp).localeCompare(String(a.timestamp)); });
+      }
+      return copy;
+    }
+
+    function applyListFilters() {
+      const filters = getActivePinFilterState();
+      return sortPins(
+        getBasePins().filter(function(pin) {
+          return matchesSearch(pin, filters.query)
+            && matchesStatusFilter(pin, filters.status)
+            && matchesTagFilter(pin, filters.tags, filters.tagMode)
+            && matchesColorFilter(pin, filters.colors);
+        }),
+        filters.sort
+      );
+    }
+
+    const map = L.map('map', { zoomControl: false }).setView([36.5, 138.0], 5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© <a href="https://www.openstreetmap.org/">OpenStreetMap</a> contributors',
+      maxZoom: 19
+    }).addTo(map);
+    L.control.zoom({ position: 'bottomleft' }).addTo(map);
+
+    function escHtml(value) {
+      return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function safeColor(value) {
+      return SAFE_COLOR_RE.test(String(value || '')) ? value : PIN_COLORS[0].hex;
+    }
+
+    function createListPinHeadSvg(color) {
+      const fill = safeColor(color);
+      return `
+        <svg class="list-thumb-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+          <circle cx="10" cy="10" r="9" fill="${fill}" opacity="0.18"/>
+          <circle cx="10" cy="10" r="7.4" fill="${fill}"/>
+          <circle cx="7.2" cy="6.9" r="2.2" fill="#fff" opacity="0.35"/>
+        </svg>`;
+    }
+
+    function renderListThumb(pin) {
+      const accent = safeColor(pin && pin.color);
+      if (pin && pin.imageUrl) {
+        return `<div class="list-thumb has-photo" style="--thumb-accent:${accent};"><img src="${escHtml(pin.imageUrl)}" alt=""></div>`;
+      }
+      return `<div class="list-thumb">${createListPinHeadSvg(accent)}</div>`;
+    }
+
+    const PIN_STATUSES = ['未対応', '対応中', '完了', '保留'];
+
+    function clonePin(pin) {
+      return {
+        id: pin.id,
+        title: pin.title || '',
+        description: pin.description || '',
+        lat: pin.lat == null ? null : Number(pin.lat),
+        lng: pin.lng == null ? null : Number(pin.lng),
+        color: safeColor(pin.color),
+        imageUrl: pin.imageUrl || '',
+        fileId: pin.fileId || '',
+        timestamp: pin.timestamp || '',
+        links: Array.isArray(pin.links) ? pin.links.slice() : [],
+        folderUrl: pin.folderUrl || '',
+        status: pin.status || '',
+        tags: Array.isArray(pin.tags) ? pin.tags.slice() : []
+      };
+    }
+
+    function normalizeTags(input) {
+      const seen = {};
+      const result = [];
+      String(input || '').split(/\s+/).forEach(function(raw) {
+        const t = raw.replace(/^#/, '').trim();
+        if (!t) return;
+        const key = t.toLowerCase();
+        if (seen[key]) return;
+        seen[key] = true;
+        result.push(t);
+      });
+      if (result.length > 5) throw new Error('タグは5件以内にしてください');
+      return result;
+    }
+
+    function updateBulkBar() {
+      const bar = document.getElementById('bulk-action-bar');
+      const count = state.selectedPinIds.size;
+      if (state.editMode && count > 0) {
+        document.getElementById('bulk-count').textContent = count + '件選択中';
+        bar.style.display = 'flex';
+      } else {
+        bar.style.display = 'none';
+      }
+    }
+
+    function clearSelection() {
+      state.selectedPinIds.clear();
+      updateBulkBar();
+      renderSidePanel();
+    }
+
+    function renderTagChips(tags) {
+      if (!tags || !tags.length) return '';
+      return '<div class="tag-chips">' + tags.map(function(t) {
+        return '<span class="tag-chip">#' + escHtml(t) + '</span>';
+      }).join('') + '</div>';
+    }
+
+    function renderColorChips(colors) {
+      if (!colors || !colors.length) return '';
+      return '<div class="color-chips">' + colors.map(function(color) {
+        return '<span class="color-chip" style="background:' + escHtml(safeColor(color)) + '"></span>';
+      }).join('') + '</div>';
+    }
+
+    function openOverlay(id) { document.getElementById(id).classList.add('open'); }
+    function closeOverlay(id) { document.getElementById(id).classList.remove('open'); }
+    function showHint(message) { const el = document.getElementById('hint-bar'); el.textContent = message; el.style.display = 'block'; }
+    function hideHint() { document.getElementById('hint-bar').style.display = 'none'; }
+
+    function showDeleteZone() {
+      document.getElementById('dnd-delete-zone').classList.add('active');
+    }
+
+    function hideDeleteZone() {
+      const el = document.getElementById('dnd-delete-zone');
+      el.classList.remove('active');
+      el.classList.remove('dragover');
+    }
+
+    function isOverRect(x, y, rect) {
+      return rect.width > 0 && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    }
+
+    document.addEventListener('mousemove', function(e) {
+      state.pointerX = e.clientX;
+      state.pointerY = e.clientY;
+    });
+
+    const GAS_RETRY_MAX = 4;
+    const GAS_RETRY_BASE_MS = 1000;
+    const GAS_RETRY_JITTER_MS = 1000;
+
+    function callGAS(methodName, hasArg, args) {
+      return new Promise((resolve, reject) => {
+        const attempt = (retryCount) => {
+          const runner = google.script.run
+            .withSuccessHandler(resolve)
+            .withFailureHandler((err) => {
+              if (retryCount >= GAS_RETRY_MAX) {
+                reject(err);
+                return;
+              }
+              const delay = GAS_RETRY_BASE_MS * Math.pow(2, retryCount)
+                          + Math.floor(Math.random() * GAS_RETRY_JITTER_MS);
+              setTimeout(() => attempt(retryCount + 1), delay);
+            });
+          if (hasArg) {
+            runner[methodName](args);
+          } else {
+            runner[methodName]();
+          }
+        };
+        attempt(0);
+      });
+    }
+
+    function withGAS(methodName, args) {
+      return callGAS(methodName, true, args);
+    }
+
+    function withGASNoArg(methodName) {
+      return callGAS(methodName, false, undefined);
+    }
+
+    function createPinIcon(color, ghost, hasPhoto) {
+      const fill = safeColor(color);
+      const innerDetail = hasPhoto ? `
+          <rect x="7.5" y="9" width="15" height="9" rx="1.5" fill="#fff" opacity="0.9"/>
+          <rect x="12" y="7" width="6" height="3" rx="1" fill="#fff" opacity="0.9"/>
+          <circle cx="15" cy="13" r="3.2" fill="${fill}" opacity="${ghost ? 0.7 : 1}"/>
+          <circle cx="15" cy="13" r="2" fill="#fff" opacity="0.65"/>` : `
+          <circle cx="11" cy="8" r="3.4" fill="#fff" opacity="0.34"/>`;
+      const svg = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="30" height="46" viewBox="0 0 30 46">
+          <line x1="15" y1="23" x2="15" y2="44" stroke="#4d4d4d" stroke-width="1.6" stroke-linecap="round" opacity="${ghost ? 0.7 : 1}"/>
+          <circle cx="15" cy="12" r="11.5" fill="${fill}" opacity="${ghost ? 0.36 : 0.24}"/>
+          <circle cx="15" cy="12" r="10.5" fill="${fill}" opacity="${ghost ? 0.7 : 1}"/>
+          ${innerDetail}
+        </svg>`;
+      return L.divIcon({ html: '<div class="pin-icon-visual">' + svg + '</div>', iconSize: [30, 46], iconAnchor: [15, 44], className: '' });
+    }
+
+    function setTheme(theme) {
+      document.documentElement.setAttribute('data-theme', theme);
+      localStorage.setItem('dtp-theme', theme);
+      document.getElementById('theme-toggle').textContent = theme === 'dark' ? '☀️' : '🌙';
+    }
+
+    (function initTheme() {
+      const saved = localStorage.getItem('dtp-theme');
+      const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      setTheme(saved || systemTheme);
+    })();
+
+    document.getElementById('theme-toggle').addEventListener('click', () => {
+      setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+    });
+
+    let isPanelVisible = true;
+    document.getElementById('panel-toggle').addEventListener('click', () => {
+      isPanelVisible = !isPanelVisible;
+      document.body.classList.toggle('panel-hidden', !isPanelVisible);
+      document.body.classList.toggle('panel-visible', isPanelVisible);
+      document.getElementById('panel-toggle').textContent = isPanelVisible ? '🗺️' : '📋';
+      document.getElementById('panel-toggle').title = isPanelVisible ? 'リストを隠す' : 'リストを表示';
+    });
+
+    function paletteSelect(containerId, selectedColor, onChange) {
+      const container = document.getElementById(containerId);
+      container.innerHTML = '';
+      PIN_COLORS.forEach(color => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'color-swatch' + (color.hex === selectedColor ? ' selected' : '');
+        button.style.background = color.hex;
+        button.title = color.label;
+        button.addEventListener('click', () => onChange(color.hex));
+        container.appendChild(button);
+      });
+    }
+
+    function setUploadColor(color) {
+      state.upload.color = color;
+      paletteSelect('upload-color-palette', color, setUploadColor);
+    }
+
+    function setEditColor(color) {
+      state.editColor = color;
+      paletteSelect('edit-color-palette', color, setEditColor);
+    }
+
+    function renderColorFilterUI() {
+      const container = document.getElementById('map-color-filter');
+      container.innerHTML = '';
+      // 存在しないピン色をフィルタから除去する
+      const existingColors = getBasePins().map(function(p) { return p.color || ''; });
+      state.listColorFilter = state.listColorFilter.filter(function(hex) {
+        return existingColors.includes(hex);
+      });
+      PIN_COLORS.forEach(function(c) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'color-filter-swatch' + (state.listColorFilter.includes(c.hex) ? ' active' : '');
+        btn.style.background = c.hex;
+        btn.title = c.label;
+        btn.addEventListener('click', function() {
+          const idx = state.listColorFilter.indexOf(c.hex);
+          if (idx === -1) { state.listColorFilter.push(c.hex); }
+          else { state.listColorFilter.splice(idx, 1); }
+          renderColorFilterUI();
+          updateFilterButtonIndicators();
+          renderPins();
+          renderSidePanel();
+        });
+        container.appendChild(btn);
+      });
+    }
+
+    function renderTagFilterUI() {
+      const allTags = [];
+      const seen = {};
+      getBasePins().forEach(function(pin) {
+        (pin.tags || []).forEach(function(t) {
+          const key = t.toLowerCase();
+          if (!seen[key]) { seen[key] = true; allTags.push(t); }
+        });
+      });
+      allTags.sort(function(a, b) { return a.localeCompare(b, 'ja'); });
+
+      // 削除されたピンのタグをフィルタから除去する
+      const allTagsLower = allTags.map(function(t) { return t.toLowerCase(); });
+      state.listTagFilter = state.listTagFilter.filter(function(t) {
+        return allTagsLower.includes(t.toLowerCase());
+      });
+
+      const tagBtn = document.getElementById('map-filter-tag-btn');
+      const chipsContainer = document.getElementById('map-tag-chips');
+      if (!allTags.length) {
+        tagBtn.style.display = 'none';
+        document.getElementById('map-filter-tag-detail').style.display = 'none';
+        tagBtn.classList.remove('filter-active');
+      } else {
+        tagBtn.style.display = '';
+      }
+      chipsContainer.innerHTML = '';
+
+      allTags.forEach(function(tag) {
+        const isActive = state.listTagFilter.some(function(t) {
+          return t.toLowerCase() === tag.toLowerCase();
+        });
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'filter-tag-chip' + (isActive ? ' active' : '');
+        chip.textContent = '#' + tag;
+        chip.addEventListener('click', function() {
+          const idx = state.listTagFilter.findIndex(function(t) {
+            return t.toLowerCase() === tag.toLowerCase();
+          });
+          if (idx === -1) { state.listTagFilter.push(tag); }
+          else { state.listTagFilter.splice(idx, 1); }
+          renderTagFilterUI();
+          updateFilterButtonIndicators();
+          renderPins();
+          renderSidePanel();
+        });
+        chipsContainer.appendChild(chip);
+      });
+
+      const modeBtn = document.getElementById('map-tag-mode-btn');
+      modeBtn.textContent = state.listTagMode.toUpperCase();
+    }
+
+    document.getElementById('map-tag-mode-btn').addEventListener('click', function() {
+      state.listTagMode = state.listTagMode === 'or' ? 'and' : 'or';
+      document.getElementById('map-tag-mode-btn').textContent = state.listTagMode.toUpperCase();
+      if (state.listTagFilter.length) { renderPins(); renderSidePanel(); }
+    });
+
+    function buildUrlRow(containerId, value) {
+      const row = document.createElement('div');
+      row.className = 'url-row';
+      row.innerHTML = '<input class="form-input url-input" type="url" placeholder="https://example.com" value="' + escHtml(value || '') + '"><button class="remove-url-btn" type="button">×</button>';
+      row.querySelector('input').addEventListener('input', () => ensureUrlInputs(containerId));
+      row.querySelector('button').addEventListener('click', () => { row.remove(); ensureUrlInputs(containerId); });
+      return row;
+    }
+
+    function ensureUrlInputs(containerId, initialValues) {
+      const container = document.getElementById(containerId);
+      if (Array.isArray(initialValues)) {
+        container.innerHTML = '';
+        initialValues.forEach(value => container.appendChild(buildUrlRow(containerId, value)));
+      }
+      if (!container.children.length) container.appendChild(buildUrlRow(containerId, ''));
+      const lastInput = container.lastElementChild.querySelector('input');
+      if (lastInput.value.trim()) container.appendChild(buildUrlRow(containerId, ''));
+      Array.from(container.children).forEach((row, index, rows) => {
+        const input = row.querySelector('input');
+        row.querySelector('button').style.visibility = input.value.trim() || index < rows.length - 1 ? 'visible' : 'hidden';
+      });
+    }
+
+    function collectLinks(containerId) {
+      const values = Array.from(document.getElementById(containerId).querySelectorAll('input')).map(input => input.value.trim()).filter(Boolean);
+      values.forEach(value => {
+        if (!URL_RE.test(value)) throw new Error('URL は HTTP または HTTPS で始まる形式で入力してください');
+      });
+      return values;
+    }
+
+    setUploadColor(PIN_COLORS[0].hex);
+    setEditColor(PIN_COLORS[0].hex);
+    ensureUrlInputs('upload-links', []);
+    ensureUrlInputs('edit-links', []);
+
+    ['upload-overlay', 'settings-overlay', 'location-choice-overlay', 'pin-detail-overlay',
+     'unplaced-overlay', 'pin-menu-overlay', 'edit-overlay', 'delete-overlay', 'share-overlay', 'dup-warning-overlay']
+      .forEach(function(id) {
+        document.getElementById(id).addEventListener('click', function(event) {
+          if (event.target === document.getElementById(id)) {
+            if (id === 'share-overlay') {
+              closeShareDialog();
+              return;
+            }
+            closeOverlay(id);
+            if (id === 'pin-detail-overlay') state.shownPinId = null;
+          }
+        });
+      });
+
+    function getPinById(id) {
+      return state.pins.find(pin => pin.id === id) || null;
+    }
+
+    function attachLongPress(target, handler, options) {
+      const suppressClick = !options || options.suppressClick !== false;
+      let timer = null;
+      let startX = 0;
+      let startY = 0;
+      const cancel = () => { if (timer) clearTimeout(timer); timer = null; };
+      target.addEventListener('touchstart', event => {
+        const touch = event.touches[0];
+        startX = touch.clientX;
+        startY = touch.clientY;
+        cancel();
+        timer = setTimeout(() => {
+          if (suppressClick) state.suppressClickUntil = Date.now() + 600;
+          handler();
+          cancel();
+        }, 550);
+      }, { passive: true });
+      target.addEventListener('touchmove', event => {
+        if (!timer) return;
+        const touch = event.touches[0];
+        if (Math.abs(touch.clientX - startX) > 10 || Math.abs(touch.clientY - startY) > 10) cancel();
+      }, { passive: true });
+      ['touchend', 'touchcancel', 'pointerup', 'pointercancel', 'mouseleave'].forEach(name => target.addEventListener(name, cancel));
+    }
+
+    function updateRootDriveLinks() {
+      const href = state.appSettings.rootFolderUrl || '#';
+      document.getElementById('root-drive-link').href = href;
+      document.getElementById('settings-root-drive-link').href = href;
+      document.getElementById('side-root-drive-link').href = href;
+    }
+
+    function updateRenameToggle() {
+      const toggle = document.getElementById('rename-sync-toggle');
+      toggle.classList.toggle('on', !!state.appSettings.renameFileWithTitle);
+      toggle.setAttribute('aria-pressed', state.appSettings.renameFileWithTitle ? 'true' : 'false');
+      refreshRenameNotes();
+    }
+
+    function setRenameNote(id, hasPhoto, modeLabel) {
+      const el = document.getElementById(id);
+      if (!hasPhoto) {
+        el.style.display = 'none';
+        el.textContent = '';
+        return;
+      }
+      el.style.display = 'block';
+      el.textContent = state.appSettings.renameFileWithTitle
+        ? modeLabel + 'に写真名もタイトルへ同期します。'
+        : modeLabel + 'でも写真名は変更しません。';
+    }
+
+    function refreshRenameNotes() {
+      setRenameNote('upload-rename-note', !!state.upload.file, '保存時');
+      const editingPin = getPinById(state.editingPinId);
+      setRenameNote('edit-rename-note', !!(editingPin && editingPin.fileId), '更新時');
+    }
+
+    async function loadAppSettings() {
+      const result = await withGASNoArg('getAppSettings');
+      if (!result || !result.ok) throw new Error(result && result.error ? result.error : '設定の取得に失敗しました');
+      state.appSettings = {
+        rootFolderId: result.rootFolderId || '',
+        rootFolderUrl: result.rootFolderUrl || '#',
+        renameFileWithTitle: !!result.renameFileWithTitle
+      };
+      updateRootDriveLinks();
+      updateRenameToggle();
+    }
+
+    function openSettingsModal() {
+      updateRenameToggle();
+      openOverlay('settings-overlay');
+    }
+
+    document.getElementById('settings-toggle').addEventListener('click', openSettingsModal);
+    document.getElementById('share-open-btn').addEventListener('click', function() {
+      openShareDialog(null);
+    });
+    document.getElementById('settings-cancel').addEventListener('click', () => closeOverlay('settings-overlay'));
+    document.getElementById('rename-sync-toggle').addEventListener('click', () => {
+      state.appSettings.renameFileWithTitle = !state.appSettings.renameFileWithTitle;
+      updateRenameToggle();
+    });
+    document.getElementById('settings-save').addEventListener('click', async () => {
+      try {
+        const result = await withGAS('updateAppSettings', { renameFileWithTitle: !!state.appSettings.renameFileWithTitle });
+        if (!result || !result.ok) throw new Error(result && result.error ? result.error : '設定の保存に失敗しました');
+        state.appSettings.renameFileWithTitle = !!result.renameFileWithTitle;
+        updateRenameToggle();
+        closeOverlay('settings-overlay');
+      } catch (error) {
+        alert('設定の保存に失敗しました。\n\n' + (error && error.message ? error.message : String(error)));
+      }
+    });
+
+    function updateUnplacedBadge() {
+      const count = state.pins.filter(pin => pin.lat == null || pin.lng == null).length;
+      const badge = document.getElementById('unplaced-badge');
+      badge.textContent = '📋 未配置 ' + count + '件';
+      badge.style.display = state.editMode && count > 0 ? 'inline-flex' : 'none';
+    }
+
+    function buildListItem(pin, options) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'list-item';
+      button.dataset.pinId = pin.id;
+      const tagsHtml = renderTagChips(pin.tags);
+      const isSelected = state.selectedPinIds.has(pin.id);
+      const checkHtml = state.editMode
+        ? `<div class="pin-check" style="width:22px;height:22px;border-radius:50%;border:2px solid var(--border);background:${isSelected ? 'var(--accent)' : 'transparent'};flex:0 0 22px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;">${isSelected ? '✓' : ''}</div>`
+        : '';
+      button.innerHTML = `
+        ${checkHtml}
+        ${renderListThumb(pin)}
+        <div class="list-meta"><div class="list-title">${escHtml(pin.title || '(無題)')}</div><div class="list-subtitle">${escHtml(pin.timestamp || '')}</div>${tagsHtml}</div>
+      `;
+      button.addEventListener('click', function(e) {
+        if (state.editMode) {
+          // チェック UI クリックまたは Shift なし通常クリックで選択トグル
+          if (state.selectedPinIds.has(pin.id)) {
+            state.selectedPinIds.delete(pin.id);
+          } else {
+            state.selectedPinIds.add(pin.id);
+          }
+          updateBulkBar();
+          renderSidePanel();
+          return;
+        }
+        options.onClick(e);
+      });
+      button.addEventListener('contextmenu', event => {
+        if (!state.editMode || !options.onMenu) return;
+        event.preventDefault();
+        options.onMenu();
+      });
+      const enableLinkedMarkerHighlight = !!options.enableLinkedMarkerHighlight;
+      const clearLinkedHighlightOnTouch = () => clearLinkedMarkerHighlight();
+      if (enableLinkedMarkerHighlight) {
+        button.addEventListener('mouseenter', () => highlightLinkedMarker(pin.id));
+        button.addEventListener('mouseleave', clearLinkedMarkerHighlight);
+        button.addEventListener('focus', () => highlightLinkedMarker(pin.id));
+        button.addEventListener('blur', clearLinkedMarkerHighlight);
+        button.addEventListener('touchend', clearLinkedHighlightOnTouch);
+        button.addEventListener('touchcancel', clearLinkedHighlightOnTouch);
+      }
+      attachLongPress(button, () => {
+        if (enableLinkedMarkerHighlight) {
+          highlightLinkedMarker(pin.id);
+        }
+        if (!state.editMode || !options.onMenu) return;
+        options.onMenu();
+      }, { suppressClick: state.editMode || !enableLinkedMarkerHighlight });
+      if (state.editMode) {
+        button.draggable = true;
+        button.addEventListener('dragstart', function(e) {
+          state.draggedPinId = pin.id;
+          e.dataTransfer.effectAllowed = 'move';
+          showDeleteZone();
+          setTimeout(function() { button.style.opacity = '0.4'; }, 0);
+        });
+        button.addEventListener('dragend', function() {
+          state.draggedPinId = null;
+          button.style.opacity = '';
+          hideDeleteZone();
+          document.querySelectorAll('.dnd-drop-target.dragover').forEach(function(el) { el.classList.remove('dragover'); });
+        });
+      }
+      return button;
+    }
+
+    function openPinDetail(pin) {
+      document.getElementById('pin-detail-title').textContent = pin.title || '(無題)';
+      document.getElementById('pin-detail-desc').textContent = pin.description || '説明はありません。';
+      document.getElementById('pin-detail-time').textContent = pin.timestamp || '';
+      const statusEl = document.getElementById('pin-detail-status');
+      if (state.editMode && pin.status) {
+        statusEl.innerHTML = '<span class="status-badge">' + escHtml(pin.status) + '</span>';
+        statusEl.style.display = 'block';
+      } else {
+        statusEl.innerHTML = '';
+        statusEl.style.display = 'none';
+      }
+      document.getElementById('pin-detail-tags').innerHTML = renderTagChips(pin.tags);
+      const image = document.getElementById('pin-detail-image');
+      if (pin.imageUrl) {
+        image.src = pin.imageUrl;
+        image.style.display = 'block';
+      } else {
+        image.src = '';
+        image.style.display = 'none';
+      }
+      const links = document.getElementById('pin-detail-links');
+      links.innerHTML = '';
+      (pin.links || []).forEach(link => {
+        const anchor = document.createElement('a');
+        anchor.className = 'pin-link';
+        anchor.href = link;
+        anchor.target = '_blank';
+        anchor.rel = 'noopener noreferrer';
+        anchor.textContent = link;
+        links.appendChild(anchor);
+      });
+      const drive = document.getElementById('pin-detail-drive');
+      drive.innerHTML = '';
+      if (pin.folderUrl) {
+        const anchor = document.createElement('a');
+        anchor.className = 'ghost-btn';
+        anchor.href = pin.folderUrl;
+        anchor.target = '_blank';
+        anchor.rel = 'noopener noreferrer';
+        anchor.textContent = '保存先フォルダを開く';
+        drive.appendChild(anchor);
+      }
+      const gotoBtn = document.getElementById('pin-detail-goto');
+      if (pin.lat != null && pin.lng != null) {
+        gotoBtn.style.display = '';
+        gotoBtn.onclick = () => {
+          closeOverlay('pin-detail-overlay');
+          map.flyTo([pin.lat, pin.lng], Math.max(map.getZoom(), 15));
+        };
+      } else {
+        gotoBtn.style.display = 'none';
+        gotoBtn.onclick = null;
+      }
+      state.shownPinId = pin.id;
+      openOverlay('pin-detail-overlay');
+    }
+
+    document.getElementById('pin-detail-close').addEventListener('click', function() {
+      closeOverlay('pin-detail-overlay');
+      state.shownPinId = null;
+    });
+    document.getElementById('pin-detail-share').addEventListener('click', function() {
+      openShareDialog(state.shownPinId);
+    });
+    document.getElementById('share-tag-mode-btn').addEventListener('click', function() {
+      state.shareManager.tagMode = state.shareManager.tagMode === 'or' ? 'and' : 'or';
+      updateShareFilterPreview();
+    });
+    document.getElementById('share-filter-clear-btn').addEventListener('click', function() {
+      clearShareFilters();
+    });
+    document.getElementById('share-create-btn').addEventListener('click', async function() {
+      const labelInput = document.getElementById('share-link-label');
+      const label = labelInput ? labelInput.value.trim() : '';
+      const tags = state.shareManager.tags.slice();
+      const colors = state.shareManager.colors.slice();
+      state.shareManager.loading = true;
+      renderShareLinks();
+      try {
+        const result = await withGAS('createShareLink', {
+          label: label || 'Drop the Pin!',
+          tags: tags,
+          tagMode: state.shareManager.tagMode,
+          colors: state.shareManager.colors.slice()
+        });
+        if (!result || !result.ok) throw new Error(result && result.error ? result.error : '共有リンクの作成に失敗しました');
+        if (labelInput) {
+          labelInput.value = '';
+        }
+        await loadShareLinks();
+      } catch (error) {
+        alert('共有リンクの作成に失敗しました。\n\n' + (error && error.message ? error.message : String(error)));
+      } finally {
+        if (state.shareManager.loading) {
+          state.shareManager.loading = false;
+          renderShareLinks();
+        }
+      }
+    });
+    document.getElementById('share-close').addEventListener('click', function() {
+      closeShareDialog();
+    });
+    document.getElementById('share-links-list').addEventListener('click', async function(event) {
+      const btn = event.target.closest('button[data-action]');
+      if (!btn) return;
+      const item = btn.closest('[data-token]');
+      if (!item) return;
+      const action = btn.dataset.action;
+      if (action === 'copy') {
+        copyToClipboard(item.dataset.url || '', btn);
+        return;
+      }
+      if (action === 'toggle') {
+        const currentlyEnabled = btn.classList.contains('on');
+        if (currentlyEnabled && !confirm('この共有リンクを無効化しますか？')) return;
+        state.shareManager.loading = true;
+        renderShareLinks();
+        try {
+          const result = await withGAS('setShareLinkEnabled', { token: item.dataset.token || '', enabled: !currentlyEnabled });
+          if (!result || !result.ok) throw new Error(result && result.error ? result.error : '共有リンクの更新に失敗しました');
+          await loadShareLinks();
+        } catch (error) {
+          alert('共有リンクの更新に失敗しました。\n\n' + (error && error.message ? error.message : String(error)));
+        } finally {
+          if (state.shareManager.loading) {
+            state.shareManager.loading = false;
+            renderShareLinks();
+          }
+        }
+        return;
+      }
+      if (action === 'delete') {
+        if (!confirm('この共有リンクを完全に削除しますか？\nこの操作は取り消せません。')) return;
+        state.shareManager.loading = true;
+        renderShareLinks();
+        try {
+          const result = await withGAS('deleteShareLink', item.dataset.token || '');
+          if (!result || !result.ok) throw new Error(result && result.error ? result.error : '共有リンクの削除に失敗しました');
+          await loadShareLinks();
+        } catch (error) {
+          alert('共有リンクの削除に失敗しました。\n\n' + (error && error.message ? error.message : String(error)));
+        } finally {
+          if (state.shareManager.loading) {
+            state.shareManager.loading = false;
+            renderShareLinks();
+          }
+        }
+        return;
+      }
+    });
+
+    function openPinMenu(pin) {
+      const isUnplaced = pin.lat == null || pin.lng == null;
+      state.contextPinId = pin.id;
+      document.getElementById('pin-menu-title').textContent = pin.title || '(無題)';
+      document.getElementById('pin-menu-unplace').style.display = isUnplaced ? 'none' : 'block';
+      document.getElementById('pin-menu-place').style.display = isUnplaced ? 'block' : 'none';
+      openOverlay('pin-menu-overlay');
+    }
+
+    function closePinMenu() {
+      state.contextPinId = null;
+      closeOverlay('pin-menu-overlay');
+    }
+
+    document.getElementById('pin-menu-close').addEventListener('click', closePinMenu);
+    document.getElementById('pin-menu-edit').addEventListener('click', () => {
+      const pin = getPinById(state.contextPinId);
+      if (!pin) return;
+      closePinMenu();
+      state.editingPinId = pin.id;
+      document.getElementById('edit-title').value = pin.title || '';
+      document.getElementById('edit-desc').value = pin.description || '';
+      document.getElementById('edit-status').value = pin.status || '未対応';
+      document.getElementById('edit-tags').value = (pin.tags || []).map(function(t) { return '#' + t; }).join(' ');
+      ensureUrlInputs('edit-links', pin.links || []);
+      setEditColor(pin.color || PIN_COLORS[0].hex);
+      const driveArea = document.getElementById('edit-drive-area');
+      if (pin.folderUrl) {
+        driveArea.style.display = 'block';
+        driveArea.innerHTML = '<div class="muted" style="margin-bottom:8px;">写真名同期は全体設定で切り替えます。</div><a class="ghost-btn" href="' + escHtml(pin.folderUrl) + '" target="_blank" rel="noopener noreferrer">保存先フォルダを開く</a>';
+      } else {
+        driveArea.style.display = 'none';
+        driveArea.innerHTML = '';
+      }
+      refreshRenameNotes();
+      openOverlay('edit-overlay');
+    });
+    document.getElementById('pin-menu-place').addEventListener('click', () => {
+      const pin = getPinById(state.contextPinId);
+      if (!pin) return;
+      closePinMenu();
+      beginPlacement({ mode: 'existing', pinId: pin.id });
+    });
+    document.getElementById('pin-menu-unplace').addEventListener('click', async () => {
+      const pin = getPinById(state.contextPinId);
+      if (!pin) return;
+      closePinMenu();
+      try {
+        const result = await withGAS('unplacePin', { id: pin.id });
+        if (!result || !result.ok) throw new Error(result && result.error ? result.error : '未配置への更新に失敗しました');
+        pin.lat = null;
+        pin.lng = null;
+        renderPins();
+        renderSidePanel();
+        updateUnplacedBadge();
+      } catch (error) {
+        alert('ピンを未配置に戻せませんでした。\n\n' + (error && error.message ? error.message : String(error)));
+      }
+    });
+    document.getElementById('pin-menu-delete').addEventListener('click', () => {
+      const pin = getPinById(state.contextPinId);
+      if (!pin) return;
+      closePinMenu();
+      document.getElementById('delete-message').textContent = pin.fileId ? 'このピンを削除すると、対応する Drive 上の写真もゴミ箱に移動します。' : 'このピンを削除します。';
+      state.contextPinId = pin.id;
+      openOverlay('delete-overlay');
+    });
+
+    document.getElementById('edit-cancel').addEventListener('click', () => closeOverlay('edit-overlay'));
+    document.getElementById('edit-save').addEventListener('click', async () => {
+      const pin = getPinById(state.editingPinId);
+      if (!pin) return;
+      try {
+        const title = document.getElementById('edit-title').value.trim();
+        if (!title) throw new Error('タイトルは必須です');
+        const tags = normalizeTags(document.getElementById('edit-tags').value);
+        const payload = {
+          id: pin.id,
+          title: title,
+          description: document.getElementById('edit-desc').value.trim(),
+          color: state.editColor,
+          links: collectLinks('edit-links'),
+          status: document.getElementById('edit-status').value,
+          tags: tags
+        };
+
+        const doSave = async function() {
+          const result = await withGAS('updatePinDetails', payload);
+          if (!result || !result.ok) throw new Error(result && result.error ? result.error : '更新に失敗しました');
+          pin.title = payload.title;
+          pin.description = payload.description;
+          pin.color = payload.color;
+          pin.links = payload.links;
+          pin.status = payload.status;
+          pin.tags = payload.tags;
+          if (result.folderUrl) pin.folderUrl = result.folderUrl;
+          closeOverlay('edit-overlay');
+          renderPins();
+          renderSidePanel();
+          updateUnplacedBadge();
+          renderColorFilterUI();
+          renderTagFilterUI();
+        };
+
+        checkDupsThenRun(title, pin.lat, pin.lng, pin.id, function() {
+          doSave().catch(function(err) {
+            alert('ピンの更新に失敗しました。\n\n' + (err && err.message ? err.message : String(err)));
+          });
+        });
+      } catch (error) {
+        alert('ピンの更新に失敗しました。\n\n' + (error && error.message ? error.message : String(error)));
+      }
+    });
+
+    document.getElementById('delete-cancel').addEventListener('click', () => closeOverlay('delete-overlay'));
+    document.getElementById('delete-confirm').addEventListener('click', async () => {
+      const pin = getPinById(state.contextPinId);
+      if (!pin) return;
+      try {
+        const result = await withGAS('deletePin', { id: pin.id });
+        if (!result || !result.ok) throw new Error(result && result.error ? result.error : '削除に失敗しました');
+        if (state.markers[pin.id]) {
+          state.markers[pin.id].remove();
+          delete state.markers[pin.id];
+        }
+        state.pins = state.pins.filter(item => item.id !== pin.id);
+        closeOverlay('delete-overlay');
+        closeOverlay('pin-detail-overlay');
+        renderSidePanel();
+        updateUnplacedBadge();
+        renderColorFilterUI();
+        renderTagFilterUI();
+      } catch (error) {
+        alert('ピンの削除に失敗しました。\n\n' + (error && error.message ? error.message : String(error)));
+      }
+    });
+
+    function focusPin(pin) {
+      openPinDetail(pin);
+    }
+
+    function bindMarkerInteractions(marker, pin) {
+      let prevLat = pin.lat;
+      let prevLng = pin.lng;
+
+      if (pin.title) {
+        marker.bindTooltip(pin.title, { permanent: false, direction: 'top', className: 'pin-tooltip', offset: [0, -34] });
+      }
+
+      marker.on('click', () => {
+        if (Date.now() < state.suppressClickUntil) return;
+        focusPin(pin);
+        highlightLinkedCard(pin.id);
+      });
+      marker.on('mouseover', () => {
+        highlightLinkedCard(pin.id, false);
+      });
+      marker.on('mouseout', () => {
+        clearLinkedCardHighlight();
+      });
+      marker.on('contextmenu', event => {
+        if (!state.editMode) return;
+        if (event.originalEvent) event.originalEvent.preventDefault();
+        openPinMenu(pin);
+      });
+      marker.on('dragstart', () => {
+        clearLinkedCardHighlight();
+        clearLinkedMarkerHighlight();
+        if (!state.editMode) return;
+        prevLat = pin.lat;
+        prevLng = pin.lng;
+        showDeleteZone();
+      });
+      marker.on('dragend', async () => {
+        clearLinkedCardHighlight();
+        clearLinkedMarkerHighlight();
+        if (!state.editMode) return;
+
+        const panelEl = document.getElementById('side-panel');
+        const deleteZoneEl = document.getElementById('dnd-delete-zone');
+        const panelRect = panelEl.getBoundingClientRect();
+        const deleteRect = deleteZoneEl.getBoundingClientRect();
+        const overDelete = isOverRect(state.pointerX, state.pointerY, deleteRect);
+        const overPanel = isOverRect(state.pointerX, state.pointerY, panelRect);
+        hideDeleteZone();
+
+        if (overDelete) {
+          // ⑤ マーカー経路：削除確認ダイアログを開く
+          marker.setLatLng([prevLat, prevLng]);
+          state.contextPinId = pin.id;
+          document.getElementById('delete-message').textContent = pin.fileId
+            ? 'このピンを削除すると、対応する Drive 上の写真もゴミ箱に移動します。'
+            : 'このピンを削除します。';
+          openOverlay('delete-overlay');
+        } else if (overPanel) {
+          // ③ マーカー → パネル：未配置に戻す
+          marker.setLatLng([prevLat, prevLng]);
+          try {
+            const result = await withGAS('unplacePin', { id: pin.id });
+            if (!result || !result.ok) throw new Error(result && result.error ? result.error : '未配置への更新に失敗しました');
+            pin.lat = null;
+            pin.lng = null;
+            renderPins();
+            renderSidePanel();
+            updateUnplacedBadge();
+          } catch (error) {
+            alert('ピンを未配置に戻せませんでした。\n\n' + (error && error.message ? error.message : String(error)));
+          }
+        } else {
+          // 通常の移動（既存動作）
+          const nextLatLng = marker.getLatLng();
+          try {
+            const result = await withGAS('movePin', { id: pin.id, lat: nextLatLng.lat, lng: nextLatLng.lng });
+            if (!result || !result.ok) throw new Error(result && result.error ? result.error : '移動の保存に失敗しました');
+            pin.lat = nextLatLng.lat;
+            pin.lng = nextLatLng.lng;
+            renderSidePanel();
+            updateUnplacedBadge();
+          } catch (error) {
+            marker.setLatLng([prevLat, prevLng]);
+            alert('ピンの移動に失敗しました。\n\n' + (error && error.message ? error.message : String(error)));
+          }
+        }
+      });
+      marker.on('add', () => {
+        const el = marker.getElement();
+        if (!el) return;
+        if (el.dataset) el.dataset.pinId = pin.id;
+        attachLongPress(el, () => {
+          if (!state.editMode) return;
+          openPinMenu(pin);
+        });
+      });
+    }
+
+    function renderPins() {
+      clearLinkedCardHighlight();
+      clearLinkedMarkerHighlight();
+      Object.values(state.markers).forEach(function(marker) { marker.remove(); });
+      state.markers = {};
+      applyListFilters().forEach(function(pin) {
+        if (pin.lat == null || pin.lng == null) return;
+        const marker = L.marker([pin.lat, pin.lng], {
+          icon: createPinIcon(pin.color, false, !!pin.imageUrl),
+          draggable: state.editMode
+        });
+        bindMarkerInteractions(marker, pin);
+        marker.addTo(map);
+        state.markers[pin.id] = marker;
+      });
+    }
+
+    function renderSidePanel() {
+      clearLinkedCardHighlight();
+      clearLinkedMarkerHighlight();
+      const unplacedContainer = document.getElementById('side-unplaced');
+      const placedContainer = document.getElementById('side-placed');
+      const filtered = applyListFilters();
+      const unplaced = filtered.filter(pin => pin.lat == null || pin.lng == null);
+      const placed = filtered.filter(pin => pin.lat != null && pin.lng != null);
+      const filters = getActivePinFilterState();
+
+      const isFiltered = filters.query
+        || filters.status !== 'all'
+        || filters.tags.length > 0
+        || filters.colors.length > 0;
+
+      unplacedContainer.innerHTML = '<div class="side-title">未配置</div>';
+      if (!unplaced.length) {
+        unplacedContainer.innerHTML += '<div class="empty-note">' + (isFiltered ? '条件に一致するピンがありません。' : '未配置ピンはありません。') + '</div>';
+      } else {
+        unplaced.forEach(pin => {
+          unplacedContainer.appendChild(buildListItem(pin, { onClick: () => openPinDetail(pin), onMenu: () => openPinMenu(pin), enableLinkedMarkerHighlight: false }));
+        });
+      }
+
+      placedContainer.innerHTML = '<div class="side-title">配置済み</div>';
+      if (!placed.length) {
+        placedContainer.innerHTML += '<div class="empty-note">' + (isFiltered ? '条件に一致するピンがありません。' : 'まだ配置済みピンがありません。') + '</div>';
+      } else {
+        placed.forEach(pin => {
+          placedContainer.appendChild(buildListItem(pin, { onClick: () => focusPin(pin), onMenu: () => openPinMenu(pin), enableLinkedMarkerHighlight: true }));
+        });
+      }
+    }
+
+    document.getElementById('unplaced-badge').addEventListener('click', () => {
+      const list = document.getElementById('unplaced-list');
+      const unplaced = getBasePins().filter(pin => pin.lat == null || pin.lng == null);
+      list.innerHTML = '';
+      if (!unplaced.length) {
+        list.innerHTML = '<div class="empty-note">未配置ピンはありません。</div>';
+      } else {
+        unplaced.forEach(pin => list.appendChild(buildListItem(pin, { onClick: () => openPinDetail(pin), onMenu: () => openPinMenu(pin), enableLinkedMarkerHighlight: false })));
+      }
+      openOverlay('unplaced-overlay');
+    });
+    document.getElementById('unplaced-close').addEventListener('click', () => closeOverlay('unplaced-overlay'));
+
+    function setEditMode(next) {
+      if (state.shareMode) return;   // 共有モードでは編集モード切替を無効化
+      state.editMode = next;
+      document.body.classList.toggle('edit-mode', next);
+      document.getElementById('mode-badge').textContent = next ? '編集中' : '閲覧中';
+      document.getElementById('edit-toggle').textContent = next ? '閲覧モード' : '編集モード';
+      document.getElementById('upload-status-group').style.display = next ? '' : 'none';
+      document.getElementById('map-filter-status-btn').style.display = next ? '' : 'none';
+      if (!next) {
+        state.listStatusFilter = 'all';
+        document.getElementById('map-status-filter').value = 'all';
+        document.getElementById('map-filter-status-detail').style.display = 'none';
+        state.selectedPinIds = new Set();
+        updateBulkBar();
+      }
+      renderPins();
+      renderSidePanel();
+      updateUnplacedBadge();
+    }
+
+    document.getElementById('edit-toggle').addEventListener('click', () => setEditMode(!state.editMode));
+
+    document.getElementById('bulk-cancel-btn').addEventListener('click', clearSelection);
+    document.getElementById('bulk-apply-btn').addEventListener('click', async function() {
+      if (!state.selectedPinIds.size) return;
+      const nextStatus = document.getElementById('bulk-status-select').value;
+      const ids = Array.from(state.selectedPinIds);
+      try {
+        const result = await withGAS('bulkUpdatePinStatus', { ids: ids, status: nextStatus });
+        if (!result || !result.ok) throw new Error(result && result.error ? result.error : '一括更新に失敗しました');
+        ids.forEach(function(id) {
+          const pin = state.pins.find(function(p) { return p.id === id; });
+          if (pin) pin.status = nextStatus;
+        });
+        clearSelection();
+      } catch (error) {
+        alert('一括更新に失敗しました。\n\n' + (error && error.message ? error.message : String(error)));
+      }
+    });
+
+    function updateFilterButtonIndicators() {
+      const colorActive = state.listColorFilter.length > 0;
+      const tagActive = state.listTagFilter.length > 0;
+      const statusActive = state.listStatusFilter !== 'all';
+      document.getElementById('map-filter-color-btn')
+        .classList.toggle('filter-active', colorActive);
+      document.getElementById('map-filter-tag-btn')
+        .classList.toggle('filter-active', tagActive);
+      document.getElementById('map-filter-status-btn')
+        .classList.toggle('filter-active', statusActive);
+    }
+
+    function clearMapSearchFilters() {
+      state.listQuery = '';
+      state.listStatusFilter = 'all';
+      state.listSort = 'newest';
+      state.listTagFilter = [];
+      state.listTagMode = 'or';
+      state.listColorFilter = [];
+      document.getElementById('map-search-input').value = '';
+      document.getElementById('map-status-filter').value = 'all';
+      document.getElementById('map-sort').value = 'newest';
+      document.getElementById('map-tag-mode-btn').textContent = 'OR';
+      renderColorFilterUI();
+      renderTagFilterUI();
+      updateFilterButtonIndicators();
+      renderPins();
+      renderSidePanel();
+    }
+
+    document.getElementById('map-search-input').addEventListener('input', function() {
+      state.listQuery = this.value;
+      renderPins();
+      renderSidePanel();
+    });
+    document.getElementById('map-status-filter').addEventListener('change', function() {
+      state.listStatusFilter = this.value;
+      updateFilterButtonIndicators();
+      renderPins();
+      renderSidePanel();
+    });
+    document.getElementById('map-sort').addEventListener('change', function() {
+      state.listSort = this.value;
+      renderSidePanel();
+    });
+    document.getElementById('map-filter-clear-btn').addEventListener('click', clearMapSearchFilters);
+
+    document.getElementById('map-search-toggle').addEventListener('click', function() {
+      const expanded = document.getElementById('map-search-expanded');
+      const isOpen = expanded.style.display !== 'none';
+      expanded.style.display = isOpen ? 'none' : '';
+      this.textContent = isOpen ? '▼' : '▲';
+    });
+
+    (function() {
+      const categories = [
+        { btnId: 'map-filter-status-btn', detailId: 'map-filter-status-detail' },
+        { btnId: 'map-filter-color-btn',  detailId: 'map-filter-color-detail'  },
+        { btnId: 'map-filter-tag-btn',    detailId: 'map-filter-tag-detail'    },
+      ];
+      categories.forEach(function(cat) {
+        document.getElementById(cat.btnId).addEventListener('click', function() {
+          const detail = document.getElementById(cat.detailId);
+          const isOpen = detail.style.display !== 'none';
+          categories.forEach(function(other) {
+            if (other.detailId !== cat.detailId) {
+              document.getElementById(other.detailId).style.display = 'none';
+            }
+          });
+          detail.style.display = isOpen ? 'none' : '';
+        });
+      });
+    })();
+
+    const uploadFolderState = { stack: [], currentFolderId: null, currentFolderUrl: '' };
+
+    function currentFolderIdOrRoot() {
+      return uploadFolderState.stack.length ? uploadFolderState.stack[uploadFolderState.stack.length - 1].id : state.appSettings.rootFolderId;
+    }
+
+    function currentFolderUrlOrRoot() {
+      return uploadFolderState.currentFolderUrl || state.appSettings.rootFolderUrl || '#';
+    }
+
+    function updateCurrentDriveLink() {
+      document.getElementById('current-drive-link').href = currentFolderUrlOrRoot();
+    }
+
+    async function loadUploadFolder(folderId, isRoot) {
+      const list = document.getElementById('folder-list');
+      list.innerHTML = '<div class="empty-note">読み込み中...</div>';
+      try {
+        const result = isRoot ? await withGASNoArg('getRootFolderContents') : await withGAS('navigateToFolder', folderId);
+        const breadcrumb = document.getElementById('folder-breadcrumb');
+        const back = document.getElementById('folder-back-btn');
+        list.innerHTML = '';
+        if (result.error) {
+          list.innerHTML = '<div class="empty-note">' + escHtml(result.error) + '</div>';
+          return;
+        }
+        uploadFolderState.currentFolderId = result.folderId || state.appSettings.rootFolderId;
+        uploadFolderState.currentFolderUrl = result.folderUrl || state.appSettings.rootFolderUrl;
+        breadcrumb.textContent = '📁 ' + (uploadFolderState.stack.map(item => item.name).join(' / ') || (result.folderName || 'ルート'));
+        back.style.display = uploadFolderState.stack.length ? 'inline-flex' : 'none';
+        updateCurrentDriveLink();
+        const folders = (result.items || []).filter(item => item.type === 'folder');
+        if (!folders.length) {
+          list.innerHTML = '<div class="empty-note">このフォルダにはサブフォルダがありません。</div>';
+          return;
+        }
+        folders.forEach(folder => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'folder-item';
+          button.innerHTML = '<span>📁</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(folder.name) + '</span><span>›</span>';
+          button.addEventListener('click', () => {
+            uploadFolderState.stack.push({ id: folder.id, name: folder.name });
+            loadUploadFolder(folder.id, false);
+          });
+          list.appendChild(button);
+        });
+      } catch (_error) {
+        list.innerHTML = '<div class="empty-note">フォルダの取得に失敗しました。</div>';
+      }
+    }
+
+    document.getElementById('folder-back-btn').addEventListener('click', () => {
+      if (!uploadFolderState.stack.length) return;
+      uploadFolderState.stack.pop();
+      if (!uploadFolderState.stack.length) {
+        loadUploadFolder(null, true);
+      } else {
+        loadUploadFolder(uploadFolderState.stack[uploadFolderState.stack.length - 1].id, false);
+      }
+    });
+
+    function resetUploadState() {
+      state.upload = { file: null, lat: null, lng: null, color: PIN_COLORS[0].hex };
+      document.getElementById('file-input').value = '';
+      document.getElementById('upload-title').value = '';
+      document.getElementById('upload-desc').value = '';
+      document.getElementById('upload-status').value = '未対応';
+      document.getElementById('upload-tags').value = '';
+      document.getElementById('upload-preview').style.display = 'none';
+      document.getElementById('upload-preview').src = '';
+      document.getElementById('file-drop').textContent = '📷 写真をタップして選択';
+      document.getElementById('file-drop').classList.remove('has-file');
+      ensureUrlInputs('upload-links', []);
+      setUploadColor(PIN_COLORS[0].hex);
+      uploadFolderState.stack = [];
+      uploadFolderState.currentFolderId = state.appSettings.rootFolderId;
+      uploadFolderState.currentFolderUrl = state.appSettings.rootFolderUrl;
+      updateCurrentDriveLink();
+      refreshRenameNotes();
+      loadUploadFolder(null, true);
+    }
+
+    function openUploadModal() {
+      resetUploadState();
+      openOverlay('upload-overlay');
+    }
+
+    document.getElementById('fab').addEventListener('click', openUploadModal);
+    document.getElementById('upload-cancel').addEventListener('click', () => closeOverlay('upload-overlay'));
+    document.getElementById('file-drop').addEventListener('click', () => document.getElementById('file-input').click());
+    document.getElementById('clear-photo-btn').addEventListener('click', () => {
+      state.upload.file = null;
+      state.upload.lat = null;
+      state.upload.lng = null;
+      document.getElementById('file-input').value = '';
+      document.getElementById('upload-preview').style.display = 'none';
+      document.getElementById('upload-preview').src = '';
+      document.getElementById('file-drop').textContent = '📷 写真をタップして選択';
+      document.getElementById('file-drop').classList.remove('has-file');
+      refreshRenameNotes();
+    });
+
+    function dmsToDecimal(dms, ref) {
+      if (!dms || dms.length < 3) return null;
+      if (dms.some(part => !part || part.denominator === 0)) return null;
+      const deg = dms[0].numerator / dms[0].denominator;
+      const min = dms[1].numerator / dms[1].denominator;
+      const sec = dms[2].numerator / dms[2].denominator;
+      let decimal = deg + min / 60 + sec / 3600;
+      if (ref === 'S' || ref === 'W') decimal = -decimal;
+      return decimal;
+    }
+
+    function readExifGps(file) {
+      return new Promise(resolve => {
+        EXIF.getData(file, function() {
+          const lat = dmsToDecimal(EXIF.getTag(this, 'GPSLatitude'), EXIF.getTag(this, 'GPSLatitudeRef'));
+          const lng = dmsToDecimal(EXIF.getTag(this, 'GPSLongitude'), EXIF.getTag(this, 'GPSLongitudeRef'));
+          resolve(lat != null && lng != null ? { lat, lng } : null);
+        });
+      });
+    }
+
+    function resizeWithOrientation(file, maxSize) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        const image = new Image();
+        const orientation = EXIF.getTag(file, 'Orientation') || 1;
+        reader.onload = event => {
+          image.onload = () => {
+            const canvas = document.createElement('canvas');
+            const rotated = [5, 6, 7, 8].includes(orientation);
+            const scale = Math.min(maxSize / (rotated ? image.height : image.width), maxSize / (rotated ? image.width : image.height), 1);
+            const drawWidth = Math.round(image.width * scale);
+            const drawHeight = Math.round(image.height * scale);
+            canvas.width = rotated ? drawHeight : drawWidth;
+            canvas.height = rotated ? drawWidth : drawHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.save();
+            switch (orientation) {
+              case 2: ctx.transform(-1, 0, 0, 1, canvas.width, 0); break;
+              case 3: ctx.transform(-1, 0, 0, -1, canvas.width, canvas.height); break;
+              case 4: ctx.transform(1, 0, 0, -1, 0, canvas.height); break;
+              case 5: ctx.transform(0, 1, 1, 0, 0, 0); break;
+              case 6: ctx.transform(0, 1, -1, 0, canvas.height, 0); break;
+              case 7: ctx.transform(0, -1, -1, 0, canvas.height, canvas.width); break;
+              case 8: ctx.transform(0, -1, 1, 0, 0, canvas.width); break;
+            }
+            ctx.drawImage(image, 0, 0, drawWidth, drawHeight);
+            ctx.restore();
+            resolve(canvas.toDataURL('image/jpeg', 0.85));
+          };
+          image.onerror = reject;
+          image.src = event.target.result;
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    document.getElementById('file-input').addEventListener('change', async event => {
+      const file = event.target.files[0];
+      if (!file) return;
+      state.upload.file = file;
+      if (!document.getElementById('upload-title').value.trim()) {
+        document.getElementById('upload-title').value = file.name.replace(/\.[^.]+$/, '');
+      }
+      const previewReader = new FileReader();
+      previewReader.onload = readerEvent => {
+        const preview = document.getElementById('upload-preview');
+        preview.src = readerEvent.target.result;
+        preview.style.display = 'block';
+      };
+      previewReader.readAsDataURL(file);
+      document.getElementById('file-drop').textContent = '📎 ' + file.name;
+      document.getElementById('file-drop').classList.add('has-file');
+      const gps = await readExifGps(file);
+      state.upload.lat = gps ? gps.lat : null;
+      state.upload.lng = gps ? gps.lng : null;
+      refreshRenameNotes();
+    });
+
+    document.getElementById('upload-title').addEventListener('input', refreshRenameNotes);
+    document.getElementById('edit-title').addEventListener('input', refreshRenameNotes);
+
+    function openLocationChoice(message, onPlaceNow, onSaveLater) {
+      document.getElementById('location-choice-message').textContent = message;
+      openOverlay('location-choice-overlay');
+      document.getElementById('location-place-now').onclick = () => { closeOverlay('location-choice-overlay'); onPlaceNow(); };
+      document.getElementById('location-save-later').onclick = () => { closeOverlay('location-choice-overlay'); onSaveLater(); };
+      document.getElementById('location-choice-cancel').onclick = () => closeOverlay('location-choice-overlay');
+    }
+
+    function clearPlacement() {
+      if (state.placement && state.placement.marker) state.placement.marker.remove();
+      state.placement = null;
+      hideHint();
+      document.getElementById('placement-bar').classList.remove('open');
+    }
+
+    function beginPlacement(options) {
+      clearPlacement();
+      const pin = options.mode === 'existing' ? getPinById(options.pinId) : null;
+      const color = pin ? pin.color : options.draft.color;
+      const marker = L.marker(map.getCenter(), { icon: createPinIcon(color, true, false), draggable: true }).addTo(map);
+      state.placement = { mode: options.mode, pinId: options.pinId || null, draft: options.draft || null, marker: marker };
+      if (options.mode === 'new') closeOverlay('upload-overlay');
+      showHint('ドラッグで位置を調整して「ここに置く」を押してください');
+      document.getElementById('placement-bar').classList.add('open');
+    }
+
+    document.getElementById('placement-cancel').addEventListener('click', () => {
+      const wasNew = state.placement && state.placement.mode === 'new';
+      clearPlacement();
+      if (wasNew) openOverlay('upload-overlay');
+    });
+
+    async function saveNewPin(draft, coords) {
+      const button = document.getElementById('upload-submit');
+      button.disabled = true;
+      try {
+        const base64 = draft.file ? await resizeWithOrientation(draft.file, 1920) : null;
+        const result = await withGAS('saveMapData', {
+          base64: base64,
+          filename: draft.file ? draft.file.name : '',
+          title: draft.title,
+          description: draft.description,
+          lat: coords && coords.lat != null ? coords.lat : null,
+          lng: coords && coords.lng != null ? coords.lng : null,
+          color: draft.color,
+          links: draft.links,
+          targetFolderId: currentFolderIdOrRoot(),
+          status: draft.status || '未対応',
+          tags: draft.tags || []
+        });
+        if (!result || !result.ok) throw new Error(result && result.error ? result.error : '保存に失敗しました');
+        state.pins.push(clonePin({
+          id: result.id,
+          title: draft.title,
+          description: draft.description,
+          lat: coords && coords.lat != null ? coords.lat : null,
+          lng: coords && coords.lng != null ? coords.lng : null,
+          color: draft.color,
+          imageUrl: result.imageUrl || '',
+          fileId: result.fileId || '',
+          timestamp: new Date().toLocaleString('ja-JP'),
+          links: draft.links,
+          folderUrl: result.folderUrl || '',
+          status: draft.status || '未対応',
+          tags: draft.tags || []
+        }));
+        closeOverlay('upload-overlay');
+        renderPins();
+        renderSidePanel();
+        updateUnplacedBadge();
+        renderColorFilterUI();
+        renderTagFilterUI();
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    document.getElementById('placement-confirm').addEventListener('click', async () => {
+      if (!state.placement) return;
+      const placement = state.placement;
+      const latLng = placement.marker.getLatLng();
+
+      const doPlacement = async function() {
+        if (placement.mode === 'existing') {
+          const result = await withGAS('movePin', { id: placement.pinId, lat: latLng.lat, lng: latLng.lng });
+          if (!result || !result.ok) throw new Error(result && result.error ? result.error : '配置に失敗しました');
+          const pin = getPinById(placement.pinId);
+          if (pin) { pin.lat = latLng.lat; pin.lng = latLng.lng; }
+        } else {
+          await saveNewPin(placement.draft, { lat: latLng.lat, lng: latLng.lng });
+        }
+        clearPlacement();
+        renderPins();
+        renderSidePanel();
+        updateUnplacedBadge();
+      };
+
+      const title = placement.mode === 'existing'
+        ? (getPinById(placement.pinId) || {}).title || ''
+        : (placement.draft || {}).title || '';
+      const excludeId = placement.mode === 'existing' ? placement.pinId : null;
+
+      checkDupsThenRun(title, latLng.lat, latLng.lng, excludeId, function() {
+        doPlacement().catch(function(err) {
+          alert('位置の保存に失敗しました。\n\n' + (err && err.message ? err.message : String(err)));
+        });
+      });
+    });
+
+    function getUploadDraft() {
+      const title = document.getElementById('upload-title').value.trim();
+      if (!title) throw new Error('タイトルは必須です');
+      const tags = normalizeTags(document.getElementById('upload-tags').value);
+      return {
+        file: state.upload.file,
+        title: title,
+        description: document.getElementById('upload-desc').value.trim(),
+        color: state.upload.color,
+        links: collectLinks('upload-links'),
+        status: document.getElementById('upload-status').value,
+        tags: tags
+      };
+    }
+
+    async function handleUploadSubmit(mode) {
+      try {
+        const draft = getUploadDraft();
+        if (mode === 'unplaced') {
+          await saveNewPin(draft, null);
+          return;
+        }
+        if (!draft.file && (state.upload.lat == null || state.upload.lng == null)) {
+          openLocationChoice('写真がないため位置情報がありません。今すぐ配置するか、未配置で保存してください。', () => beginPlacement({ mode: 'new', draft: draft }), () => saveNewPin(draft, null).catch(showAsyncError_));
+          return;
+        }
+        if (draft.file && (state.upload.lat == null || state.upload.lng == null)) {
+          openLocationChoice('写真に GPS 情報がありません。今すぐ配置するか、未配置で保存してください。', () => beginPlacement({ mode: 'new', draft: draft }), () => saveNewPin(draft, null).catch(showAsyncError_));
+          return;
+        }
+        const lat = state.upload.lat;
+        const lng = state.upload.lng;
+        checkDupsThenRun(draft.title, lat, lng, null, function() {
+          saveNewPin(draft, { lat: lat, lng: lng }).catch(showAsyncError_);
+        });
+      } catch (error) {
+        alert('保存に失敗しました。\n\n' + (error && error.message ? error.message : String(error)));
+      }
+    }
+
+    function showAsyncError_(error) {
+      alert('保存に失敗しました。\n\n' + (error && error.message ? error.message : String(error)));
+    }
+
+    document.getElementById('upload-submit').addEventListener('click', () => handleUploadSubmit('normal'));
+    document.getElementById('upload-save-unplaced').addEventListener('click', () => handleUploadSubmit('unplaced'));
+
+    async function loadMapData() {
+      const result = await withGASNoArg('getMapData');
+      state.pins = Array.isArray(result) ? result.map(clonePin) : [];
+      renderPins();
+      renderSidePanel();
+      updateUnplacedBadge();
+      renderColorFilterUI();
+      renderTagFilterUI();
+    }
+
+    function setupDndDropTargets() {
+      // ② 配置済み → 未配置エリアにドロップ
+      const unplacedEl = document.getElementById('side-unplaced');
+      unplacedEl.addEventListener('dragover', function(e) {
+        if (!state.draggedPinId) return;
+        const pin = getPinById(state.draggedPinId);
+        if (!pin || pin.lat == null) return; // 配置済みピンのみ受け付ける
+        e.preventDefault();
+        unplacedEl.classList.add('dragover');
+      });
+      unplacedEl.addEventListener('dragleave', function(e) {
+        if (!unplacedEl.contains(e.relatedTarget)) unplacedEl.classList.remove('dragover');
+      });
+      unplacedEl.addEventListener('drop', async function(e) {
+        e.preventDefault();
+        unplacedEl.classList.remove('dragover');
+        if (!state.editMode || state.placement) return;
+        const id = state.draggedPinId;
+        state.draggedPinId = null;
+        if (!id) return;
+        const pin = getPinById(id);
+        if (!pin || pin.lat == null) return;
+        try {
+          const result = await withGAS('unplacePin', { id });
+          if (!result || !result.ok) throw new Error(result && result.error ? result.error : '未配置への更新に失敗しました');
+          pin.lat = null;
+          pin.lng = null;
+          renderPins();
+          renderSidePanel();
+          updateUnplacedBadge();
+        } catch (error) {
+          alert('ピンを未配置に戻せませんでした。\n\n' + (error && error.message ? error.message : String(error)));
+        }
+      });
+
+      // ④ 未配置 → 配置済みエリアにドロップ（地図中央に配置）
+      const placedEl = document.getElementById('side-placed');
+      placedEl.addEventListener('dragover', function(e) {
+        if (!state.draggedPinId) return;
+        const pin = getPinById(state.draggedPinId);
+        if (!pin || pin.lat != null) return; // 未配置ピンのみ受け付ける
+        e.preventDefault();
+        placedEl.classList.add('dragover');
+      });
+      placedEl.addEventListener('dragleave', function(e) {
+        if (!placedEl.contains(e.relatedTarget)) placedEl.classList.remove('dragover');
+      });
+      placedEl.addEventListener('drop', async function(e) {
+        e.preventDefault();
+        placedEl.classList.remove('dragover');
+        if (!state.editMode || state.placement) return;
+        const id = state.draggedPinId;
+        state.draggedPinId = null;
+        if (!id) return;
+        const pin = getPinById(id);
+        if (!pin || pin.lat != null) return;
+        const center = map.getCenter();
+        try {
+          const result = await withGAS('movePin', { id, lat: center.lat, lng: center.lng });
+          if (!result || !result.ok) throw new Error(result && result.error ? result.error : '配置に失敗しました');
+          pin.lat = center.lat;
+          pin.lng = center.lng;
+          renderPins();
+          renderSidePanel();
+          updateUnplacedBadge();
+        } catch (error) {
+          alert('ピンの配置に失敗しました。\n\n' + (error && error.message ? error.message : String(error)));
+        }
+      });
+
+      // ⑤ 削除ゾーンへのドロップ（パネルアイテム経路）
+      const deleteZoneEl = document.getElementById('dnd-delete-zone');
+      deleteZoneEl.addEventListener('dragover', function(e) {
+        if (!state.draggedPinId) return;
+        e.preventDefault();
+        deleteZoneEl.classList.add('dragover');
+      });
+      deleteZoneEl.addEventListener('dragleave', function(e) {
+        if (!deleteZoneEl.contains(e.relatedTarget)) deleteZoneEl.classList.remove('dragover');
+      });
+      deleteZoneEl.addEventListener('drop', function(e) {
+        e.preventDefault();
+        deleteZoneEl.classList.remove('dragover');
+        if (!state.editMode || state.placement) return;
+        const id = state.draggedPinId;
+        state.draggedPinId = null;
+        if (!id) return;
+        const pin = getPinById(id);
+        if (!pin) return;
+        state.contextPinId = id;
+        document.getElementById('delete-message').textContent = pin.fileId
+          ? 'このピンを削除すると、対応する Drive 上の写真もゴミ箱に移動します。'
+          : 'このピンを削除します。';
+        openOverlay('delete-overlay');
+      });
+    }
+
+    function setupMapDropTarget() {
+      const mapEl = document.getElementById('map');
+      mapEl.addEventListener('dragover', function(e) {
+        if (!state.draggedPinId) return;
+        const pin = getPinById(state.draggedPinId);
+        if (!pin || pin.lat != null) return; // 未配置ピンのみ受け付ける
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        mapEl.classList.add('dragover');
+      });
+      mapEl.addEventListener('dragleave', function(e) {
+        if (!mapEl.contains(e.relatedTarget)) mapEl.classList.remove('dragover');
+      });
+      mapEl.addEventListener('drop', async function(e) {
+        e.preventDefault();
+        mapEl.classList.remove('dragover');
+        if (!state.editMode || state.placement) return;
+        const id = state.draggedPinId;
+        state.draggedPinId = null;
+        if (!id) return;
+        const pin = getPinById(id);
+        if (!pin || pin.lat != null) return;
+        const rect = map.getContainer().getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        const latlng = map.containerPointToLatLng(L.point(x, y));
+        try {
+          const result = await withGAS('movePin', { id, lat: latlng.lat, lng: latlng.lng });
+          if (!result || !result.ok) throw new Error(result && result.error ? result.error : '配置に失敗しました');
+          pin.lat = latlng.lat;
+          pin.lng = latlng.lng;
+          renderPins();
+          renderSidePanel();
+          updateUnplacedBadge();
+        } catch (error) {
+          alert('ピンの配置に失敗しました。\n\n' + (error && error.message ? error.message : String(error)));
+        }
+      });
+    }
+
+    function fallbackCopy(text) {
+      const el = document.createElement('textarea');
+      el.value = text;
+      el.style.position = 'fixed';
+      el.style.opacity = '0';
+      document.body.appendChild(el);
+      el.select();
+      const succeeded = document.execCommand('copy');
+      document.body.removeChild(el);
+      return succeeded;
+    }
+
+    function copyToClipboard(text, btn) {
+      const originalText = btn.textContent;
+      const showSuccess = function() {
+        btn.textContent = 'コピーしました！';
+        setTimeout(function() { btn.textContent = originalText; }, 2000);
+      };
+      const showFailure = function() {
+        btn.textContent = 'コピー失敗';
+        setTimeout(function() { btn.textContent = originalText; }, 2000);
+      };
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(showSuccess).catch(function() {
+          if (fallbackCopy(text)) { showSuccess(); } else { showFailure(); }
+        });
+      } else {
+        if (fallbackCopy(text)) { showSuccess(); } else { showFailure(); }
+      }
+    }
+
+    function getAllShareTags() {
+      const allTags = [];
+      const seen = {};
+      state.pins.forEach(function(pin) {
+        (pin.tags || []).forEach(function(tag) {
+          const key = tag.toLowerCase();
+          if (seen[key]) return;
+          seen[key] = true;
+          allTags.push(tag);
+        });
+      });
+      allTags.sort(function(a, b) { return a.localeCompare(b, 'ja'); });
+      return allTags;
+    }
+
+    function renderShareFilterUi() {
+      const chipsContainer = document.getElementById('share-tag-chips');
+      const colorContainer = document.getElementById('share-color-filter');
+      const modeBtn = document.getElementById('share-tag-mode-btn');
+      const createBtn = document.getElementById('share-create-btn');
+      const labelInput = document.getElementById('share-link-label');
+
+      if (chipsContainer) {
+        const allTags = getAllShareTags();
+        if (!allTags.length) {
+          chipsContainer.innerHTML = '<div class="muted">登録済みタグはありません。</div>';
+        } else {
+          chipsContainer.innerHTML = '';
+          allTags.forEach(function(tag) {
+            const isActive = state.shareManager.tags.some(function(item) {
+              return item.toLowerCase() === tag.toLowerCase();
+            });
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'filter-tag-chip' + (isActive ? ' active' : '');
+            chip.textContent = '#' + tag;
+            chip.addEventListener('click', function() {
+              const idx = state.shareManager.tags.findIndex(function(item) {
+                return item.toLowerCase() === tag.toLowerCase();
+              });
+              if (idx === -1) state.shareManager.tags.push(tag);
+              else state.shareManager.tags.splice(idx, 1);
+              updateShareFilterPreview();
+            });
+            chipsContainer.appendChild(chip);
+          });
+        }
+      }
+      if (colorContainer) {
+        colorContainer.innerHTML = '';
+        PIN_COLORS.forEach(function(color) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'color-filter-swatch' + (state.shareManager.colors.includes(color.hex) ? ' active' : '');
+          btn.style.background = color.hex;
+          btn.title = color.label;
+          btn.addEventListener('click', function() {
+            const idx = state.shareManager.colors.indexOf(color.hex);
+            if (idx === -1) state.shareManager.colors.push(color.hex);
+            else state.shareManager.colors.splice(idx, 1);
+            updateShareFilterPreview();
+          });
+          colorContainer.appendChild(btn);
+        });
+      }
+      if (modeBtn) {
+        modeBtn.textContent = state.shareManager.tagMode.toUpperCase();
+      }
+      if (createBtn) {
+        createBtn.disabled = state.shareManager.loading;
+        createBtn.textContent = state.shareManager.loading ? '処理中...' : '共有リンクを作成';
+      }
+      if (labelInput) {
+        labelInput.disabled = state.shareManager.loading;
+      }
+    }
+
+    function updateShareFilterPreview() {
+      state.shareManager.previewing = true;
+      renderShareFilterUi();
+      renderPins();
+      renderSidePanel();
+    }
+
+    function clearShareFilters() {
+      state.shareManager.tags = [];
+      state.shareManager.colors = [];
+      state.shareManager.tagMode = 'or';
+      updateShareFilterPreview();
+    }
+
+    function closeShareDialog() {
+      closeOverlay('share-overlay');
+      if (!state.shareManager.previewing) return;
+      state.shareManager.previewing = false;
+      renderPins();
+      renderSidePanel();
+    }
+
+    function renderShareLinks() {
+      renderShareFilterUi();
+      const list = document.getElementById('share-links-list');
+      if (!list) return;
+
+      if (state.shareManager.loading && !state.shareManager.links.length) {
+        list.innerHTML = '<div class="muted">共有リンクを読み込み中...</div>';
+        return;
+      }
+
+      if (!state.shareManager.links.length) {
+        list.innerHTML = '<div class="muted">まだ共有リンクはありません。</div>';
+        return;
+      }
+
+      list.innerHTML = state.shareManager.links.map(function(item) {
+        const createdAt = item.createdAt ? new Date(item.createdAt).toLocaleString('ja-JP') : '';
+        const modeLabel = item.tagMode === 'and' ? 'AND' : 'OR';
+        const statusLabel = item.enabled ? '有効' : '無効';
+        return [
+          '<div class="share-link-item" data-token="' + escHtml(item.token || '') + '" data-url="' + escHtml(item.url || '') + '">',
+            '<div class="share-link-head">',
+              '<div>',
+                '<div class="share-link-title">' + escHtml(item.label || 'Drop the Pin!') + '</div>',
+                '<div class="share-link-meta">' + escHtml(createdAt) + ' · ' + modeLabel + ' · ' + statusLabel + '</div>',
+              '</div>',
+              '<div class="share-link-actions">',
+                '<button class="text-btn" type="button" data-action="copy">コピー</button>',
+                '<button class="toggle-switch' + (item.enabled ? ' on' : '') + '" type="button" data-action="toggle" aria-label="' + (item.enabled ? '無効化' : '有効化') + '" aria-pressed="' + (item.enabled ? 'true' : 'false') + '"></button>',
+                '<button class="danger-btn" type="button" data-action="delete">削除</button>',
+              '</div>',
+            '</div>',
+            '<div class="share-link-url">' + escHtml(item.url || '') + '</div>',
+            '<div class="share-link-tags">' + renderTagChips(item.tags || []) + '</div>',
+            renderColorChips(item.colors || []),
+          '</div>'
+        ].join('');
+      }).join('');
+    }
+
+    async function loadShareLinks() {
+      state.shareManager.loading = true;
+      renderShareLinks();
+      try {
+        const result = await withGASNoArg('listShareLinks');
+        if (!result || !result.ok) throw new Error(result && result.error ? result.error : '共有リンク一覧の取得に失敗しました');
+        state.shareManager.links = Array.isArray(result.items) ? result.items : [];
+      } catch (error) {
+        alert('共有リンク一覧の取得に失敗しました。\n\n' + (error && error.message ? error.message : String(error)));
+      } finally {
+        state.shareManager.loading = false;
+        renderShareLinks();
+      }
+    }
+
+    function openShareDialog(pinId) {
+      state.shareManager.tags = state.listTagFilter.slice();
+      state.shareManager.colors = state.listColorFilter.slice();
+      state.shareManager.tagMode = state.listTagMode === 'and' ? 'and' : 'or';
+      state.shareManager.links = [];
+      state.shareManager.loading = false;
+      state.shareManager.previewing = true;
+      const labelInput = document.getElementById('share-link-label');
+      if (labelInput) {
+        labelInput.value = '';
+      }
+      renderShareLinks();
+      renderPins();
+      renderSidePanel();
+      openOverlay('share-overlay');
+      if (labelInput) {
+        setTimeout(function() { labelInput.focus(); }, 0);
+      }
+      loadShareLinks();
+    }
+
+    function parseShareParams() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('view') !== 'share') return null;
+      return {
+        pinId: params.get('pin') || null,
+        // タグ名にカンマを含む場合は URL 共有できない（タグ入力はスペース区切りのため実際には発生しない）
+        tags: params.get('tags') ? params.get('tags').split(',').filter(Boolean) : [],
+        tagMode: params.get('tagMode') === 'and' ? 'and' : 'or'
+      };
+    }
+
+    function enterShareMode(params) {
+      state.shareMode = true;
+      document.body.classList.add('share-mode');
+
+      if (params.pinId) {
+        // ピン共有: 対象ピンのみを集合とする
+        const target = state.pins.find(function(p) { return p.id === params.pinId; });
+        if (target) {
+          state.shareBasePins = [target];
+          setTimeout(function() { openPinDetail(target); }, 0);
+        } else {
+          state.shareBasePins = [];
+        }
+      } else if (params.tags.length > 0) {
+        // タグ共有: タグ条件で絞り込んだ集合を固定する
+        state.listTagFilter = params.tags.slice();
+        state.listTagMode = params.tagMode;
+        state.shareBasePins = state.pins.filter(function(pin) {
+          return matchesTagFilter(pin, params.tags, params.tagMode);
+        });
+      } else {
+        // view=share だが条件なし → 全ピン閲覧モード
+        state.shareBasePins = state.pins.slice();
+      }
+
+      renderPins();
+      renderSidePanel();
+      renderColorFilterUI();
+      renderTagFilterUI();
+      updateUnplacedBadge();
+
+      // 0件 / 不正条件のメッセージ
+      if (state.shareBasePins.length === 0) {
+        const message = params.pinId
+          ? '指定されたピンが見つかりません。リンクを確認してください。'
+          : '指定されたタグ条件に一致するピンがありません。';
+        document.getElementById('share-empty-msg').textContent = message;
+        document.getElementById('share-empty-msg').style.display = 'block';
+      }
+    }
+
+    async function initializeApp() {
+      try {
+        await loadAppSettings();
+      } catch (error) {
+        console.error('loadAppSettings failed', error);
+      }
+
+      try {
+        await loadMapData();
+      } catch (error) {
+        console.error('loadMapData failed', error);
+        alert('ピンの読み込みに失敗しました。\n\n' + (error && error.message ? error.message : String(error)));
+      }
+
+      // 共有モードの初期化
+      const shareParams = parseShareParams();
+      if (shareParams) {
+        enterShareMode(shareParams);
+      }
+
+      setupDndDropTargets();
+      setupMapDropTarget();
+    }
+
+    initializeApp();
+  </script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+# Local Apps Script configuration
+.clasp.json
+.clasprc.json
+
+# Dependencies
+node_modules/
+
+# Local agent/editor state
+.claude/
+.codex-debug/
+.codex-remote/
+.superpowers/
+.worktrees/
+.vscode/
+docs/superpowers/
+
+# Scratch files and logs
+Plan.md
+.tests/
+.tmp-*
+*.log
+
+# Environment files
+.env
+.env.*
+*.local

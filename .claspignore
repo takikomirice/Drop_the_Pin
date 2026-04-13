@@ -1,0 +1,10 @@
+docs/**
+.superpowers/**
+.codex-debug/**
+.claude/**
+.vscode/**
+.worktrees/**
+tests/**
+*.md
+.gitignore
+.clasp.json.example
