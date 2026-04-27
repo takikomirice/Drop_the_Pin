@@ -205,6 +205,7 @@ const SHARE_LINKS_HEADERS = ['createdAt', 'label', 'token', 'tags', 'tagMode', '
 const ROUTES_HEADERS = ['routeId', 'name', 'color', 'routeMode', 'closed', 'startPinId', 'endPinId', 'createdAt', 'updatedAt', 'orderIndex', 'visible', 'showNumbers', 'showLine', 'lineStyle'];
 const ROUTE_PINS_HEADERS = ['routeId', 'pinId', 'pinOrder', 'createdAt', 'updatedAt'];
 const ROUTE_CACHE_HEADERS = ['cacheKey', 'routeId', 'coordsJson', 'provider', 'createdAt', 'expiresAt'];
+const SHARED_ROAD_ROUTE_CACHE_PROVIDER = 'osrm';
 const SAFE_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const ROUTE_LINE_STYLES = { solid: true, dashed: true, dotted: true };
 
@@ -1042,6 +1043,235 @@ function invalidateRouteCacheForRoute(data) {
   return { ok: true, deleted: invalidateRouteCacheForRoutes_([routeId]) };
 }
 
+function getRouteCacheSheetForRead_() {
+  return openDataSpreadsheet_().getSheetByName(ROUTE_CACHE_SHEET_NAME);
+}
+
+function parseRouteCacheTimestamp_(value) {
+  if (value instanceof Date && Number.isFinite(value.getTime())) return value.getTime();
+  const parsed = Date.parse(String(value || ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function readLatestRouteCacheEntryForRoute_(routeId) {
+  const normalizedRouteId = normalizeRouteId_(routeId);
+  if (!normalizedRouteId) return null;
+
+  const sheet = getRouteCacheSheetForRead_();
+  if (!sheet || sheet.getLastRow() < 2) return null;
+
+  const rows = sheet.getDataRange().getValues();
+  let latestRow = null;
+  let latestTimestamp = -1;
+  let latestIndex = -1;
+  for (var i = 1; i < rows.length; i += 1) {
+    if (normalizeRouteId_(rows[i][1]) !== normalizedRouteId) continue;
+    const timestamp = parseRouteCacheTimestamp_(rows[i][4]);
+    if (!latestRow || timestamp > latestTimestamp || (timestamp === latestTimestamp && i > latestIndex)) {
+      latestRow = rows[i];
+      latestTimestamp = timestamp;
+      latestIndex = i;
+    }
+  }
+  return latestRow ? routeCacheRowToEntry_(latestRow) : null;
+}
+
+function readLatestRouteCacheEntryByCacheKey_(cacheKey) {
+  const normalizedCacheKey = normalizeRouteCacheKey_(cacheKey);
+  if (!normalizedCacheKey) return null;
+
+  const sheet = getRouteCacheSheetForRead_();
+  if (!sheet || sheet.getLastRow() < 2) return null;
+
+  const rows = sheet.getDataRange().getValues();
+  let latestRow = null;
+  let latestTimestamp = -1;
+  let latestIndex = -1;
+  for (var i = 1; i < rows.length; i += 1) {
+    if (normalizeRouteCacheKey_(rows[i][0]) !== normalizedCacheKey) continue;
+    const timestamp = parseRouteCacheTimestamp_(rows[i][4]);
+    if (!latestRow || timestamp > latestTimestamp || (timestamp === latestTimestamp && i > latestIndex)) {
+      latestRow = rows[i];
+      latestTimestamp = timestamp;
+      latestIndex = i;
+    }
+  }
+  return latestRow ? routeCacheRowToEntry_(latestRow) : null;
+}
+
+function logSharedRoadRouteCache_(routeId, group, expectedCacheKey, hit, reason) {
+  if (typeof Logger === 'undefined' || !Logger.log) return;
+  Logger.log('shared_road_route_cache: routeId=' + normalizeRouteId_(routeId)
+    + ' routeMode=' + String(group && group.routeMode || '')
+    + ' expectedCacheKey=' + normalizeRouteCacheKey_(expectedCacheKey)
+    + ' cache ' + (hit ? 'hit' : 'miss')
+    + (reason ? ' miss reason=' + reason : ''));
+}
+
+function getSharedRoutePinIdsForDisplay_(group) {
+  if (!group || !Array.isArray(group.pinIds)) return [];
+  const basePinIds = group.pinIds.map(function(pinId) {
+    return normalizeRoutePinId_(pinId);
+  }).filter(Boolean);
+  const basePinIdSet = {};
+  basePinIds.forEach(function(pinId) {
+    basePinIdSet[pinId] = true;
+  });
+
+  const seen = {};
+  const pinIds = [];
+  function canUsePinId(pinId) {
+    return !!pinId && !!basePinIdSet[pinId];
+  }
+  function addPinId(pinId) {
+    if (!canUsePinId(pinId) || seen[pinId]) return;
+    seen[pinId] = true;
+    pinIds.push(pinId);
+  }
+
+  const startPinId = normalizeRoutePinId_(group.startPinId);
+  const endPinId = normalizeRoutePinId_(group.endPinId);
+  const shouldAppendEndPin = group.closed !== true && canUsePinId(endPinId);
+  if (canUsePinId(startPinId)) addPinId(startPinId);
+  basePinIds.forEach(function(pinId) {
+    if (pinId === startPinId || (shouldAppendEndPin && pinId === endPinId)) return;
+    addPinId(pinId);
+  });
+  if (shouldAppendEndPin) addPinId(endPinId);
+  return pinIds;
+}
+
+function roundSharedRouteCacheCoord_(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '';
+  const rounded = Math.round(num * 100000) / 100000;
+  return (Object.is(rounded, -0) ? 0 : rounded).toFixed(5);
+}
+
+function buildSharedRoadRouteCacheKey_(group, pinById, provider) {
+  if (!group || group.routeMode !== 'road') return '';
+  const entries = getSharedRoutePinIdsForDisplay_(group).map(function(pinId) {
+    const pin = pinById[pinId];
+    if (!pin) return null;
+    const lat = Number(pin.lat);
+    const lng = Number(pin.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return { pinId: pinId, latLng: [lat, lng] };
+  }).filter(Boolean);
+  if (entries.length < 2) return '';
+
+  const waypointKey = entries.map(function(entry) {
+    return encodeURIComponent(entry.pinId) + ':'
+      + roundSharedRouteCacheCoord_(entry.latLng[0]) + ','
+      + roundSharedRouteCacheCoord_(entry.latLng[1]);
+  }).join('>');
+  return [
+    normalizeRouteCacheProvider_(provider),
+    'road',
+    group.closed === true ? 'true' : 'false',
+    waypointKey
+  ].join('|');
+}
+
+function getSharedPinsForShareLink_(shareLink) {
+  return getMapPinsForShare_().filter(function(pin) {
+    return matchesTagFilter_(pin, shareLink.tags, shareLink.tagMode)
+      && matchesColorFilter_(pin, shareLink.colors);
+  }).map(function(pin) {
+    return toSharedPin_(pin, shareLink.tags);
+  });
+}
+
+function buildSharedAllowedPinIdSet_(pins) {
+  const allowedPinIdSet = {};
+  (Array.isArray(pins) ? pins : []).forEach(function(pin) {
+    const pinId = normalizeRoutePinId_(pin && pin.id);
+    if (pinId) allowedPinIdSet[pinId] = true;
+  });
+  return allowedPinIdSet;
+}
+
+function indexSharedPinsById_(pins) {
+  const pinById = {};
+  (Array.isArray(pins) ? pins : []).forEach(function(pin) {
+    const pinId = normalizeRoutePinId_(pin && pin.id);
+    if (pinId) pinById[pinId] = pin;
+  });
+  return pinById;
+}
+
+function isRouteClosedToAllowedPins_(group, allowedPinIdSet) {
+  const pinIds = getSharedRoutePinIdsForDisplay_(group);
+  if (pinIds.length < 2) return false;
+  for (var i = 0; i < pinIds.length; i += 1) {
+    if (!allowedPinIdSet[pinIds[i]]) return false;
+  }
+  return true;
+}
+
+function getSharedRoadRouteCache_(token, routeId) {
+  const shareLink = getShareLinkByToken_(token);
+  if (!shareLink) return { ok: false };
+  if (!shareLink.enabled || shareLink.revokedAt) return { ok: false };
+
+  routeId = normalizeRouteId_(routeId);
+  if (!routeId) return { ok: false };
+  function miss(reason, group, expectedCacheKey) {
+    logSharedRoadRouteCache_(routeId, group, expectedCacheKey, false, reason);
+    return { ok: false };
+  }
+
+  const sharedPins = getSharedPinsForShareLink_(shareLink);
+  const allowedPinIdSet = buildSharedAllowedPinIdSet_(sharedPins);
+  const allRouteGroups = getRouteGroups();
+  let rawGroup = null;
+  for (var rawIndex = 0; rawIndex < allRouteGroups.length; rawIndex += 1) {
+    if (normalizeRouteId_(allRouteGroups[rawIndex].routeId) === routeId) {
+      rawGroup = allRouteGroups[rawIndex];
+      break;
+    }
+  }
+  if (!rawGroup || !isRouteClosedToAllowedPins_(rawGroup, allowedPinIdSet)) return miss('no_group', rawGroup, '');
+
+  const sharedRouteGroups = getSharedRouteGroups_(sharedPins);
+  let group = null;
+  for (var i = 0; i < sharedRouteGroups.length; i += 1) {
+    if (normalizeRouteId_(sharedRouteGroups[i].routeId) === routeId) {
+      group = sharedRouteGroups[i];
+      break;
+    }
+  }
+  if (!group) return miss('no_group', null, '');
+  if (group.routeMode !== 'road') return miss('not_road', group, '');
+  if (!isRouteClosedToAllowedPins_(group, allowedPinIdSet)) return miss('no_group', group, '');
+
+  const pinById = indexSharedPinsById_(sharedPins);
+  const expectedCacheKey = buildSharedRoadRouteCacheKey_(group, pinById, SHARED_ROAD_ROUTE_CACHE_PROVIDER);
+  if (!expectedCacheKey) return miss('no_expected_key', group, expectedCacheKey);
+
+  const entry = readLatestRouteCacheEntryByCacheKey_(expectedCacheKey);
+  if (!entry) return miss('no_cache', group, expectedCacheKey);
+  if (entry.routeId !== routeId) return miss('route_id_mismatch', group, expectedCacheKey);
+  if (!Array.isArray(entry.coords) || entry.coords.length < 2) return miss('invalid_coords', group, expectedCacheKey);
+
+  logSharedRoadRouteCache_(routeId, group, expectedCacheKey, true, '');
+  return { ok: true, routeId: routeId, coords: entry.coords };
+}
+
+function getSharedRoadRouteCache(data, routeId) {
+  const payload = data && typeof data === 'object'
+    ? data
+    : { token: data, routeId: routeId };
+  try {
+    return getSharedRoadRouteCache_(payload && payload.token, payload && payload.routeId);
+  } catch (error) {
+    if (typeof Logger !== 'undefined' && Logger.log) {
+      Logger.log('shared_road_route_cache_failed: ' + (error && error.message ? error.message : error));
+    }
+    return { ok: false };
+  }
+}
+
 function deleteRouteGroup(id) {
   const routeId = normalizeRouteId_(id);
   if (!routeId) return { ok: false, error: 'missing_route_id' };
@@ -1718,6 +1948,7 @@ if (typeof module !== 'undefined' && module.exports) {
     setShareLinkEnabled: setShareLinkEnabled,
     deleteShareLink: deleteShareLink,
     getSharedViewData: getSharedViewData,
+    getSharedRoadRouteCache: getSharedRoadRouteCache,
     getRouteGroups: getRouteGroups,
     saveRouteGroup: saveRouteGroup,
     deleteRouteGroup: deleteRouteGroup,
