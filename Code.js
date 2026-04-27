@@ -1234,6 +1234,55 @@ function toSharedPin_(pin, allowedTags) {
   };
 }
 
+function toSharedRouteGroup_(group, allowedPinIdSet) {
+  var routeId = normalizeRouteId_(group && (group.routeId || group.id));
+  if (!routeId) return null;
+
+  var filteredPinIds = [];
+  var filteredPinIdSet = {};
+  (Array.isArray(group.pinIds) ? group.pinIds : []).forEach(function(pinId) {
+    var normalizedPinId = normalizeRoutePinId_(pinId);
+    if (!normalizedPinId || !allowedPinIdSet[normalizedPinId] || filteredPinIdSet[normalizedPinId]) return;
+    filteredPinIdSet[normalizedPinId] = true;
+    filteredPinIds.push(normalizedPinId);
+  });
+  if (filteredPinIds.length === 0) return null;
+
+  var closed = group && group.closed === true;
+  var startPinId = normalizeRoutePinId_(group && group.startPinId);
+  var endPinId = normalizeRoutePinId_(group && group.endPinId);
+  return {
+    id: routeId,
+    routeId: routeId,
+    name: String(group && group.name || ''),
+    color: normalizeRouteColor_(group && group.color, routeId),
+    visible: group && group.visible === false ? false : true,
+    showNumbers: group && group.showNumbers === false ? false : true,
+    showLine: group && group.showLine === false ? false : true,
+    lineStyle: normalizeRouteLineStyle_(group && group.lineStyle, routeId),
+    routeMode: group && group.routeMode === 'road' ? 'road' : 'straight',
+    closed: closed,
+    startPinId: startPinId && filteredPinIdSet[startPinId] ? startPinId : null,
+    endPinId: closed ? null : (endPinId && filteredPinIdSet[endPinId] ? endPinId : null),
+    pinIds: filteredPinIds
+  };
+}
+
+function getSharedRouteGroups_(pins) {
+  var allowedPinIdSet = {};
+  (Array.isArray(pins) ? pins : []).forEach(function(pin) {
+    var pinId = normalizeRoutePinId_(pin && pin.id);
+    if (pinId) allowedPinIdSet[pinId] = true;
+  });
+  if (Object.keys(allowedPinIdSet).length === 0) return [];
+
+  return getRouteGroups().map(function(group) {
+    return toSharedRouteGroup_(group, allowedPinIdSet);
+  }).filter(function(group) {
+    return !!group;
+  });
+}
+
 function getSharedViewData(token) {
   var shareLink = getShareLinkByToken_(token);
   if (!shareLink) return { ok: false, error: 'invalid_share_link' };
@@ -1257,7 +1306,8 @@ function getSharedViewData(token) {
     },
     allowedTags: shareLink.tags.slice(),
     allowedColors: shareLink.colors.slice(),
-    pins: pins
+    pins: pins,
+    routeGroups: getSharedRouteGroups_(pins)
   };
 }
 

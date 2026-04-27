@@ -186,8 +186,7 @@
       min-width: 140px;
     }
     .filter-toggle-btn.active,
-    #shared-tag-mode,
-    #shared-order-mode-toggle.active {
+    #shared-tag-mode {
       border-color: rgba(185, 95, 45, 0.22);
       background: rgba(185, 95, 45, 0.1);
       color: var(--accent);
@@ -238,6 +237,32 @@
       transform: translateY(-1px) scale(1.08);
       box-shadow: 0 0 0 2px rgba(185, 95, 45, 0.16), inset 0 0 0 2px rgba(255,255,255,0.68);
     }
+    .shared-route-hit-polyline {
+      cursor: pointer;
+      pointer-events: stroke;
+    }
+    .shared-route-info-popup .leaflet-popup-content {
+      margin: 10px 12px;
+      min-width: 150px;
+      max-width: min(220px, calc(100vw - 64px));
+    }
+    .shared-route-info-title {
+      font-size: 13px;
+      font-weight: 800;
+      line-height: 1.35;
+      margin-bottom: 6px;
+      overflow-wrap: anywhere;
+    }
+    .shared-route-info-row {
+      display: flex;
+      gap: 6px;
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: normal;
+    }
+    .shared-route-info-row strong {
+      flex: 0 0 auto;
+    }
     #shared-title {
       margin-top: 2px;
       font-size: 15px;
@@ -254,7 +279,6 @@
       flex: 0 0 auto;
     }
     #shared-theme-toggle,
-    #shared-order-mode-toggle,
     #shared-panel-toggle {
       width: 34px;
       height: 34px;
@@ -536,7 +560,6 @@
     </div>
     <div class="shared-topbar-actions">
       <button id="shared-theme-toggle" class="shared-control-btn" type="button" title="テーマ切替">🌙</button>
-      <button id="shared-order-mode-toggle" class="shared-control-btn" type="button" title="順番表示モード">🔢</button>
       <button id="shared-panel-toggle" class="shared-control-btn" type="button" title="リストを隠す">🗺️</button>
     </div>
   </div>
@@ -557,6 +580,7 @@
         </select>
         <button id="shared-filter-color-btn" class="shared-control-btn filter-toggle-btn" type="button">色で検索</button>
         <button id="shared-filter-tag-btn" class="shared-control-btn filter-toggle-btn" type="button">タグで検索</button>
+        <button id="shared-clear-filters" class="shared-control-btn" type="button">条件クリア</button>
       </div>
       <div id="shared-filter-color-detail" style="display:none;margin-top:4px;">
         <div id="shared-color-filter-header">
@@ -581,11 +605,13 @@
 
   <script>
     const SHARED_DEFAULT_COLOR = '#e53935';
+    const SHARED_DEFAULT_ROUTE_COLOR = '#1e88e5';
     const SHARED_SAFE_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
     const SHARED_PROTOCOL_SEPARATOR = '/' + '/';
     const SHARED_SVG_XMLNS = 'http:' + SHARED_PROTOCOL_SEPARATOR + 'www.w3.org/2000/svg';
     const SHARED_OSM_TILE_URL = 'https:' + SHARED_PROTOCOL_SEPARATOR + '{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
     const SHARED_OSM_ATTRIBUTION = '© <a href="https:' + SHARED_PROTOCOL_SEPARATOR + 'www.openstreetmap.org/">OpenStreetMap</a> contributors';
+    const SHARED_ROUTE_LINE_STYLES = { solid: true, dashed: true, dotted: true };
     const SHARED_PIN_ICONS = [
       { id: 'default', label: '標準' },
       { id: 'photo', label: '写真' },
@@ -599,6 +625,10 @@
 
     function safeColor(color) {
       return SHARED_SAFE_COLOR_RE.test(String(color || '')) ? String(color) : SHARED_DEFAULT_COLOR;
+    }
+
+    function safeRouteColor(color) {
+      return SHARED_SAFE_COLOR_RE.test(String(color || '')) ? String(color).toLowerCase() : SHARED_DEFAULT_ROUTE_COLOR;
     }
 
     function normalizeSharedIcon(value) {
@@ -642,41 +672,42 @@
 
     function createSharedNumberedPinIcon(color, number) {
       const fill = safeColor(color);
-      const label = String(number || '');
-      const fontSize = label.length > 2 ? 9 : 12;
+      const safeNumber = String(number == null ? '' : number);
       const svg = `
         <svg xmlns="${SHARED_SVG_XMLNS}" width="30" height="46" viewBox="0 0 30 46">
           <line x1="15" y1="23" x2="15" y2="44" stroke="#4d4d4d" stroke-width="1.6" stroke-linecap="round" opacity="1"/>
           <circle cx="15" cy="12" r="11.5" fill="${fill}" opacity="0.24"/>
           <circle cx="15" cy="12" r="10.5" fill="${fill}" opacity="1"/>
-          <text x="15" y="16" text-anchor="middle" font-size="${fontSize}" font-weight="800" fill="#fff" font-family="Arial, sans-serif">${escHtml(label)}</text>
+          <text x="15" y="12.8" text-anchor="middle" dominant-baseline="middle" font-family="Arial, sans-serif" font-size="${String(safeNumber).length > 2 ? 9 : 12}" font-weight="800" fill="#fff">${escHtml(safeNumber)}</text>
         </svg>`;
       return L.divIcon({ html: '<div class="pin-icon-visual">' + svg + '</div>', iconSize: [30, 46], iconAnchor: [15, 44], className: '' });
     }
 
-    function createSharedPinIconForDisplay(pin, displayOrder) {
-      if (state.orderMode && displayOrder != null) {
-        return createSharedNumberedPinIcon(pin.color, displayOrder);
-      }
+    function createSharedPinIconForDisplay(pin) {
+      const display = getSharedRouteNumberDisplayForPin(pin.id);
+      if (display) return createSharedNumberedPinIcon(display.color || pin.color, display.number);
       return createPinIcon(pin.color, !!pin.imageUrl, pin.icon);
     }
 
     const EXEC_URL = <?!= JSON.stringify(execUrl || '') ?>;
     const SHARED_TOKEN = <?!= JSON.stringify(token || '') ?>;
+    // 共有ビューは読み取り専用。編集・追加・削除・D&D・ルート編集は持たない。
+    // ルート情報は表示制御・ルート線・番号表示のために読むだけ。
     const state = {
       token: SHARED_TOKEN || new URLSearchParams(window.location.search).get('token') || '',
       pins: [],
+      routeGroups: [],
       allowedTags: [],
       allowedColors: [],
       listQuery: '',
       activeTags: [],
       activeColors: [],
       tagMode: 'or',
+      initialTagMode: 'or',
       shareLabel: '',
       status: 'loading',
       panelVisible: true,
       sort: 'newest',
-      orderMode: false,
       searchExpanded: false,
       tagFilterExpanded: false,
       colorFilterExpanded: false
@@ -684,6 +715,7 @@
 
     let sharedMap = null;
     let sharedMarkers = {};
+    let sharedRouteLayers = {};
     let sharedLinkedCardHighlightPinId = null;
     let sharedLinkedCardHighlightTimer = null;
 
@@ -953,25 +985,6 @@
       return parseSharedDateTimeValue(getSharedDisplayTime(pin));
     }
 
-    function getSharedOrderTime(pin) {
-      return parseSharedDateTimeValue(pin && (pin.eventAt || pin.timestamp));
-    }
-
-    function compareSharedPinsForDisplayOrder(a, b) {
-      const aTime = getSharedOrderTime(a) || Number.MAX_SAFE_INTEGER;
-      const bTime = getSharedOrderTime(b) || Number.MAX_SAFE_INTEGER;
-      if (aTime !== bTime) return aTime - bTime;
-      const titleDiff = String(a.title || '').localeCompare(String(b.title || ''), 'ja');
-      if (titleDiff) return titleDiff;
-      return String(a.id || '').localeCompare(String(b.id || ''), 'ja');
-    }
-
-    function getSharedOrderModePins(pins) {
-      return pins.slice().sort(compareSharedPinsForDisplayOrder).map(function(pin, index) {
-        return { pin: pin, displayOrder: index + 1 };
-      });
-    }
-
     function sortSharedPins(pins) {
       const items = pins.slice();
       if (state.sort === 'title') {
@@ -997,9 +1010,317 @@
 
     function getVisibleSharedPinEntries() {
       const pins = getFilteredSharedPins();
-      return state.orderMode ? getSharedOrderModePins(pins) : pins.map(function(pin) {
+      return pins.map(function(pin) {
         return { pin: pin, displayOrder: null };
       });
+    }
+
+    function normalizeSharedRouteLineStyle(value) {
+      const style = String(value || '').trim().toLowerCase();
+      return SHARED_ROUTE_LINE_STYLES[style] ? style : 'solid';
+    }
+
+    function getSharedRouteId(group) {
+      return String(group && (group.routeId || group.id) || '').trim();
+    }
+
+    function getSharedRoutePinIdsForState(group) {
+      if (!group || !Array.isArray(group.pinIds)) return [];
+      const seen = {};
+      return group.pinIds.map(function(pinId) {
+        return String(pinId || '').trim();
+      }).filter(function(pinId) {
+        if (!pinId || seen[pinId]) return false;
+        seen[pinId] = true;
+        return true;
+      });
+    }
+
+    function normalizeSharedRouteGroup(group) {
+      const routeId = getSharedRouteId(group);
+      const pinIds = getSharedRoutePinIdsForState(group);
+      const pinIdSet = {};
+      pinIds.forEach(function(pinId) { pinIdSet[pinId] = true; });
+      const rawStartPinId = String(group && group.startPinId || '').trim();
+      const rawEndPinId = String(group && group.endPinId || '').trim();
+      const closed = !!(group && group.closed === true);
+      return {
+        id: routeId,
+        routeId: routeId,
+        name: String(group && group.name || ''),
+        color: safeRouteColor(group && group.color),
+        visible: !(group && group.visible === false),
+        showNumbers: !(group && group.showNumbers === false),
+        showLine: !(group && group.showLine === false),
+        lineStyle: normalizeSharedRouteLineStyle(group && group.lineStyle),
+        routeMode: group && group.routeMode === 'road' ? 'road' : 'straight',
+        closed: closed,
+        startPinId: rawStartPinId && pinIdSet[rawStartPinId] ? rawStartPinId : null,
+        endPinId: closed ? null : (rawEndPinId && pinIdSet[rawEndPinId] ? rawEndPinId : null),
+        pinIds: pinIds
+      };
+    }
+
+    function getSharedRouteGroups() {
+      return Array.isArray(state.routeGroups) ? state.routeGroups.slice() : [];
+    }
+
+    function getSharedRoutePinIdsForDisplay(group, filteredPinIdSet) {
+      if (!group || !Array.isArray(group.pinIds)) return [];
+      const basePinIds = group.pinIds.map(function(pinId) {
+        return String(pinId || '').trim();
+      }).filter(Boolean);
+      const basePinIdSet = {};
+      basePinIds.forEach(function(pinId) {
+        basePinIdSet[pinId] = true;
+      });
+      const seen = {};
+      const pinIds = [];
+      function canUsePinId(pinId) {
+        return !!pinId && !!basePinIdSet[pinId] && (!filteredPinIdSet || filteredPinIdSet.has(pinId));
+      }
+      function addPinId(pinId) {
+        if (!canUsePinId(pinId) || seen[pinId]) return;
+        seen[pinId] = true;
+        pinIds.push(pinId);
+      }
+
+      const startPinId = String(group.startPinId || '').trim();
+      const endPinId = String(group.endPinId || '').trim();
+      const shouldAppendEndPin = group.closed !== true && canUsePinId(endPinId);
+      if (canUsePinId(startPinId)) addPinId(startPinId);
+      basePinIds.forEach(function(pinId) {
+        if (pinId === startPinId || (shouldAppendEndPin && pinId === endPinId)) return;
+        addPinId(pinId);
+      });
+      if (shouldAppendEndPin) addPinId(endPinId);
+      return pinIds;
+    }
+
+    function getSharedRouteNumberDisplayForPin(pinId) {
+      const targetPinId = String(pinId || '').trim();
+      if (!targetPinId) return null;
+      for (let i = 0; i < state.routeGroups.length; i += 1) {
+        const group = state.routeGroups[i];
+        if (!group || group.visible === false || group.showNumbers === false) continue;
+        const routePinIds = getSharedRoutePinIdsForDisplay(group);
+        const index = routePinIds.indexOf(targetPinId);
+        if (index !== -1) {
+          return {
+            number: index + 1,
+            color: safeRouteColor(group.color)
+          };
+        }
+      }
+      return null;
+    }
+
+    function getSharedRouteLatLngsForDisplay(group, filteredPinIdSet) {
+      const routePinIds = getSharedRoutePinIdsForDisplay(group, filteredPinIdSet);
+      const pinById = {};
+      state.pins.forEach(function(pin) {
+        pinById[String(pin.id || '')] = pin;
+      });
+      const latLngs = routePinIds.map(function(pinId) {
+        const pin = pinById[pinId];
+        if (!pin) return null;
+        const lat = Number(pin.lat);
+        const lng = Number(pin.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+        return [lat, lng];
+      }).filter(Boolean);
+      if (group && group.closed === true && latLngs.length >= 2) {
+        latLngs.push([latLngs[0][0], latLngs[0][1]]);
+      }
+      return latLngs;
+    }
+
+    function haversineDistanceMeters(a, b) {
+      if (!Array.isArray(a) || !Array.isArray(b)) return 0;
+      const lat1 = Number(a[0]);
+      const lng1 = Number(a[1]);
+      const lat2 = Number(b[0]);
+      const lng2 = Number(b[1]);
+      if (!Number.isFinite(lat1) || !Number.isFinite(lng1) || !Number.isFinite(lat2) || !Number.isFinite(lng2)) return 0;
+      const toRad = function(deg) { return deg * Math.PI / 180; };
+      const earthRadiusMeters = 6371000;
+      const dLat = toRad(lat2 - lat1);
+      const dLng = toRad(lng2 - lng1);
+      const rLat1 = toRad(lat1);
+      const rLat2 = toRad(lat2);
+      const h = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(rLat1) * Math.cos(rLat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+      return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+    }
+
+    function sumLatLngDistanceMeters(latLngs) {
+      if (!Array.isArray(latLngs) || latLngs.length < 2) return 0;
+      let total = 0;
+      for (let i = 1; i < latLngs.length; i += 1) {
+        total += haversineDistanceMeters(latLngs[i - 1], latLngs[i]);
+      }
+      return total;
+    }
+
+    function formatSharedRouteDistance(meters) {
+      const value = Number(meters);
+      if (!Number.isFinite(value) || value <= 0) return '0 m';
+      if (value >= 1000) {
+        return (value / 1000).toFixed(value >= 10000 ? 0 : 1) + ' km';
+      }
+      return Math.round(value) + ' m';
+    }
+
+    function getSharedRouteLineDashArray(group) {
+      const style = normalizeSharedRouteLineStyle(group && group.lineStyle);
+      if (style === 'dashed') return '10 8';
+      if (style === 'dotted') return '2 8';
+      return undefined;
+    }
+
+    function buildSharedRouteInfoPopupHtml(group, latLngs) {
+      const routeName = String(group && group.name || '').trim() || '名称未設定のルート';
+      const distanceLabel = formatSharedRouteDistance(sumLatLngDistanceMeters(latLngs));
+      const visiblePinCount = Array.isArray(latLngs) && latLngs.length
+        ? Math.max(0, (group && group.closed === true) ? latLngs.length - 1 : latLngs.length)
+        : 0;
+      return '<div class="shared-route-info-popup-body">' +
+        '<div class="shared-route-info-title">' + escHtml(routeName) + '</div>' +
+        '<div class="shared-route-info-row"><strong>距離</strong><span>' + escHtml(distanceLabel) + '</span></div>' +
+        '<div class="shared-route-info-row"><strong>地点</strong><span>' + visiblePinCount + '地点</span></div>' +
+        '<div class="shared-route-info-row"><strong>方式</strong><span>直線</span></div>' +
+        '</div>';
+    }
+
+    function attachSharedRouteHitPolyline(layerGroup, latLngs, group) {
+      if (!layerGroup || !Array.isArray(latLngs) || latLngs.length < 2) return null;
+      const hitPolyline = L.polyline(latLngs, {
+        color: safeRouteColor(group && group.color),
+        weight: 18,
+        opacity: 0,
+        interactive: true,
+        bubblingMouseEvents: false,
+        className: 'shared-route-hit-polyline'
+      });
+      hitPolyline.bindPopup(buildSharedRouteInfoPopupHtml(group, latLngs), {
+        className: 'shared-route-info-popup'
+      });
+      hitPolyline.addTo(layerGroup);
+      return hitPolyline;
+    }
+
+    function drawSharedStraightRouteLine(layerGroup, latLngs, group) {
+      if (!layerGroup || !Array.isArray(latLngs) || latLngs.length < 2) return null;
+      const routeLine = L.polyline(latLngs, {
+        color: safeRouteColor(group.color),
+        weight: 3,
+        opacity: 0.78,
+        dashArray: getSharedRouteLineDashArray(group),
+        interactive: false
+      }).addTo(layerGroup);
+      attachSharedRouteHitPolyline(layerGroup, latLngs, group);
+      return routeLine;
+    }
+
+    function getSharedRouteLayerGroup(routeId) {
+      const map = ensureSharedMap();
+      const key = String(routeId || '').trim();
+      if (!key) return null;
+      if (!sharedRouteLayers[key]) {
+        sharedRouteLayers[key] = L.featureGroup().addTo(map);
+      } else if (!map.hasLayer(sharedRouteLayers[key])) {
+        sharedRouteLayers[key].addTo(map);
+      }
+      return sharedRouteLayers[key];
+    }
+
+    function clearSharedRouteLayers() {
+      const map = sharedMap;
+      Object.keys(sharedRouteLayers).forEach(function(routeId) {
+        const layerGroup = sharedRouteLayers[routeId];
+        if (!layerGroup) return;
+        layerGroup.clearLayers();
+        if (map && map.hasLayer(layerGroup)) map.removeLayer(layerGroup);
+      });
+      sharedRouteLayers = {};
+    }
+
+    function renderSharedRouteLayers() {
+      const routeGroups = getSharedRouteGroups();
+      if (!routeGroups.length) {
+        clearSharedRouteLayers();
+        return;
+      }
+      const activeRouteIds = {};
+      routeGroups.forEach(function(group) {
+        const routeId = getSharedRouteId(group);
+        if (!routeId) return;
+        activeRouteIds[routeId] = true;
+        const layerGroup = getSharedRouteLayerGroup(routeId);
+        if (!layerGroup) return;
+        layerGroup.clearLayers();
+        if (group.visible === false || group.showLine === false) return;
+        const latLngs = getSharedRouteLatLngsForDisplay(group);
+        if (latLngs.length < 2) return;
+        drawSharedStraightRouteLine(layerGroup, latLngs, group);
+      });
+      Object.keys(sharedRouteLayers).forEach(function(routeId) {
+        if (activeRouteIds[routeId]) return;
+        const layerGroup = sharedRouteLayers[routeId];
+        if (layerGroup) {
+          layerGroup.clearLayers();
+          if (sharedMap && sharedMap.hasLayer(layerGroup)) sharedMap.removeLayer(layerGroup);
+        }
+        delete sharedRouteLayers[routeId];
+      });
+    }
+
+    function inspectSharedRouteGroups() {
+      const routeGroups = getSharedRouteGroups();
+      const pinIdSet = {};
+      state.pins.forEach(function(pin) {
+        pinIdSet[String(pin.id || '')] = true;
+      });
+      console.log('[shared] routeGroups:', routeGroups.length);
+      routeGroups.forEach(function(group) {
+        const routeId = getSharedRouteId(group);
+        console.log('[shared] routeGroup:', {
+          routeId: routeId,
+          name: group.name,
+          'pinIds.length': Array.isArray(group.pinIds) ? group.pinIds.length : 0,
+          closed: group.closed === true,
+          lineStyle: group.lineStyle,
+          routeMode: group.routeMode,
+          showLine: group.showLine !== false,
+          showNumbers: group.showNumbers !== false,
+          visible: group.visible !== false
+        });
+        const missingPinIds = (Array.isArray(group.pinIds) ? group.pinIds : []).map(function(pinId) {
+          return String(pinId || '').trim();
+        }).filter(function(pinId) {
+          return !!pinId && !pinIdSet[pinId];
+        });
+        if (missingPinIds.length) {
+          console.warn('[shared] routeGroup has missing pinIds:', {
+            routeId: routeId,
+            missingPinIds: missingPinIds
+          });
+        }
+      });
+    }
+
+    function clearSharedFilters() {
+      state.listQuery = '';
+      state.activeTags = [];
+      state.activeColors = [];
+      state.tagMode = state.initialTagMode || 'or';
+      const input = document.getElementById('shared-search-input');
+      if (input) input.value = '';
+      renderSharedTagChips();
+      renderSharedColorFilter();
+      renderSharedSearchUi();
+      renderSharedPins();
+      renderSharedMap();
     }
 
     function renderSharedTagChips() {
@@ -1135,9 +1456,8 @@
       }
       list.innerHTML = entries.map(function(entry) {
         const pin = entry.pin;
-        const orderLabel = state.orderMode && entry.displayOrder != null ? entry.displayOrder + '. ' : '';
         return '<button type="button" class="list-item" data-pin-id="' + escHtml(pin.id) + '">' +
-          '<div class="list-title">' + escHtml(orderLabel + (pin.title || '(無題)')) + '</div>' +
+          '<div class="list-title">' + escHtml(pin.title || '(無題)') + '</div>' +
           '<div class="list-subtitle">' + escHtml(getSharedDisplayTime(pin)) + '</div>' +
           renderTagChips(pin.tags) +
           '</button>';
@@ -1168,14 +1488,6 @@
       }
     }
 
-    function updateSharedOrderModeUi() {
-      const button = document.getElementById('shared-order-mode-toggle');
-      if (!button) return;
-      button.classList.toggle('active', state.orderMode);
-      button.setAttribute('aria-pressed', state.orderMode ? 'true' : 'false');
-      button.title = state.orderMode ? '順番表示モードを解除' : '順番表示モード';
-    }
-
     function renderSharedMap() {
       const map = ensureSharedMap();
       Object.keys(sharedMarkers).forEach(function(id) { map.removeLayer(sharedMarkers[id]); });
@@ -1186,7 +1498,7 @@
       entries.forEach(function(entry) {
         const pin = entry.pin;
         const marker = L.marker([pin.lat, pin.lng], {
-          icon: createSharedPinIconForDisplay(pin, entry.displayOrder)
+          icon: createSharedPinIconForDisplay(pin)
         }).addTo(map);
         marker.bindTooltip(pin.title || '(無題)', { direction: 'top' });
         marker.on('click', function() {
@@ -1211,6 +1523,7 @@
       } else {
         map.setView([36.5, 138.0], 5);
       }
+      renderSharedRouteLayers();
       setTimeout(function() { map.invalidateSize(); }, 0);
     }
 
@@ -1323,11 +1636,11 @@
 
     async function initializeSharedView() {
       renderSharedPanelUi();
-      updateSharedOrderModeUi();
       ensureSharedMap();
       renderSharedSearchUi();
       if (!state.token) {
         state.status = 'invalid_share_link';
+        state.routeGroups = [];
         renderSharedTagChips();
         renderSharedColorFilter();
         renderSharedSearchUi();
@@ -1339,6 +1652,7 @@
         const result = await withGAS('getSharedViewData', state.token);
         if (!result || !result.ok) {
           state.status = result && result.error ? result.error : 'invalid_share_link';
+          state.routeGroups = [];
           renderSharedTagChips();
           renderSharedColorFilter();
           renderSharedSearchUi();
@@ -1347,11 +1661,13 @@
           return;
         }
         state.pins = Array.isArray(result.pins) ? result.pins : [];
+        state.routeGroups = Array.isArray(result.routeGroups) ? result.routeGroups.map(normalizeSharedRouteGroup) : [];
         state.allowedTags = Array.isArray(result.allowedTags) ? result.allowedTags : [];
         state.allowedColors = Array.isArray(result.allowedColors) ? result.allowedColors : [];
         state.activeTags = [];
         state.activeColors = [];
-        state.tagMode = result.shareLink && result.shareLink.tagMode === 'and' ? 'and' : 'or';
+        state.initialTagMode = (result.shareLink && result.shareLink.tagMode === 'and') ? 'and' : 'or';
+        state.tagMode = state.initialTagMode;
         state.shareLabel = result.shareLink && result.shareLink.label || 'Drop the Pin!';
         state.status = 'ready';
         document.getElementById('shared-title').textContent = state.shareLabel;
@@ -1362,11 +1678,15 @@
         renderSharedMap();
       } catch (_error) {
         state.status = 'invalid_share_link';
+        state.routeGroups = [];
         renderSharedTagChips();
         renderSharedColorFilter();
         renderSharedSearchUi();
         renderSharedStatusNote();
         renderSharedMap();
+      }
+      if (window.__SHARED_DEBUG__ === true) {
+        inspectSharedRouteGroups();
       }
     }
 
@@ -1405,17 +1725,14 @@
       renderSharedPanelUi();
     });
 
-    document.getElementById('shared-order-mode-toggle').addEventListener('click', function() {
-      state.orderMode = !state.orderMode;
-      updateSharedOrderModeUi();
-      renderSharedPins();
-      renderSharedMap();
-    });
-
     document.getElementById('shared-filter-tag-btn').addEventListener('click', function() {
       state.searchExpanded = true;
       state.tagFilterExpanded = !state.tagFilterExpanded;
       renderSharedSearchUi();
+    });
+
+    document.getElementById('shared-clear-filters').addEventListener('click', function() {
+      clearSharedFilters();
     });
 
     document.getElementById('shared-filter-color-btn').addEventListener('click', function() {
