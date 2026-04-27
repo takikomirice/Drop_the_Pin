@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/exif-js@2.3.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; overflow: hidden; font-family: "Yu Gothic", "Hiragino Sans", sans-serif; }
@@ -91,6 +92,18 @@
     .color-palette { display: flex; flex-wrap: wrap; gap: 8px; }
     .color-swatch { width: 30px; height: 30px; border-radius: 50%; border: 3px solid transparent; cursor: pointer; }
     .color-swatch.selected { border-color: var(--text); transform: scale(1.12); }
+    .color-palette.is-disabled { opacity: 0.52; pointer-events: none; }
+    .icon-picker, #map-icon-filter { display: flex; flex-wrap: wrap; gap: 6px; }
+    .icon-choice, .icon-filter-chip {
+      min-width: 42px; min-height: 34px; border: 1px solid var(--border); border-radius: 8px;
+      background: var(--surface2); color: var(--text); cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+    }
+    .icon-choice.selected, .icon-filter-chip.active {
+      border-color: var(--text); background: var(--surface); box-shadow: 0 0 0 2px rgba(46,125,50,0.12);
+    }
+    .icon-choice svg, .icon-filter-chip svg { width: 20px; height: 20px; display: block; }
+    .icon-filter-chip.is-empty { opacity: 0.45; }
     .file-drop {
       border: 2px dashed var(--border); border-radius: 14px; padding: 18px 14px; text-align: center; background: var(--surface); color: var(--text-sub); cursor: pointer;
     }
@@ -170,6 +183,101 @@
     .list-subtitle { margin-top: 2px; font-size: 10px; color: var(--text-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .side-section { padding: 12px; border-bottom: 1px solid var(--border); }
     .side-title { margin-bottom: 8px; font-size: 11px; font-weight: 800; color: var(--text-sub); text-transform: uppercase; letter-spacing: 0.06em; }
+    .side-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+    .side-title-row .side-title { margin-bottom: 0; }
+    .route-list { display: flex; flex-direction: column; gap: 6px; }
+    .route-item {
+      position: relative; border: 1px solid var(--border); border-radius: 12px; background: rgba(255,255,255,0.8); overflow: hidden;
+    }
+    .route-item.is-route-sortable .route-summary { cursor: grab; }
+    .route-item.is-route-dragging { opacity: 0.58; }
+    .route-item.is-route-drag-ghost { background: var(--surface2); }
+    [data-theme="dark"] .route-item { background: rgba(31,31,36,0.92); }
+    .route-item.is-hidden { opacity: 0.62; }
+    .route-item.is-open { border-color: rgba(46,125,50,0.28); }
+    .route-item.is-saving { border-color: rgba(255,152,0,0.42); }
+    .route-summary {
+      width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+      border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer;
+    }
+    .route-toggle { width: 14px; flex: 0 0 14px; color: var(--text-sub); font-size: 12px; line-height: 1; }
+    .route-color-swatch {
+      width: 18px; height: 18px; flex: 0 0 18px; border-radius: 50%;
+      border: 1px solid rgba(0,0,0,0.18); box-shadow: inset 0 0 0 2px rgba(255,255,255,0.42);
+    }
+    .route-main { min-width: 0; flex: 1; }
+    .route-name { display: block; font-size: 12px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .route-meta { display: block; margin-top: 2px; font-size: 10px; line-height: 1.35; color: var(--text-sub); white-space: normal; overflow-wrap: anywhere; }
+    .route-road-note { display: block; margin-top: 3px; color: var(--warn); font-size: 10px; font-weight: 800; line-height: 1.35; white-space: normal; }
+    .route-road-actions { display: flex; justify-content: flex-end; gap: 4px; padding: 0 10px 8px 50px; }
+    .route-road-actions .ghost-btn { padding: 4px 8px; font-size: 11px; border-radius: 8px; }
+    .route-visibility {
+      flex: 0 0 auto; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--border);
+      font-size: 10px; font-weight: 700; color: var(--text-sub); background: var(--surface);
+    }
+    .route-visibility.is-visible { color: var(--accent); background: rgba(46,125,50,0.1); border-color: rgba(46,125,50,0.24); }
+    .route-saving {
+      display: none; flex: 0 0 auto; font-size: 10px; font-weight: 700; color: var(--warn);
+    }
+    .route-item.is-saving .route-saving { display: inline; }
+    .route-detail {
+      display: none; padding: 0 10px 10px 50px; color: var(--text-sub); font-size: 11px; line-height: 1.45;
+    }
+    .route-item.is-open .route-detail { display: block; }
+    .route-detail-row {
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+      gap: 6px 8px; padding-top: 2px;
+    }
+    .route-detail-row + .route-detail-row { margin-top: 8px; }
+    .route-detail-title { flex: 1 1 70px; min-width: 0; font-weight: 800; color: var(--text-sub); }
+    .route-editor { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+    .route-setting-grid {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; width: 100%;
+    }
+    .route-setting-control { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+    .route-setting-label { font-size: 10px; font-weight: 800; color: var(--text-sub); }
+    .route-setting-select {
+      width: 100%; min-width: 0; height: 30px; padding: 4px 8px; border: 1px solid var(--border);
+      border-radius: 8px; background: var(--surface); color: var(--text); font-size: 12px;
+    }
+    .route-setting-select:disabled { cursor: default; opacity: 0.52; }
+    .route-pin-list { position: relative; display: flex; flex-direction: column; gap: 4px; margin-top: 8px; min-height: 38px; }
+    .route-pin-row {
+      display: grid; grid-template-columns: 26px minmax(0, 1fr) 28px; align-items: center; gap: 6px;
+      min-height: 30px; padding: 4px 0; border-top: 1px solid var(--border);
+    }
+    .route-pin-row.is-route-sortable { cursor: grab; }
+    .route-pin-row.is-route-dragging { opacity: 0.58; }
+    .route-pin-row.is-route-drag-ghost { background: var(--surface2); }
+    .route-pin-row.is-filtered-out { opacity: 0.48; }
+    .route-pin-order { color: var(--text-sub); font-size: 10px; font-weight: 800; text-align: right; user-select: none; }
+    .route-pin-title { min-width: 0; color: var(--text); font-size: 12px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .route-pin-hidden-note { color: var(--text-sub); font-size: 10px; font-weight: 600; }
+    .route-pin-remove {
+      width: 28px; height: 28px; border: 1px solid var(--border); border-radius: 8px;
+      background: var(--surface); color: var(--danger); cursor: pointer; font-size: 14px; line-height: 1;
+    }
+    .route-pin-remove:disabled { cursor: default; opacity: 0.48; }
+    .route-item-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-start; gap: 6px; flex: 1 1 100%; min-width: 0; }
+    .route-item-actions .ghost-btn, .route-panel-actions .ghost-btn { padding: 4px 8px; font-size: 11px; border-radius: 8px; }
+    .route-item-actions .ghost-btn { max-width: 100%; white-space: nowrap; }
+    .route-item-actions .route-settings-action { margin-left: auto; }
+    .route-item-actions button:disabled, .route-panel-actions button:disabled { cursor: default; opacity: 0.48; }
+    .route-edit-section { display: flex; flex-direction: column; gap: 10px; }
+    .route-edit-section .section-card { margin-bottom: 0; }
+    .route-edit-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 10px 0; border-top: 1px solid var(--border);
+    }
+    .route-edit-row:first-child { border-top: 0; padding-top: 0; }
+    .route-edit-row-text { min-width: 0; }
+    .route-edit-row-title { font-size: 13px; font-weight: 800; color: var(--text); }
+    .route-edit-row .ghost-btn { flex: 0 0 auto; min-width: 78px; }
+    .route-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .route-toggle-row .toggle-switch { flex: 0 0 44px; }
+    .route-toggle-title { font-size: 14px; font-weight: 800; color: var(--text); }
+    .route-edit-endpoints { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    @media (max-width: 480px) { .route-edit-endpoints { grid-template-columns: 1fr; } }
     .empty-note { padding: 8px 4px; font-size: 12px; color: var(--text-sub); line-height: 1.5; }
     .url-row { display: flex; gap: 8px; margin-bottom: 8px; }
     .url-input { flex: 1; }
@@ -211,9 +319,58 @@
       transition: transform 0.1s, background 0.1s;
     }
     #dnd-delete-zone.active { display: block; }
+    body:not(.edit-mode) #dnd-delete-zone,
+    body:not(.edit-mode) #dnd-delete-zone.active {
+      display: none !important;
+    }
     #dnd-delete-zone.dragover { background: #b71c1c; transform: translateX(-50%) scale(1.06); }
     .dnd-drop-target.dragover {
       outline: 2px dashed var(--accent); background: rgba(46,125,50,0.08); border-radius: 8px;
+    }
+    .route-item.is-route-pin-drop-candidate {
+      box-shadow: inset 0 0 0 1px rgba(46,125,50,0.22);
+    }
+    .route-pin-list.is-route-pin-drop-candidate {
+      outline: 1px dashed rgba(46,125,50,0.38); outline-offset: 3px; border-radius: 8px;
+    }
+    .route-item.is-route-pin-drop-allowed,
+    .route-pin-list.is-route-pin-drop-allowed {
+      outline: 2px solid var(--accent); outline-offset: 2px; background: rgba(46,125,50,0.11);
+      box-shadow: inset 0 0 0 1px rgba(46,125,50,0.28), 0 0 0 3px rgba(46,125,50,0.08);
+    }
+    .route-item.is-route-pin-drop-blocked,
+    .route-pin-list.is-route-pin-drop-blocked {
+      outline: 2px solid var(--warn); outline-offset: 2px; background: rgba(255,152,0,0.12);
+      box-shadow: inset 0 0 0 1px rgba(255,152,0,0.28);
+    }
+    .route-item.is-route-pin-drop-allowed::after,
+    .route-item.is-route-pin-drop-blocked::after,
+    .route-pin-list.is-route-pin-drop-allowed::after,
+    .route-pin-list.is-route-pin-drop-blocked::after {
+      content: attr(data-route-drop-label); display: block; padding: 6px 8px; border-radius: 8px;
+      font-size: 11px; font-weight: 800; line-height: 1.35; white-space: normal;
+    }
+    .route-item.is-route-pin-drop-allowed::after,
+    .route-item.is-route-pin-drop-blocked::after {
+      margin: 0 10px 8px 50px;
+    }
+    .route-pin-list.is-route-pin-drop-allowed::after,
+    .route-pin-list.is-route-pin-drop-blocked::after {
+      margin-top: 4px;
+    }
+    .route-item.is-route-pin-drop-allowed::after,
+    .route-pin-list.is-route-pin-drop-allowed::after {
+      color: var(--accent); background: rgba(255,255,255,0.68); border: 1px solid rgba(46,125,50,0.22);
+    }
+    .route-item.is-route-pin-drop-blocked::after,
+    .route-pin-list.is-route-pin-drop-blocked::after {
+      color: var(--warn); background: rgba(255,255,255,0.72); border: 1px solid rgba(255,152,0,0.28);
+    }
+    [data-theme="dark"] .route-item.is-route-pin-drop-allowed::after,
+    [data-theme="dark"] .route-pin-list.is-route-pin-drop-allowed::after,
+    [data-theme="dark"] .route-item.is-route-pin-drop-blocked::after,
+    [data-theme="dark"] .route-pin-list.is-route-pin-drop-blocked::after {
+      background: rgba(31,31,36,0.86);
     }
     .pin-tooltip {
       background: var(--sheet-bg, #fff);
@@ -230,6 +387,12 @@
       text-overflow: ellipsis;
     }
     .pin-tooltip::before { display: none; }
+    .route-hit-polyline { cursor: pointer; pointer-events: stroke; }
+    .route-info-popup .leaflet-popup-content { margin: 10px 12px; min-width: 150px; max-width: min(220px, calc(100vw - 64px)); }
+    .route-info-title { font-size: 13px; font-weight: 800; line-height: 1.35; margin-bottom: 6px; overflow-wrap: anywhere; }
+    .route-info-row { display: flex; gap: 6px; font-size: 12px; line-height: 1.45; white-space: normal; }
+    .route-info-row strong { flex: 0 0 auto; }
+    .route-info-note { margin-top: 6px; font-size: 11px; line-height: 1.4; color: var(--warn); overflow-wrap: anywhere; }
     .tag-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
     .tag-chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(46,125,50,0.1); color: var(--accent); border: 1px solid rgba(46,125,50,0.25); white-space: nowrap; }
     #share-tag-chips .tag-chips { margin-top: 0; }
@@ -339,10 +502,17 @@
     body.share-mode #unplaced-badge,
     body.share-mode #mode-badge,
     body.share-mode #share-open-btn,
+    body.share-mode #side-routes,
+    body.share-mode #route-edit-overlay,
     body.share-mode #bulk-action-bar { display: none !important; }
     body.share-mode #map { top: calc(52px + 32px); }
     body.share-mode #side-panel { top: calc(52px + 32px); }
     body.share-mode #pin-detail-share { display: none !important; }
+    body.share-mode #pin-detail-route-add { display: none !important; }
+    body:not(.edit-mode):not(.share-mode) #settings-toggle,
+    body:not(.edit-mode):not(.share-mode) #route-add-btn,
+    body:not(.edit-mode):not(.share-mode) #pin-detail-drive,
+    body:not(.edit-mode):not(.share-mode) #pin-detail-route-add { display: none !important; }
     #map-search-bar {
       position: fixed;
       top: calc(52px + 8px);
@@ -364,6 +534,40 @@
       align-items: center;
     }
     #map-search-input { flex: 1; min-width: 0; }
+    #geocode-results {
+      overflow: hidden;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .geocode-result-item {
+      padding: 8px 10px;
+      cursor: pointer;
+      border-bottom: 1px solid var(--border);
+    }
+    .geocode-result-item:last-child { border-bottom: none; }
+    .geocode-result-item:hover { background: var(--surface2); }
+    .geocode-result-name {
+      font-size: 13px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .geocode-result-address {
+      font-size: 11px;
+      color: var(--text-sub);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-top: 2px;
+    }
+    .geocode-result-msg {
+      padding: 10px;
+      font-size: 13px;
+      color: var(--text-sub);
+      text-align: center;
+    }
     #map-search-controls {
       display: flex;
       flex-wrap: wrap;
@@ -413,6 +617,7 @@
       <button id="map-search-toggle" class="icon-btn" type="button"
               title="フィルタ・ソート">▼</button>
     </div>
+    <div id="geocode-results" style="display:none;"></div>
     <div id="map-search-expanded" style="display:none;">
       <div id="map-search-controls">
         <select id="map-sort" class="form-select"
@@ -425,6 +630,8 @@
                 type="button" style="display:none;font-size:12px;">状態で検索</button>
         <button id="map-filter-color-btn" class="ghost-btn map-filter-btn"
                 type="button" style="font-size:12px;">色で検索</button>
+        <button id="map-filter-icon-btn" class="ghost-btn map-filter-btn"
+                type="button" style="font-size:12px;">アイコンで検索</button>
         <button id="map-filter-tag-btn" class="ghost-btn map-filter-btn"
                 type="button" style="font-size:12px;">タグで検索</button>
         <button id="map-filter-clear-btn" class="ghost-btn map-filter-btn"
@@ -443,6 +650,9 @@
       <div id="map-filter-color-detail" style="display:none;margin-top:4px;">
         <div id="map-color-filter"></div>
       </div>
+      <div id="map-filter-icon-detail" style="display:none;margin-top:4px;">
+        <div id="map-icon-filter"></div>
+      </div>
       <div id="map-filter-tag-detail" style="display:none;margin-top:4px;">
         <div id="map-tag-filter-header">
           <span>タグ絞り込み</span>
@@ -454,11 +664,14 @@
     </div>
   </div>
   <aside id="side-panel">
-    <div class="side-section">
-      <div class="side-title">設定</div>
-      <div class="inline-actions">
-        <a id="side-root-drive-link" class="ghost-btn" href="#" target="_blank" rel="noopener noreferrer">Drive</a>
+    <div class="side-section" id="side-routes">
+      <div class="side-title-row">
+        <div class="side-title">ルート</div>
+        <div class="route-panel-actions">
+          <button id="route-add-btn" class="ghost-btn" type="button" title="ルートを追加">＋</button>
+        </div>
       </div>
+      <div id="route-list" class="route-list"></div>
     </div>
     <div class="side-section dnd-drop-target" id="side-unplaced"></div>
     <div class="side-section dnd-drop-target" id="side-placed"></div>
@@ -472,6 +685,7 @@
       <option value="保留">保留</option>
     </select>
     <button id="bulk-apply-btn" class="text-btn" type="button" style="white-space:nowrap;">一括変更</button>
+    <button id="bulk-delete-btn" class="danger-btn" type="button" style="white-space:nowrap;">一括削除</button>
     <button id="bulk-cancel-btn" class="ghost-btn" type="button">解除</button>
   </div>
   <button id="fab" type="button">＋ ピンを追加</button>
@@ -495,10 +709,12 @@
     </div>
     <div class="form-group"><label class="form-label" for="upload-title">タイトル</label><input id="upload-title" class="form-input" type="text" maxlength="80"><div id="upload-rename-note" class="muted" style="display:none;margin-top:6px;"></div></div>
     <div class="form-group"><label class="form-label" for="upload-desc">説明</label><textarea id="upload-desc" class="form-textarea" maxlength="400"></textarea></div>
+    <div class="form-group"><label class="form-label" for="upload-event-at">イベント時刻</label><input id="upload-event-at" type="datetime-local" class="form-input"><div class="inline-actions" style="margin-top:8px;"><button id="upload-event-at-exif" class="ghost-btn" type="button">EXIFから取得</button></div></div>
     <div class="form-group" id="upload-status-group" style="display:none"><label class="form-label" for="upload-status">状態</label><select id="upload-status" class="form-select"><option value="未対応">未対応</option><option value="対応中">対応中</option><option value="完了">完了</option><option value="保留">保留</option></select></div>
     <div class="form-group" id="upload-tags-group"><label class="form-label" for="upload-tags">タグ <span class="muted">（例: #tree #bird、最大5件）</span></label><input id="upload-tags" class="form-input" type="text" maxlength="200" placeholder="#tree #bird"></div>
     <div class="form-group"><label class="form-label">参考URL</label><div id="upload-links"></div></div>
     <div class="form-group"><label class="form-label">ピンの色</label><div id="upload-color-palette" class="color-palette"></div></div>
+    <div class="form-group"><label class="form-label">アイコン</label><div id="upload-icon-picker" class="icon-picker"></div></div>
     <div class="section-card">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;"><label class="form-label" style="margin-bottom:0;">保存先フォルダ</label><button id="folder-back-btn" class="ghost-btn" type="button" style="display:none;">← 戻る</button></div>
       <div id="folder-breadcrumb" class="muted" style="margin-top:6px;"></div>
@@ -543,6 +759,14 @@
     <div id="pin-detail-desc" class="sheet-subtitle"></div>
     <div id="pin-detail-links" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px;"></div>
     <div id="pin-detail-drive" class="inline-actions" style="margin-bottom:12px;"></div>
+    <div id="pin-detail-route-add" class="section-card" style="display:none;">
+      <label class="form-label" for="pin-detail-route-select">ルートに追加</label>
+      <div class="inline-actions">
+        <select id="pin-detail-route-select" class="form-select" style="flex:1;min-width:0;"></select>
+        <button id="pin-detail-route-add-btn" class="ghost-btn" type="button">追加</button>
+      </div>
+      <div id="pin-detail-route-note" class="muted" style="margin-top:6px;"></div>
+    </div>
     <div id="pin-detail-time" class="muted" style="margin-bottom:14px;"></div>
     <div class="inline-actions"><button id="pin-detail-goto" class="ghost-btn" type="button" style="display:none;">この場所に移動</button><button id="pin-detail-share" class="ghost-btn" type="button">このピンを共有</button><button id="pin-detail-close" class="ghost-btn" type="button">閉じる</button></div>
   </div></div>
@@ -569,10 +793,12 @@
     <div class="sheet-handle"></div><div class="sheet-title">ピンを編集</div>
     <div class="form-group"><label class="form-label" for="edit-title">タイトル</label><input id="edit-title" class="form-input" type="text" maxlength="80"><div id="edit-rename-note" class="muted" style="display:none;margin-top:6px;"></div></div>
     <div class="form-group"><label class="form-label" for="edit-desc">説明</label><textarea id="edit-desc" class="form-textarea" maxlength="400"></textarea></div>
+    <div class="form-group"><label class="form-label" for="edit-event-at">イベント時刻</label><input id="edit-event-at" type="datetime-local" class="form-input"><div class="inline-actions" style="margin-top:8px;"><button id="edit-event-at-exif" class="ghost-btn" type="button">EXIFから取得</button></div></div>
     <div class="form-group"><label class="form-label" for="edit-status">状態</label><select id="edit-status" class="form-select"><option value="未対応">未対応</option><option value="対応中">対応中</option><option value="完了">完了</option><option value="保留">保留</option></select></div>
     <div class="form-group"><label class="form-label" for="edit-tags">タグ <span class="muted">（例: #tree #bird、最大5件）</span></label><input id="edit-tags" class="form-input" type="text" maxlength="200" placeholder="#tree #bird"></div>
     <div class="form-group"><label class="form-label">参考URL</label><div id="edit-links"></div></div>
     <div class="form-group"><label class="form-label">ピンの色</label><div id="edit-color-palette" class="color-palette"></div></div>
+    <div class="form-group"><label class="form-label">アイコン</label><div id="edit-icon-picker" class="icon-picker"></div></div>
     <div id="edit-drive-area" class="section-card" style="display:none;"></div>
     <div class="inline-actions"><button id="edit-save" class="btn-primary" type="button">保存</button><button id="edit-cancel" class="ghost-btn" type="button">キャンセル</button></div>
   </div></div>
@@ -580,6 +806,34 @@
   <div id="delete-overlay" class="sheet-overlay" role="dialog" aria-modal="true"><div class="sheet-body" style="max-width:360px;">
     <div class="sheet-handle"></div><div class="sheet-title">ピンを削除</div><div id="delete-message" class="sheet-subtitle"></div>
     <div class="menu-actions"><button id="delete-confirm" class="danger-btn" type="button">削除する</button><button id="delete-cancel" class="ghost-btn" type="button">キャンセル</button></div>
+  </div></div>
+
+  <div id="route-edit-overlay" class="sheet-overlay" role="dialog" aria-modal="true"><div class="sheet-body">
+    <div class="sheet-handle"></div><div id="route-edit-title" class="sheet-title">ルート詳細設定</div>
+    <div class="form-group">
+      <label class="form-label" for="route-edit-name">ルート名</label>
+      <input id="route-edit-name" class="form-input" type="text" maxlength="100">
+    </div>
+    <div class="form-group">
+      <div class="form-label">ルート色</div>
+      <div id="route-edit-color-palette" class="color-palette"></div>
+    </div>
+    <div id="route-edit-controls" class="route-edit-section"></div>
+    <div class="form-group">
+      <label class="form-label" for="route-edit-line-style">線の種類</label>
+      <select id="route-edit-line-style" class="form-select">
+        <option value="solid">実線</option>
+        <option value="dashed">破線</option>
+        <option value="dotted">点線</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <div class="route-edit-endpoints" id="route-edit-endpoints"></div>
+    </div>
+    <div class="inline-actions">
+      <button id="route-edit-close" class="ghost-btn" type="button">閉じる</button>
+      <button id="route-edit-delete" class="danger-btn" type="button">削除</button>
+    </div>
   </div></div>
 
   <div id="share-overlay" class="sheet-overlay" role="dialog" aria-modal="true"><div class="sheet-body">
@@ -631,14 +885,40 @@
       { hex: '#00bcd4', label: '水色' }, { hex: '#009688', label: 'ティール' }, { hex: '#4caf50', label: '緑' }, { hex: '#8bc34a', label: '黄緑' }, { hex: '#ffeb3b', label: '黄' },
       { hex: '#ff9800', label: '橙' }, { hex: '#ff5722', label: '朱' }, { hex: '#795548', label: '茶' }, { hex: '#607d8b', label: 'グレー' }, { hex: '#212121', label: '黒' }
     ];
+    const PIN_ICONS = [
+      { id: 'default', label: '標準' },
+      { id: 'photo', label: '写真' },
+      { id: 'food', label: '食事' },
+      { id: 'hotel', label: '宿' },
+      { id: 'nature', label: '自然' },
+      { id: 'shop', label: '店' },
+      { id: 'transit', label: '交通' },
+      { id: 'warning', label: '注意' }
+    ];
+    const ROUTE_LINE_STYLES = ['solid', 'dashed', 'dotted'];
 
     const state = {
       editMode: false,
       pins: [],
       markers: {},
       appSettings: { rootFolderId: '', rootFolderUrl: '#', renameFileWithTitle: false },
-      upload: { file: null, lat: null, lng: null, color: PIN_COLORS[0].hex },
+      upload: { file: null, lat: null, lng: null, color: PIN_COLORS[0].hex, icon: PIN_ICONS[0].id },
       editColor: PIN_COLORS[0].hex,
+      editIcon: PIN_ICONS[0].id,
+      routeGroups: [],
+      routeLayers: {},
+      routeCache: {},
+      routeUiOpenGroupId: null,
+      routeEditOpenId: null,
+      routeUndoStack: [],
+      routeSaving: {},
+      routePinSaving: {},
+      routePendingSave: {},
+      routeOrderSaving: false,
+      roadRequestAbort: {},
+      routeRoadStatus: {},
+      routeDraggedPinId: null,
+      routeDraggedGroupId: null,
       contextPinId: null,
       editingPinId: null,
       placement: null,
@@ -653,13 +933,19 @@
       listTagFilter: [],        // string[] — フィルタ中のタグ（正規化なし）
       listTagMode: 'or',        // 'and' | 'or'
       listColorFilter: [],      // string[] — hex colors
+      listIconFilter: [],       // string[] — icon ids
       linkedCardHighlightPinId: null,
       linkedCardHighlightTimer: null,
       shareManager: { tags: [], colors: [], tagMode: 'or', links: [], loading: false, previewing: false },
       shareMode: false,
       shareBasePins: null,      // null = 通常モード / Pin[] = 共有モードの固定集合（share-mode中はpins変更不可）
-      shownPinId: null
+      shownPinId: null,
+      bulkDeletePending: false
     };
+
+    function canEdit() {
+      return state.editMode === true && state.shareMode !== true;
+    }
 
     function clearLinkedCardHighlight() {
       if (state.linkedCardHighlightTimer) {
@@ -819,6 +1105,11 @@
       return colors.includes(pin.color || '');
     }
 
+    function matchesIconFilter(pin, icons) {
+      if (!icons || !icons.length) return true;
+      return icons.includes(normalizeIcon(pin.icon));
+    }
+
     function getBasePins() {
       return (state.shareMode && state.shareBasePins) ? state.shareBasePins : state.pins;
     }
@@ -831,6 +1122,7 @@
           tags: state.shareManager.tags,
           tagMode: state.shareManager.tagMode,
           colors: state.shareManager.colors,
+          icons: [],
           sort: state.listSort
         };
       }
@@ -840,6 +1132,7 @@
         tags: state.listTagFilter,
         tagMode: state.listTagMode,
         colors: state.listColorFilter,
+        icons: state.listIconFilter,
         sort: state.listSort
       };
     }
@@ -849,29 +1142,100 @@
       return pin.status === filter;
     }
 
+    function parsePinDateTimeValue(value) {
+      const raw = String(value || '').trim();
+      if (!raw) return 0;
+      let match = raw.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
+      if (match) {
+        return new Date(
+          Number(match[1]),
+          Number(match[2]) - 1,
+          Number(match[3]),
+          Number(match[4]),
+          Number(match[5]),
+          Number(match[6] || '0')
+        ).getTime();
+      }
+      match = raw.match(/^(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2})(?::(\d{2}))?$/);
+      if (match) {
+        return new Date(
+          Number(match[1]),
+          Number(match[2]) - 1,
+          Number(match[3]),
+          Number(match[4]),
+          Number(match[5]),
+          Number(match[6] || '0')
+        ).getTime();
+      }
+      const parsed = Date.parse(raw);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    function getPinDisplayTime(pin) {
+      return pin && (pin.eventAt || pin.timestamp) || '';
+    }
+
+    function getPinSortTime(pin) {
+      return parsePinDateTimeValue(getPinDisplayTime(pin));
+    }
+
+    function getPinOrderTime(pin) {
+      return parsePinDateTimeValue(pin && (pin.eventAt || pin.timestamp));
+    }
+
+    function comparePinsForDisplayOrder(a, b) {
+      const aTime = getPinOrderTime(a) || Number.MAX_SAFE_INTEGER;
+      const bTime = getPinOrderTime(b) || Number.MAX_SAFE_INTEGER;
+      if (aTime !== bTime) return aTime - bTime;
+      const titleDiff = String(a.title || '').localeCompare(String(b.title || ''), 'ja');
+      if (titleDiff) return titleDiff;
+      return String(a.id || '').localeCompare(String(b.id || ''), 'ja');
+    }
+
+    function getVisiblePinEntries() {
+      const pins = applyListFilters();
+      return pins.map(function(pin) {
+        return { pin: pin, displayOrder: null };
+      });
+    }
+
     function sortPins(pins, sortKey) {
       const copy = pins.slice();
       if (sortKey === 'oldest') {
-        copy.sort(function(a, b) { return String(a.timestamp).localeCompare(String(b.timestamp)); });
+        copy.sort(function(a, b) { return getPinSortTime(a) - getPinSortTime(b); });
       } else if (sortKey === 'title') {
         copy.sort(function(a, b) { return String(a.title || '').localeCompare(String(b.title || ''), 'ja'); });
       } else {
-        copy.sort(function(a, b) { return String(b.timestamp).localeCompare(String(a.timestamp)); });
+        copy.sort(function(a, b) { return getPinSortTime(b) - getPinSortTime(a); });
       }
       return copy;
     }
 
-    function applyListFilters() {
+    function filterPinsByState(pins, filters) {
+      return pins.filter(function(pin) {
+        return matchesSearch(pin, filters.query)
+          && matchesStatusFilter(pin, filters.status)
+          && matchesTagFilter(pin, filters.tags, filters.tagMode)
+          && matchesColorFilter(pin, filters.colors)
+          && matchesIconFilter(pin, filters.icons);
+      });
+    }
+
+    function getFilteredPins() {
       const filters = getActivePinFilterState();
-      return sortPins(
-        getBasePins().filter(function(pin) {
-          return matchesSearch(pin, filters.query)
-            && matchesStatusFilter(pin, filters.status)
-            && matchesTagFilter(pin, filters.tags, filters.tagMode)
-            && matchesColorFilter(pin, filters.colors);
-        }),
-        filters.sort
-      );
+      return sortPins(filterPinsByState(getBasePins(), filters), filters.sort);
+    }
+
+    function getFilteredPinIdSet() {
+      const result = new Set();
+      getFilteredPins().forEach(function(pin) {
+        if (pin && pin.id) result.add(String(pin.id));
+      });
+      return result;
+    }
+
+    function applyListFilters() {
+      return getFilteredPins();
     }
 
     const map = L.map('map', { zoomControl: false }).setView([36.5, 138.0], 5);
@@ -889,22 +1253,60 @@
       return SAFE_COLOR_RE.test(String(value || '')) ? value : PIN_COLORS[0].hex;
     }
 
-    function createListPinHeadSvg(color) {
+    function normalizeRouteLineStyle(value) {
+      const style = String(value || '').trim().toLowerCase();
+      return ROUTE_LINE_STYLES.indexOf(style) >= 0 ? style : 'solid';
+    }
+
+    function normalizeIcon(value) {
+      const icon = String(value || '').trim().toLowerCase();
+      return PIN_ICONS.some(function(item) { return item.id === icon; }) ? icon : PIN_ICONS[0].id;
+    }
+
+    function getIconLabel(value) {
+      const icon = normalizeIcon(value);
+      const option = PIN_ICONS.find(function(item) { return item.id === icon; });
+      return option ? option.label : PIN_ICONS[0].label;
+    }
+
+    function pinIconGlyph(icon) {
+      switch (normalizeIcon(icon)) {
+        case 'photo':
+          return '<rect x="7.5" y="8" width="15" height="9.5" rx="1.6" fill="currentColor"/><rect x="11.5" y="6.2" width="7" height="3" rx="1" fill="currentColor"/><circle cx="15" cy="12.8" r="3.1" fill="none" stroke="currentColor" stroke-width="1.8"/>';
+        case 'food':
+          return '<path d="M10 5v14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M7.5 5v5.5c0 1.4 1.1 2.5 2.5 2.5s2.5-1.1 2.5-2.5V5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M19 5c-2.2 1.7-3.3 4-3.3 7.2H19V19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+        case 'hotel':
+          return '<rect x="7" y="11" width="16" height="6" rx="1.2" fill="currentColor"/><rect x="8" y="8" width="5" height="3" rx="1" fill="currentColor"/><path d="M7 7v12M23 10v9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
+        case 'nature':
+          return '<path d="M15 18V9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="15" cy="8" r="4" fill="currentColor"/><circle cx="11.5" cy="11.5" r="3.5" fill="currentColor"/><circle cx="18.5" cy="11.5" r="3.5" fill="currentColor"/>';
+        case 'shop':
+          return '<path d="M9 10h12l-1 9H10l-1-9Z" fill="currentColor"/><path d="M11 10c0-3 1.5-4.5 4-4.5S19 7 19 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>';
+        case 'transit':
+          return '<rect x="8" y="5.5" width="14" height="12" rx="2.2" fill="currentColor"/><rect x="10" y="8" width="10" height="4" rx="0.8" fill="#000" opacity="0.22"/><circle cx="12" cy="15" r="1.2" fill="#000" opacity="0.26"/><circle cx="18" cy="15" r="1.2" fill="#000" opacity="0.26"/>';
+        case 'warning':
+          return '<path d="M15 5.5 23 19H7L15 5.5Z" fill="currentColor"/><path d="M15 10v4.5" stroke="#000" stroke-width="2" stroke-linecap="round" opacity="0.28"/><circle cx="15" cy="16.8" r="1.1" fill="#000" opacity="0.28"/>';
+        default:
+          return '<circle cx="15" cy="12" r="4.6" fill="currentColor"/>';
+      }
+    }
+
+    function createInlineIconSvg(icon, color) {
+      return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 24" aria-hidden="true"><g color="' + escHtml(color || 'currentColor') + '">' + pinIconGlyph(icon) + '</g></svg>';
+    }
+
+    function createListPinHeadSvg(color, icon) {
       const fill = safeColor(color);
       return `
         <svg class="list-thumb-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
           <circle cx="10" cy="10" r="9" fill="${fill}" opacity="0.18"/>
           <circle cx="10" cy="10" r="7.4" fill="${fill}"/>
-          <circle cx="7.2" cy="6.9" r="2.2" fill="#fff" opacity="0.35"/>
+          <g transform="translate(0 1) scale(0.66)" color="#fff">${pinIconGlyph(icon)}</g>
         </svg>`;
     }
 
     function renderListThumb(pin) {
       const accent = safeColor(pin && pin.color);
-      if (pin && pin.imageUrl) {
-        return `<div class="list-thumb has-photo" style="--thumb-accent:${accent};"><img src="${escHtml(pin.imageUrl)}" alt=""></div>`;
-      }
-      return `<div class="list-thumb">${createListPinHeadSvg(accent)}</div>`;
+      return `<div class="list-thumb">${createListPinHeadSvg(accent, pin && pin.icon)}</div>`;
     }
 
     const PIN_STATUSES = ['未対応', '対応中', '完了', '保留'];
@@ -917,13 +1319,40 @@
         lat: pin.lat == null ? null : Number(pin.lat),
         lng: pin.lng == null ? null : Number(pin.lng),
         color: safeColor(pin.color),
+        icon: normalizeIcon(pin.icon),
         imageUrl: pin.imageUrl || '',
         fileId: pin.fileId || '',
         timestamp: pin.timestamp || '',
+        eventAt: pin.eventAt || '',
+        updatedAt: pin.updatedAt || '',
         links: Array.isArray(pin.links) ? pin.links.slice() : [],
         folderUrl: pin.folderUrl || '',
         status: pin.status || '',
         tags: Array.isArray(pin.tags) ? pin.tags.slice() : []
+      };
+    }
+
+    function cloneRouteGroup(group) {
+      const source = group || {};
+      const id = String(source.id || source.routeId || '').trim();
+      const closed = source.closed === true || String(source.closed || '').trim().toLowerCase() === 'true';
+      return {
+        id: id,
+        routeId: id,
+        name: String(source.name || ''),
+        visible: source.visible !== false,
+        color: safeColor(source.color),
+        showNumbers: source.showNumbers !== false,
+        showLine: source.showLine !== false,
+        lineStyle: normalizeRouteLineStyle(source.lineStyle),
+        routeMode: source.routeMode === 'road' ? 'road' : 'straight',
+        closed: closed,
+        startPinId: source.startPinId ? String(source.startPinId) : null,
+        endPinId: closed ? null : (source.endPinId ? String(source.endPinId) : null),
+        pinIds: Array.isArray(source.pinIds) ? source.pinIds.map(function(pinId) {
+          return String(pinId || '').trim();
+        }).filter(Boolean) : [],
+        updatedAt: source.updatedAt ? String(source.updatedAt) : ''
       };
     }
 
@@ -945,7 +1374,7 @@
     function updateBulkBar() {
       const bar = document.getElementById('bulk-action-bar');
       const count = state.selectedPinIds.size;
-      if (state.editMode && count > 0) {
+      if (canEdit() && count > 0) {
         document.getElementById('bulk-count').textContent = count + '件選択中';
         bar.style.display = 'flex';
       } else {
@@ -979,6 +1408,7 @@
     function hideHint() { document.getElementById('hint-bar').style.display = 'none'; }
 
     function showDeleteZone() {
+      if (!canEdit()) return;
       document.getElementById('dnd-delete-zone').classList.add('active');
     }
 
@@ -1000,6 +1430,13 @@
     const GAS_RETRY_MAX = 4;
     const GAS_RETRY_BASE_MS = 1000;
     const GAS_RETRY_JITTER_MS = 1000;
+    const ROUTE_SAVE_DEBOUNCE_MS = 500;
+    const ROUTE_UNDO_STACK_LIMIT = 20;
+    // TODO: OSRM public demo is not for production/commercial traffic; swap the provider before production use.
+    const ROAD_ROUTE_PROVIDER = 'osrm';
+    const OSRM_ROUTE_BASE_URL = 'https://router.project-osrm.org/route/v1/driving/';
+    const ROAD_TIMEOUT_MS = 5000;
+    const ROAD_WAYPOINT_LIMIT = 25;
 
     function callGAS(methodName, hasArg, args) {
       return new Promise((resolve, reject) => {
@@ -1033,14 +1470,9 @@
       return callGAS(methodName, false, undefined);
     }
 
-    function createPinIcon(color, ghost, hasPhoto) {
+    function createPinIcon(color, ghost, hasPhoto, icon) {
       const fill = safeColor(color);
-      const innerDetail = hasPhoto ? `
-          <rect x="7.5" y="9" width="15" height="9" rx="1.5" fill="#fff" opacity="0.9"/>
-          <rect x="12" y="7" width="6" height="3" rx="1" fill="#fff" opacity="0.9"/>
-          <circle cx="15" cy="13" r="3.2" fill="${fill}" opacity="${ghost ? 0.7 : 1}"/>
-          <circle cx="15" cy="13" r="2" fill="#fff" opacity="0.65"/>` : `
-          <circle cx="11" cy="8" r="3.4" fill="#fff" opacity="0.34"/>`;
+      const innerDetail = '<g color="#fff" opacity="' + (ghost ? '0.76' : '0.92') + '">' + pinIconGlyph(icon || (hasPhoto ? 'photo' : 'default')) + '</g>';
       const svg = `
         <svg xmlns="http://www.w3.org/2000/svg" width="30" height="46" viewBox="0 0 30 46">
           <line x1="15" y1="23" x2="15" y2="44" stroke="#4d4d4d" stroke-width="1.6" stroke-linecap="round" opacity="${ghost ? 0.7 : 1}"/>
@@ -1049,6 +1481,1148 @@
           ${innerDetail}
         </svg>`;
       return L.divIcon({ html: '<div class="pin-icon-visual">' + svg + '</div>', iconSize: [30, 46], iconAnchor: [15, 44], className: '' });
+    }
+
+    function createNumberedPinIcon(color, number, ghost) {
+      const fill = safeColor(color);
+      const label = String(number || '');
+      const fontSize = label.length > 2 ? 9 : 12;
+      const svg = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="30" height="46" viewBox="0 0 30 46">
+          <line x1="15" y1="23" x2="15" y2="44" stroke="#4d4d4d" stroke-width="1.6" stroke-linecap="round" opacity="${ghost ? 0.7 : 1}"/>
+          <circle cx="15" cy="12" r="11.5" fill="${fill}" opacity="${ghost ? 0.36 : 0.24}"/>
+          <circle cx="15" cy="12" r="10.5" fill="${fill}" opacity="${ghost ? 0.7 : 1}"/>
+          <text x="15" y="16" text-anchor="middle" font-size="${fontSize}" font-weight="800" fill="#fff" font-family="Arial, sans-serif" opacity="${ghost ? 0.82 : 1}">${escHtml(label)}</text>
+        </svg>`;
+      return L.divIcon({ html: '<div class="pin-icon-visual">' + svg + '</div>', iconSize: [30, 46], iconAnchor: [15, 44], className: '' });
+    }
+
+    function createPinIconForDisplay(pin, routeNumberDisplay) {
+      if (routeNumberDisplay && routeNumberDisplay.number != null) {
+        return createNumberedPinIcon(routeNumberDisplay.color || pin.color, routeNumberDisplay.number, false);
+      }
+      return createPinIcon(pin.color, false, !!pin.imageUrl, pin.icon);
+    }
+
+    function haversineDistanceMeters(a, b) {
+      const from = normalizeRoadLatLng(a);
+      const to = normalizeRoadLatLng(b);
+      if (!from || !to) return 0;
+      const earthRadiusMeters = 6371008.8;
+      const toRad = Math.PI / 180;
+      const lat1 = from[0] * toRad;
+      const lat2 = to[0] * toRad;
+      const dLat = (to[0] - from[0]) * toRad;
+      const dLng = (to[1] - from[1]) * toRad;
+      const h = Math.sin(dLat / 2) * Math.sin(dLat / 2)
+        + Math.cos(lat1) * Math.cos(lat2)
+        * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+      return 2 * earthRadiusMeters * Math.atan2(Math.sqrt(h), Math.sqrt(Math.max(0, 1 - h)));
+    }
+
+    function sumLatLngDistanceMeters(latLngs) {
+      const points = normalizeRoadLatLngs(latLngs);
+      let total = 0;
+      for (let index = 1; index < points.length; index += 1) {
+        total += haversineDistanceMeters(points[index - 1], points[index]);
+      }
+      return total;
+    }
+
+    function formatRouteDistance(meters) {
+      const value = Number(meters);
+      if (!Number.isFinite(value) || value <= 0) return '0 m';
+      if (value < 1000) return Math.max(1, Math.min(999, Math.round(value))) + ' m';
+      if (value < 9950) return (Math.round(value / 100) / 10).toFixed(1) + ' km';
+      return Math.round(value / 1000) + ' km';
+    }
+
+    function getRoutePointCountFromLatLngs(latLngs) {
+      const points = normalizeRoadLatLngs(latLngs);
+      if (points.length >= 2) {
+        const first = points[0];
+        const last = points[points.length - 1];
+        if (first[0] === last[0] && first[1] === last[1]) return points.length - 1;
+      }
+      return points.length;
+    }
+
+    function normalizeRoutePinIds(pinIds) {
+      const seen = new Set();
+      const result = [];
+      (Array.isArray(pinIds) ? pinIds : []).forEach(function(rawPinId) {
+        const pinId = String(rawPinId || '').trim();
+        if (!pinId || seen.has(pinId)) return;
+        seen.add(pinId);
+        result.push(pinId);
+      });
+      return result;
+    }
+
+    function normalizeRouteEndpointSelection(group) {
+      const source = group || {};
+      const included = new Set(normalizeRoutePinIds(source.pinIds));
+      const closed = source.closed === true;
+      const startPinId = source.startPinId && included.has(String(source.startPinId))
+        ? String(source.startPinId)
+        : null;
+      const endPinId = !closed && source.endPinId && included.has(String(source.endPinId))
+        ? String(source.endPinId)
+        : null;
+      return {
+        startPinId: startPinId,
+        endPinId: closed ? null : endPinId
+      };
+    }
+
+    function getRoutePinIdsForDisplay(group, filteredPinIdSet) {
+      const pinIds = normalizeRoutePinIds(group && group.pinIds).filter(function(pinId) {
+        return !filteredPinIdSet || filteredPinIdSet.has(pinId);
+      });
+      const included = new Set(pinIds);
+      const startPinId = group && group.startPinId ? String(group.startPinId) : '';
+      const endPinId = group && !group.closed && group.endPinId ? String(group.endPinId) : '';
+      const hasStart = startPinId && included.has(startPinId);
+      const hasEnd = endPinId && included.has(endPinId) && endPinId !== startPinId;
+      const ordered = [];
+
+      if (hasStart) ordered.push(startPinId);
+      pinIds.forEach(function(pinId) {
+        if ((hasStart && pinId === startPinId) || (hasEnd && pinId === endPinId)) return;
+        ordered.push(pinId);
+      });
+      if (hasEnd) ordered.push(endPinId);
+      return ordered;
+    }
+
+    function getRouteLatLngsForDisplay(group, filteredPinIdSet) {
+      const latLngs = getRoutePinIdsForDisplay(group, filteredPinIdSet).map(function(pinId) {
+        const pin = getPinById(pinId);
+        if (!pin || pin.lat == null || pin.lng == null) return null;
+        return [pin.lat, pin.lng];
+      }).filter(Boolean);
+      if (group && group.closed && latLngs.length >= 2) {
+        latLngs.push(latLngs[0]);
+      }
+      return latLngs;
+    }
+
+    function getRouteGroupsForLayerRender(entries) {
+      return Array.isArray(state.routeGroups) ? state.routeGroups.slice() : [];
+    }
+
+    function normalizeRoadLatLng(latLng) {
+      const lat = Array.isArray(latLng) ? Number(latLng[0]) : Number(latLng && latLng.lat);
+      const lng = Array.isArray(latLng) ? Number(latLng[1]) : Number(latLng && latLng.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+      return [lat, lng];
+    }
+
+    function normalizeRoadLatLngs(latLngs) {
+      return (Array.isArray(latLngs) ? latLngs : []).map(normalizeRoadLatLng).filter(Boolean);
+    }
+
+    function roundRoadCacheCoord(value) {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return '';
+      const rounded = Math.round(num * 100000) / 100000;
+      return (Object.is(rounded, -0) ? 0 : rounded).toFixed(5);
+    }
+
+    function getRoadRouteCacheWaypointEntries(group, filteredPinIdSet) {
+      return getRoutePinIdsForDisplay(group, filteredPinIdSet).map(function(pinId) {
+        const pin = getPinById(pinId);
+        if (!pin || pin.lat == null || pin.lng == null) return null;
+        const latLng = normalizeRoadLatLng([pin.lat, pin.lng]);
+        return latLng ? { pinId: pinId, latLng: latLng } : null;
+      }).filter(Boolean);
+    }
+
+    function buildRoadRouteCacheKey(group, filteredPinIdSet, provider) {
+      const entries = getRoadRouteCacheWaypointEntries(group, filteredPinIdSet);
+      const waypointKey = entries.map(function(entry) {
+        return encodeURIComponent(entry.pinId) + ':'
+          + roundRoadCacheCoord(entry.latLng[0]) + ','
+          + roundRoadCacheCoord(entry.latLng[1]);
+      }).join('>');
+      return [
+        String(provider || ROAD_ROUTE_PROVIDER),
+        group && group.routeMode === 'road' ? 'road' : 'straight',
+        group && group.closed === true ? 'true' : 'false',
+        waypointKey
+      ].join('|');
+    }
+
+    function shouldFallbackRoadRoute(latLngs) {
+      const waypoints = normalizeRoadLatLngs(latLngs);
+      if (waypoints.length > ROAD_WAYPOINT_LIMIT) return 'limit_exceeded';
+      return '';
+    }
+
+    function buildOsrmRouteUrl(latLngs) {
+      const coordinates = normalizeRoadLatLngs(latLngs).map(function(latLng) {
+        return latLng[1].toFixed(6) + ',' + latLng[0].toFixed(6);
+      }).join(';');
+      return OSRM_ROUTE_BASE_URL + coordinates + '?overview=full&geometries=geojson&steps=false';
+    }
+
+    function getRouteRoadFallbackMessage() {
+      return '道路取得失敗。直線表示中';
+    }
+
+    function getRouteDistanceInfo(group, filteredPinIdSet, options) {
+      const opts = options || {};
+      const routeId = getRouteId(group);
+      const isRoad = group && group.routeMode === 'road';
+      const routeLatLngs = normalizeRoadLatLngs(opts.routeLatLngs || getRouteLatLngsForDisplay(group, filteredPinIdSet));
+      const pinIds = Array.isArray(opts.pinIds) ? opts.pinIds : getRoutePinIdsForDisplay(group, filteredPinIdSet);
+      const status = isRoad ? getRouteRoadStatus(routeId) : null;
+      const statusMatchesCurrentRoute = !isRoad || !status || !status.key
+        || status.key === buildRoadRouteCacheKey(group, filteredPinIdSet, ROAD_ROUTE_PROVIDER);
+      const statusCoords = statusMatchesCurrentRoute && status && status.status === 'ok'
+        ? normalizeRoadLatLngs(status.coords)
+        : [];
+      const optionCoords = normalizeRoadLatLngs(opts.roadCoords);
+      const roadCoords = isRoad && optionCoords.length >= 2 ? optionCoords : statusCoords;
+      const fallback = opts.fallback === true
+        || !!(isRoad && statusMatchesCurrentRoute && status && status.status === 'fallback');
+      const distanceLatLngs = isRoad && roadCoords.length >= 2 ? roadCoords : routeLatLngs;
+      const distanceMeters = sumLatLngDistanceMeters(distanceLatLngs);
+      const note = fallback ? getRouteRoadFallbackMessage(status && status.reason) : '';
+      const methodLabel = isRoad ? '道路' : '直線';
+      const optionPointCount = Number(opts.pointCount);
+      return {
+        distanceMeters: distanceMeters,
+        distanceLabel: formatRouteDistance(distanceMeters),
+        methodLabel: methodLabel,
+        methodDisplayLabel: fallback ? '道路失敗・直線表示中' : methodLabel,
+        fallback: fallback,
+        note: note,
+        pointCount: Number.isFinite(optionPointCount) ? optionPointCount : pinIds.length,
+        routeId: routeId
+      };
+    }
+
+    function buildRouteInfoPopupHtml(group, distanceInfo) {
+      const info = distanceInfo || getRouteDistanceInfo(group);
+      const name = group && group.name ? group.name : '名称未設定のルート';
+      return '<div class="route-info-popup-body">'
+        + '<div class="route-info-title">' + escHtml(name) + '</div>'
+        + '<div class="route-info-row"><strong>距離</strong><span>' + escHtml(info.distanceLabel) + '</span></div>'
+        + '<div class="route-info-row"><strong>地点</strong><span>' + escHtml(info.pointCount) + '地点</span></div>'
+        + '<div class="route-info-row"><strong>方式</strong><span>' + escHtml(info.methodLabel) + '</span></div>'
+        + (info.fallback ? '<div class="route-info-row"><strong>状態</strong><span>直線表示中</span></div>' : '')
+        + (info.note ? '<div class="route-info-note">' + escHtml(info.note) + '</div>' : '')
+        + '</div>';
+    }
+
+    function formatRouteMetaText(visiblePinCount, pinCount, distanceInfo) {
+      const info = distanceInfo || {};
+      return [
+        info.distanceLabel || '0 m',
+        info.methodDisplayLabel || info.methodLabel || '直線',
+        String(visiblePinCount) + '/' + String(pinCount) + '表示'
+      ].join('・');
+    }
+
+    function attachRouteInfoHitPolyline(layerGroup, latLngs, group, distanceInfo) {
+      const points = normalizeRoadLatLngs(latLngs);
+      if (!layerGroup || points.length < 2) return;
+      const hitLine = L.polyline(points, {
+        color: '#000000',
+        weight: 28,
+        opacity: 0,
+        lineCap: 'round',
+        lineJoin: 'round',
+        interactive: true,
+        bubblingMouseEvents: false,
+        className: 'route-hit-polyline'
+      }).addTo(layerGroup);
+      hitLine.bindPopup(buildRouteInfoPopupHtml(group, distanceInfo), {
+        className: 'route-info-popup',
+        closeButton: true,
+        autoPan: true,
+        autoPanPadding: L.point(16, 16),
+        keepInView: true,
+        minWidth: 150,
+        maxWidth: 220
+      });
+      hitLine.on('click', function(event) {
+        if (event && event.originalEvent) L.DomEvent.stopPropagation(event.originalEvent);
+      });
+    }
+
+    function getRouteRoadStatus(routeId) {
+      const id = String(routeId || '').trim();
+      return id ? state.routeRoadStatus[id] || null : null;
+    }
+
+    function setRouteRoadStatus(routeId, nextStatus) {
+      const id = String(routeId || '').trim();
+      if (!id) return false;
+      const previous = state.routeRoadStatus[id] || null;
+      if (!nextStatus) {
+        if (!previous) return false;
+        delete state.routeRoadStatus[id];
+        return true;
+      }
+      state.routeRoadStatus[id] = Object.assign({}, nextStatus);
+      return !previous
+        || previous.status !== nextStatus.status
+        || previous.key !== nextStatus.key
+        || previous.reason !== nextStatus.reason;
+    }
+
+    function cancelRoadRouteRequest(routeId) {
+      const id = String(routeId || '').trim();
+      if (!id || !state.roadRequestAbort[id]) return;
+      const request = state.roadRequestAbort[id];
+      request.cancelled = true;
+      if (request.timeoutId) clearTimeout(request.timeoutId);
+      if (request.controller) request.controller.abort();
+      delete state.roadRequestAbort[id];
+    }
+
+    function clearRoadRouteState(routeId) {
+      cancelRoadRouteRequest(routeId);
+      setRouteRoadStatus(routeId, null);
+    }
+
+    function getRouteLineDashArray(group, options) {
+      const opts = options || {};
+      if (opts.fallback) return '5 8';
+      if (opts.loading) return '2 8';
+      const lineStyle = normalizeRouteLineStyle(group && group.lineStyle);
+      if (lineStyle === 'dashed') return '10 8';
+      if (lineStyle === 'dotted') return '2 8';
+      return undefined;
+    }
+
+    function drawStraightRouteLine(layerGroup, latLngs, group, options) {
+      const opts = options || {};
+      const dashArray = getRouteLineDashArray(group, opts);
+      L.polyline(latLngs, {
+        color: safeColor(group.color),
+        weight: 3,
+        opacity: opts.fallback ? 0.5 : 0.78,
+        dashArray: dashArray,
+        lineCap: 'round',
+        lineJoin: 'round',
+        interactive: false
+      }).addTo(layerGroup);
+      attachRouteInfoHitPolyline(layerGroup, latLngs, group, getRouteDistanceInfo(group, opts.filteredPinIdSet, {
+        routeLatLngs: latLngs,
+        fallback: opts.fallback,
+        pointCount: opts.pointCount != null ? opts.pointCount : getRoutePointCountFromLatLngs(latLngs)
+      }));
+    }
+
+    function drawRoadRouteLine(layerGroup, latLngs, group, options) {
+      const opts = options || {};
+      const dashArray = getRouteLineDashArray(group, opts);
+      L.polyline(latLngs, {
+        color: safeColor(group.color),
+        weight: 4,
+        opacity: 0.86,
+        dashArray: dashArray,
+        lineCap: 'round',
+        lineJoin: 'round',
+        interactive: false
+      }).addTo(layerGroup);
+      attachRouteInfoHitPolyline(layerGroup, latLngs, group, getRouteDistanceInfo(group, opts.filteredPinIdSet, {
+        roadCoords: latLngs,
+        routeLatLngs: opts.routeLatLngs,
+        pointCount: opts.pointCount
+      }));
+    }
+
+    function setRoadFallback(routeId, key, reason, layerGroup, latLngs, group) {
+      cancelRoadRouteRequest(routeId);
+      layerGroup.clearLayers();
+      drawStraightRouteLine(layerGroup, latLngs, group, {
+        fallback: true,
+        pointCount: getRoutePointCountFromLatLngs(latLngs)
+      });
+      const changed = setRouteRoadStatus(routeId, {
+        status: 'fallback',
+        key: key,
+        reason: reason || 'network_error'
+      });
+      if (changed) {
+        console.log('route:road:fallback', { groupId: routeId, reason: reason || 'network_error' });
+        renderRoutePanel();
+      }
+    }
+
+    function getRoadRouteErrorReason(error, request) {
+      if (request && request.timedOut) return 'timeout';
+      if (error && error.routeReason) return error.routeReason;
+      if (error && error.name === 'AbortError') return 'aborted';
+      return 'network_error';
+    }
+
+    async function fetchRoadRouteGeometry(latLngs, signal) {
+      const response = await fetch(buildOsrmRouteUrl(latLngs), { signal: signal });
+      if (!response.ok) {
+        const error = new Error('http_error');
+        error.routeReason = 'http_error';
+        throw error;
+      }
+      const data = await response.json();
+      if (data && data.code && data.code !== 'Ok') {
+        const error = new Error('api_error');
+        error.routeReason = 'api_error';
+        throw error;
+      }
+      const coords = data && data.routes && data.routes[0]
+        && data.routes[0].geometry && data.routes[0].geometry.coordinates;
+      const latLngsFromOsrm = (Array.isArray(coords) ? coords : []).map(function(coord) {
+        if (!Array.isArray(coord) || coord.length < 2) return null;
+        const lng = Number(coord[0]);
+        const lat = Number(coord[1]);
+        return Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : null;
+      }).filter(Boolean);
+      if (latLngsFromOsrm.length < 2) {
+        const error = new Error('empty_geometry');
+        error.routeReason = 'empty_geometry';
+        throw error;
+      }
+      return latLngsFromOsrm;
+    }
+
+    function normalizeCachedRoadCoords(coords) {
+      const normalized = normalizeRoadLatLngs(coords);
+      return normalized.length >= 2 ? normalized : null;
+    }
+
+    async function getCachedRoadRoute(cacheKey) {
+      const key = String(cacheKey || '').trim();
+      if (!key) return null;
+      const memoryEntry = state.routeCache[key];
+      const memoryCoords = memoryEntry ? normalizeCachedRoadCoords(memoryEntry.coords) : null;
+      if (memoryCoords) {
+        console.log('route:cache:hit', { cacheKey: key, source: 'memory' });
+        return Object.assign({}, memoryEntry, { coords: memoryCoords });
+      }
+
+      try {
+        const result = await withGAS('getRouteCache', { cacheKey: key });
+        if (result && result.ok) {
+          const coords = normalizeCachedRoadCoords(result.coords);
+          if (coords) {
+            const entry = {
+              coords: coords,
+              provider: result.provider || ROAD_ROUTE_PROVIDER,
+              createdAt: result.createdAt || ''
+            };
+            state.routeCache[key] = entry;
+            console.log('route:cache:hit', { cacheKey: key, source: 'sheet' });
+            return entry;
+          }
+        }
+      } catch (error) {
+        console.warn('route:cache:miss', { cacheKey: key, reason: error && error.message ? error.message : 'gas_error' });
+        return null;
+      }
+
+      console.log('route:cache:miss', { cacheKey: key });
+      return null;
+    }
+
+    async function putCachedRoadRoute(cacheKey, routeId, coords, provider) {
+      const key = String(cacheKey || '').trim();
+      const normalizedCoords = normalizeCachedRoadCoords(coords);
+      if (!key || !routeId || !normalizedCoords) return;
+      const entry = {
+        coords: normalizedCoords,
+        provider: provider || ROAD_ROUTE_PROVIDER,
+        createdAt: new Date().toISOString()
+      };
+      state.routeCache[key] = entry;
+      try {
+        await withGAS('putRouteCache', {
+          cacheKey: key,
+          routeId: routeId,
+          coords: normalizedCoords,
+          provider: entry.provider
+        });
+      } catch (error) {
+        console.warn('route:cache:put_failed', { cacheKey: key, reason: error && error.message ? error.message : 'gas_error' });
+      }
+    }
+
+    function isRoadRouteStillCurrent(routeId, key) {
+      const group = getRouteGroupById(routeId);
+      if (!group || group.routeMode !== 'road' || group.visible === false || group.showLine === false) return false;
+      const currentLatLngs = getRouteLatLngsForDisplay(group, getFilteredPinIdSet());
+      return currentLatLngs.length >= 2
+        && buildRoadRouteCacheKey(group, getFilteredPinIdSet(), ROAD_ROUTE_PROVIDER) === key;
+    }
+
+    async function requestRoadRoute(routeId, key, latLngs, group, layerGroup, pointCount) {
+      cancelRoadRouteRequest(routeId);
+      const controller = new AbortController();
+      const request = {
+        controller: controller,
+        key: key,
+        timeoutId: null,
+        cancelled: false,
+        timedOut: false
+      };
+      request.timeoutId = setTimeout(function() {
+        request.timedOut = true;
+        controller.abort();
+      }, ROAD_TIMEOUT_MS);
+      state.roadRequestAbort[routeId] = request;
+      setRouteRoadStatus(routeId, { status: 'loading', key: key, reason: '' });
+
+      try {
+        const cached = await getCachedRoadRoute(key);
+        if (request.cancelled || state.roadRequestAbort[routeId] !== request) return;
+        if (!isRoadRouteStillCurrent(routeId, key)) return;
+        if (cached && Array.isArray(cached.coords)) {
+          const currentGroup = getRouteGroupById(routeId) || group;
+          layerGroup.clearLayers();
+          drawRoadRouteLine(layerGroup, cached.coords, currentGroup, {
+            routeLatLngs: latLngs,
+            pointCount: pointCount
+          });
+          setRouteRoadStatus(routeId, { status: 'ok', key: key, reason: '', coords: cached.coords });
+          renderRoutePanel();
+          return;
+        }
+
+        const roadLatLngs = await fetchRoadRouteGeometry(latLngs, controller.signal);
+        if (request.cancelled || state.roadRequestAbort[routeId] !== request) return;
+        if (!isRoadRouteStillCurrent(routeId, key)) return;
+        const currentGroup = getRouteGroupById(routeId) || group;
+        layerGroup.clearLayers();
+        drawRoadRouteLine(layerGroup, roadLatLngs, currentGroup, {
+          routeLatLngs: latLngs,
+          pointCount: pointCount
+        });
+        setRouteRoadStatus(routeId, { status: 'ok', key: key, reason: '', coords: roadLatLngs });
+        putCachedRoadRoute(key, routeId, roadLatLngs, ROAD_ROUTE_PROVIDER);
+        renderRoutePanel();
+      } catch (error) {
+        if (request.cancelled) return;
+        const reason = getRoadRouteErrorReason(error, request);
+        if (reason === 'aborted' && state.roadRequestAbort[routeId] !== request) return;
+        if (!isRoadRouteStillCurrent(routeId, key)) return;
+        setRoadFallback(routeId, key, reason, layerGroup, latLngs, group);
+      } finally {
+        if (request.timeoutId) clearTimeout(request.timeoutId);
+        if (state.roadRequestAbort[routeId] === request) {
+          delete state.roadRequestAbort[routeId];
+        }
+      }
+    }
+
+    function renderRoadRouteLayer(group, routeId, layerGroup, latLngs, filteredPinIdSet) {
+      const waypoints = normalizeRoadLatLngs(latLngs);
+      const pointCount = getRoutePointCountFromLatLngs(waypoints);
+      const key = buildRoadRouteCacheKey(group, filteredPinIdSet, ROAD_ROUTE_PROVIDER);
+      const fallbackReason = shouldFallbackRoadRoute(waypoints);
+      if (fallbackReason) {
+        setRoadFallback(routeId, key, fallbackReason, layerGroup, waypoints, group);
+        return;
+      }
+      if (!window.AbortController || typeof fetch !== 'function') {
+        setRoadFallback(routeId, key, 'unsupported', layerGroup, waypoints, group);
+        return;
+      }
+
+      const status = getRouteRoadStatus(routeId);
+      if (status && status.key === key && status.status === 'ok' && Array.isArray(status.coords)) {
+        drawRoadRouteLine(layerGroup, status.coords, group, {
+          filteredPinIdSet: filteredPinIdSet,
+          routeLatLngs: waypoints,
+          pointCount: pointCount
+        });
+        return;
+      }
+      if (status && status.key === key && status.status === 'fallback') {
+        drawStraightRouteLine(layerGroup, waypoints, group, {
+          filteredPinIdSet: filteredPinIdSet,
+          fallback: true,
+          pointCount: pointCount
+        });
+        return;
+      }
+      if (state.roadRequestAbort[routeId] && state.roadRequestAbort[routeId].key === key) {
+        drawStraightRouteLine(layerGroup, waypoints, group, {
+          filteredPinIdSet: filteredPinIdSet,
+          loading: true,
+          pointCount: pointCount
+        });
+        return;
+      }
+
+      drawStraightRouteLine(layerGroup, waypoints, group, {
+        filteredPinIdSet: filteredPinIdSet,
+        loading: true,
+        pointCount: pointCount
+      });
+      requestRoadRoute(routeId, key, waypoints, group, layerGroup, pointCount);
+    }
+
+    function retryRoadRoute(routeId) {
+      const group = getRouteGroupById(routeId);
+      if (!group || group.routeMode !== 'road') return;
+      clearRoadRouteState(routeId);
+      renderRouteGroupLayers();
+      renderRoutePanel();
+    }
+
+    function getRouteLayerGroup(routeId) {
+      const id = String(routeId || '').trim();
+      if (!id) return null;
+      if (!state.routeLayers[id]) {
+        state.routeLayers[id] = L.featureGroup();
+      }
+      if (!map.hasLayer(state.routeLayers[id])) {
+        state.routeLayers[id].addTo(map);
+      }
+      return state.routeLayers[id];
+    }
+
+    function removeStaleRouteLayers(activeRouteIds) {
+      Object.keys(state.routeLayers).forEach(function(routeId) {
+        if (activeRouteIds.has(routeId)) return;
+        clearRoadRouteState(routeId);
+        state.routeLayers[routeId].remove();
+        delete state.routeLayers[routeId];
+      });
+    }
+
+    function renderRouteGroupLayers(entries) {
+      const activeRouteIds = new Set();
+      const groups = getRouteGroupsForLayerRender(entries);
+      const filteredPinIdSet = getFilteredPinIdSet();
+      groups.forEach(function(group) {
+        const routeId = getRouteId(group);
+        if (!routeId) return;
+        activeRouteIds.add(routeId);
+        const layerGroup = getRouteLayerGroup(routeId);
+        if (!layerGroup) return;
+        layerGroup.clearLayers();
+        if (group.visible === false || group.showLine === false) {
+          clearRoadRouteState(routeId);
+          return;
+        }
+
+        const latLngs = getRouteLatLngsForDisplay(group, filteredPinIdSet);
+        if (latLngs.length < 2) {
+          clearRoadRouteState(routeId);
+          return;
+        }
+        if (group.routeMode === 'road') {
+          renderRoadRouteLayer(group, routeId, layerGroup, latLngs, filteredPinIdSet);
+          return;
+        }
+        clearRoadRouteState(routeId);
+        drawStraightRouteLine(layerGroup, latLngs, group, {
+          filteredPinIdSet: filteredPinIdSet,
+          pointCount: getRoutePointCountFromLatLngs(latLngs)
+        });
+      });
+      removeStaleRouteLayers(activeRouteIds);
+    }
+
+    function getRouteNumberDisplayForPin(pinId, entries) {
+      const id = String(pinId || '').trim();
+      if (!id) return null;
+      const groups = Array.isArray(state.routeGroups) ? state.routeGroups : [];
+      for (let index = 0; index < groups.length; index++) {
+        const group = groups[index];
+        if (!group || group.visible === false || group.showNumbers === false) continue;
+        const routePinIds = getRoutePinIdsForDisplay(group);
+        const pinIndex = routePinIds.indexOf(id);
+        if (pinIndex !== -1) {
+          return {
+            number: pinIndex + 1,
+            color: safeColor(group.color)
+          };
+        }
+      }
+      return null;
+    }
+
+    function getRoutePinIdsForState(group) {
+      return normalizeRoutePinIds(group && group.pinIds);
+    }
+
+    function isPinInAnyVisibleRoute(pinId) {
+      const id = String(pinId || '').trim();
+      if (!id) return false;
+      const groups = Array.isArray(state.routeGroups) ? state.routeGroups : [];
+      for (let index = 0; index < groups.length; index += 1) {
+        const group = groups[index];
+        if (!group || group.visible === false) continue;
+        if (getRoutePinIdsForState(group).indexOf(id) !== -1) return true;
+      }
+      return false;
+    }
+
+    function getRouteGroupIdsForState(groups) {
+      return (Array.isArray(groups) ? groups : state.routeGroups).map(function(group) {
+        return getRouteId(group);
+      }).filter(Boolean);
+    }
+
+    function sameRouteGroupOrder(a, b) {
+      const left = Array.isArray(a) ? a.map(function(id) { return String(id || '').trim(); }).filter(Boolean) : [];
+      const right = Array.isArray(b) ? b.map(function(id) { return String(id || '').trim(); }).filter(Boolean) : [];
+      if (left.length !== right.length) return false;
+      for (let index = 0; index < left.length; index += 1) {
+        if (left[index] !== right[index]) return false;
+      }
+      return true;
+    }
+
+    function setRouteGroupsOrder(orderedIds) {
+      const currentIds = getRouteGroupIdsForState();
+      const normalizedIds = (Array.isArray(orderedIds) ? orderedIds : []).map(function(routeId) {
+        return String(routeId || '').trim();
+      }).filter(Boolean);
+      if (normalizedIds.length !== currentIds.length) return false;
+      const currentSet = new Set(currentIds);
+      const nextSet = new Set(normalizedIds);
+      if (nextSet.size !== currentSet.size) return false;
+      for (let index = 0; index < currentIds.length; index += 1) {
+        if (!nextSet.has(currentIds[index])) return false;
+      }
+
+      const byId = {};
+      state.routeGroups.forEach(function(group) {
+        const routeId = getRouteId(group);
+        if (routeId) byId[routeId] = group;
+      });
+      state.routeGroups = normalizedIds.map(function(routeId) {
+        return byId[routeId];
+      }).filter(Boolean);
+      return state.routeGroups.length === currentIds.length;
+    }
+
+    function rollbackRouteGroupsOrder(previousGroups) {
+      if (!Array.isArray(previousGroups)) return;
+      state.routeGroups = previousGroups.slice();
+    }
+
+    function getRouteVisiblePinCount(group, filteredPinIdSet) {
+      return getRoutePinIdsForState(group).filter(function(pinId) {
+        return filteredPinIdSet && filteredPinIdSet.has(pinId);
+      }).length;
+    }
+
+    function isRouteBusy(routeId) {
+      return state.routeOrderSaving === true
+        || state.routeSaving[routeId] === true
+        || !!state.routePendingSave[routeId]
+        || state.routePinSaving[routeId] === true;
+    }
+
+    function isPinInRoute(group, pinId) {
+      const id = String(pinId || '').trim();
+      if (!id) return false;
+      return getRoutePinIdsForState(group).indexOf(id) !== -1;
+    }
+
+    function getAvailableRouteGroupsForPin(pinId) {
+      if (!canEdit()) return [];
+      const id = String(pinId || '').trim();
+      if (!id) return [];
+      return (Array.isArray(state.routeGroups) ? state.routeGroups : []).filter(function(group) {
+        const routeId = getRouteId(group);
+        return routeId && !isPinInRoute(group, id) && !isRouteBusy(routeId);
+      });
+    }
+
+    function renderPinRouteAddControl(pin) {
+      const container = document.getElementById('pin-detail-route-add');
+      const select = document.getElementById('pin-detail-route-select');
+      const addButton = document.getElementById('pin-detail-route-add-btn');
+      const note = document.getElementById('pin-detail-route-note');
+      if (!container || !select || !addButton || !note) return;
+
+      select.innerHTML = '';
+      if (!canEdit() || !pin || !pin.id) {
+        container.style.display = 'none';
+        select.disabled = true;
+        addButton.disabled = true;
+        note.textContent = '';
+        return;
+      }
+
+      const routeGroups = Array.isArray(state.routeGroups) ? state.routeGroups : [];
+      const unassignedGroups = routeGroups.filter(function(group) {
+        return getRouteId(group) && !isPinInRoute(group, pin.id);
+      });
+      const availableGroups = getAvailableRouteGroupsForPin(pin.id);
+      container.style.display = '';
+      availableGroups.forEach(function(group) {
+        const option = document.createElement('option');
+        option.value = getRouteId(group);
+        option.textContent = group.name || '名称未設定のルート';
+        select.appendChild(option);
+      });
+
+      select.disabled = availableGroups.length === 0;
+      addButton.disabled = availableGroups.length === 0;
+      if (!routeGroups.length) {
+        note.textContent = '追加できるルートがありません。';
+      } else if (!unassignedGroups.length) {
+        note.textContent = 'このピンはすべてのルートに追加済みです。';
+      } else if (availableGroups.length === 0) {
+        note.textContent = '保存中のルートがあります。';
+      } else {
+        note.textContent = '';
+      }
+    }
+
+    function refreshOpenPinDetailRouteUi() {
+      const pin = getPinById(state.shownPinId);
+      if (pin) renderPinRouteAddControl(pin);
+    }
+
+    function setRouteGroupPinIds(routeId, pinIds) {
+      const index = getRouteGroupIndex(routeId);
+      if (index === -1) return false;
+      const next = Object.assign({}, state.routeGroups[index], {
+        pinIds: normalizeRoutePinIds(pinIds)
+      });
+      Object.assign(next, normalizeRouteEndpointSelection(next));
+      state.routeGroups[index] = cloneRouteGroupForState(next);
+      return true;
+    }
+
+    function sameRoutePinOrder(a, b) {
+      const left = normalizeRoutePinIds(a);
+      const right = normalizeRoutePinIds(b);
+      if (left.length !== right.length) return false;
+      for (let index = 0; index < left.length; index += 1) {
+        if (left[index] !== right[index]) return false;
+      }
+      return true;
+    }
+
+    function pushRoutePinUndo(routeId, pinIds) {
+      const id = String(routeId || '').trim();
+      if (!id) return;
+      state.routeUndoStack.push({
+        type: 'route-pins',
+        routeId: id,
+        pinIds: normalizeRoutePinIds(pinIds)
+      });
+      while (state.routeUndoStack.length > ROUTE_UNDO_STACK_LIMIT) {
+        state.routeUndoStack.shift();
+      }
+    }
+
+    function findRoutePinUndoIndex(routeId) {
+      const id = String(routeId || '').trim();
+      if (!id) return -1;
+      for (let index = state.routeUndoStack.length - 1; index >= 0; index -= 1) {
+        const entry = state.routeUndoStack[index];
+        if (entry && entry.type === 'route-pins' && entry.routeId === id) return index;
+      }
+      return -1;
+    }
+
+    function canUndoRoutePinChange(routeId) {
+      return findRoutePinUndoIndex(routeId) !== -1;
+    }
+
+    function canQueueRoutePinChange(routeId) {
+      if (!canEdit() || state.routeOrderSaving) return false;
+      const pending = state.routePendingSave[routeId];
+      return !pending || pending.kind === 'pins';
+    }
+
+    function getChronologicalRoutePinIds(group) {
+      const pinIds = getRoutePinIdsForState(group);
+      const knownPins = [];
+      const missingPinIds = [];
+      pinIds.forEach(function(pinId) {
+        const pin = getPinById(pinId);
+        if (pin) {
+          knownPins.push(pin);
+        } else {
+          missingPinIds.push(pinId);
+        }
+      });
+      return knownPins.sort(comparePinsForDisplayOrder).map(function(pin) {
+        return String(pin.id || '').trim();
+      }).filter(Boolean).concat(missingPinIds);
+    }
+
+    function queueRoutePinsSave(routeId, pinIds, rollbackSnapshot) {
+      const id = String(routeId || '').trim();
+      if (!id) return;
+      setRoutePendingSave(id, 'pins', {
+        routeId: id,
+        pinIds: normalizeRoutePinIds(pinIds)
+      }, rollbackSnapshot, !state.routeSaving[id]);
+      renderRoutePanel();
+      refreshOpenPinDetailRouteUi();
+    }
+
+    async function saveRoutePinsQueued(routeId, payload, rollbackSnapshot) {
+      state.routeSaving[routeId] = true;
+      renderRoutePanel();
+      refreshOpenPinDetailRouteUi();
+      try {
+        const pinIds = normalizeRoutePinIds(payload && payload.pinIds);
+        const result = await withGAS('setRoutePins', { routeId: routeId, pinIds: pinIds });
+        if (!result || result.ok === false) {
+          throw new Error(result && result.error ? result.error : 'ルートの所属ピン保存に失敗しました');
+        }
+        if (!state.routePendingSave[routeId] && Array.isArray(result.pinIds)) {
+          setRouteGroupPinIds(routeId, result.pinIds);
+          renderPins();
+          renderSidePanel();
+          refreshOpenPinDetailRouteUi();
+        }
+      } catch (error) {
+        if (state.routePendingSave[routeId] && state.routePendingSave[routeId].timer) {
+          clearTimeout(state.routePendingSave[routeId].timer);
+        }
+        delete state.routePendingSave[routeId];
+        rollbackRouteGroup(routeId, rollbackSnapshot);
+        renderPins();
+        renderSidePanel();
+        refreshOpenPinDetailRouteUi();
+        alert('ルートの所属ピン保存に失敗しました。\n\n' + (error && error.message ? error.message : String(error)));
+      } finally {
+        delete state.routeSaving[routeId];
+        const nextPending = state.routePendingSave[routeId];
+        renderRoutePanel();
+        refreshOpenPinDetailRouteUi();
+        if (nextPending) {
+          flushPendingRouteSave(routeId);
+        }
+      }
+    }
+
+    function updateRoutePinsOptimistic(routeId, nextPinIds, options) {
+      if (!canQueueRoutePinChange(routeId)) return;
+      const index = getRouteGroupIndex(routeId);
+      if (index === -1) return;
+      const opts = options || {};
+      const snapshot = cloneRouteGroupForState(state.routeGroups[index]);
+      const pinIds = normalizeRoutePinIds(nextPinIds);
+      const currentPinIds = getRoutePinIdsForState(state.routeGroups[index]);
+      if (sameRoutePinOrder(pinIds, currentPinIds)) return;
+      if (!opts.skipUndo) pushRoutePinUndo(routeId, currentPinIds);
+
+      setRouteGroupPinIds(routeId, pinIds);
+      renderPins();
+      renderSidePanel();
+      refreshOpenPinDetailRouteUi();
+      queueRoutePinsSave(routeId, pinIds, snapshot);
+    }
+
+    function resetRoutePinsToChronological(routeId) {
+      if (!canEdit()) return;
+      const group = getRouteGroupById(routeId);
+      if (!group) return;
+      updateRoutePinsOptimistic(getRouteId(group), getChronologicalRoutePinIds(group));
+    }
+
+    function undoRoutePinChange(routeId) {
+      if (!canEdit()) return;
+      const undoIndex = findRoutePinUndoIndex(routeId);
+      if (undoIndex === -1) return;
+      const entry = state.routeUndoStack.splice(undoIndex, 1)[0];
+      updateRoutePinsOptimistic(entry.routeId, entry.pinIds, { skipUndo: true });
+    }
+
+    async function saveRoutesOrder(orderedIds, previousGroups) {
+      state.routeOrderSaving = true;
+      renderRoutePanel();
+      refreshOpenPinDetailRouteUi();
+      try {
+        const result = await withGAS('updateRoutesOrder', { orderedIds: orderedIds });
+        if (!result || result.ok === false) {
+          throw new Error(result && result.error ? result.error : 'ルート順の保存に失敗しました');
+        }
+        const groups = result && Array.isArray(result.routeGroups) ? result.routeGroups : null;
+        if (groups) {
+          state.routeGroups = groups.map(cloneRouteGroup).filter(function(group) {
+            return group.id;
+          });
+          renderPins();
+          renderSidePanel();
+          refreshOpenPinDetailRouteUi();
+        }
+      } catch (error) {
+        rollbackRouteGroupsOrder(previousGroups);
+        renderPins();
+        renderSidePanel();
+        refreshOpenPinDetailRouteUi();
+        alert('ルート順の保存に失敗しました。\n\n' + (error && error.message ? error.message : String(error)));
+      } finally {
+        state.routeOrderSaving = false;
+        renderRoutePanel();
+        refreshOpenPinDetailRouteUi();
+      }
+    }
+
+    function updateRoutesOrderOptimistic(orderedIds) {
+      if (!canEdit() || state.routeOrderSaving) return;
+      const currentIds = getRouteGroupIdsForState();
+      const normalizedIds = (Array.isArray(orderedIds) ? orderedIds : []).map(function(routeId) {
+        return String(routeId || '').trim();
+      }).filter(Boolean);
+      if (sameRouteGroupOrder(normalizedIds, currentIds)) return;
+      const previousGroups = state.routeGroups.slice();
+      if (!setRouteGroupsOrder(normalizedIds)) {
+        renderRoutePanel();
+        return;
+      }
+      renderPins();
+      renderSidePanel();
+      refreshOpenPinDetailRouteUi();
+      saveRoutesOrder(normalizedIds, previousGroups);
+    }
+
+    function addPinToRoute(routeId, pinId) {
+      if (!canEdit()) return;
+      const group = getRouteGroupById(routeId);
+      const id = String(pinId || '').trim();
+      if (!group || !id || isPinInRoute(group, id)) return;
+      const pinIds = getRoutePinIdsForState(group);
+      pinIds.push(id);
+      updateRoutePinsOptimistic(getRouteId(group), pinIds);
+    }
+
+    function getRoutePinDropInfo(routeId, pinId) {
+      const group = getRouteGroupById(routeId);
+      const id = String(pinId || '').trim();
+      const targetRouteId = getRouteId(group);
+      if (state.shareMode) {
+        return { acceptsDrop: false, reason: 'share-mode' };
+      }
+      if (!canEdit()) {
+        return { acceptsDrop: false, reason: 'view-mode' };
+      }
+      if (state.placement) {
+        return { acceptsDrop: false, reason: 'placement' };
+      }
+      if (!group || !targetRouteId) {
+        return { acceptsDrop: false, reason: 'no-route' };
+      }
+      if (!id) {
+        return { acceptsDrop: false, reason: 'no-pin' };
+      }
+      const pin = getPinById(id);
+      if (!pin || pin.lat == null || pin.lng == null) {
+        return { acceptsDrop: false, reason: 'unplaced' };
+      }
+      if (isRouteBusy(targetRouteId) || !canQueueRoutePinChange(targetRouteId)) {
+        return { acceptsDrop: false, reason: 'busy' };
+      }
+      if (isPinInRoute(group, id)) {
+        return { acceptsDrop: true, canAdd: false, reason: 'already-in-route', routeId: targetRouteId, pinId: id, group: group };
+      }
+      return { acceptsDrop: true, canAdd: true, reason: '', routeId: targetRouteId, pinId: id, group: group };
+    }
+
+    function getRoutePinDropMessage(dropInfo) {
+      const reason = dropInfo && dropInfo.reason;
+      if (dropInfo && dropInfo.acceptsDrop && dropInfo.canAdd) {
+        return 'ここにドロップしてルートへ追加';
+      }
+      switch (reason) {
+        case 'already-in-route':
+          return 'このピンはすでにこのルートに追加済みです';
+        case 'unplaced':
+          return '配置済みピンだけをルートに追加できます';
+        case 'busy':
+          return 'このルートは保存中です。完了後に追加できます';
+        case 'placement':
+          return '配置操作中はルートへ追加できません';
+        case 'share-mode':
+          return '共有表示中はルートへ追加できません';
+        case 'view-mode':
+          return '';
+        default:
+          return '';
+      }
+    }
+
+    function clearRoutePinDropTargetState(target) {
+      if (!target) return;
+      target.classList.remove('dragover', 'is-route-pin-drop-candidate', 'is-route-pin-drop-allowed', 'is-route-pin-drop-blocked');
+      delete target.dataset.routeDropLabel;
+    }
+
+    function clearRoutePinDropTargetStates() {
+      document.querySelectorAll('.route-item.dnd-drop-target, .route-pin-list.dnd-drop-target').forEach(clearRoutePinDropTargetState);
+    }
+
+    function setRoutePinDropTargetState(target, dropInfo, active) {
+      if (!target) return;
+      target.classList.remove('is-route-pin-drop-candidate', 'is-route-pin-drop-allowed', 'is-route-pin-drop-blocked');
+      const message = getRoutePinDropMessage(dropInfo);
+      if (active && message) {
+        target.dataset.routeDropLabel = message;
+        target.classList.add(dropInfo && dropInfo.acceptsDrop && dropInfo.canAdd ? 'is-route-pin-drop-allowed' : 'is-route-pin-drop-blocked');
+        return;
+      }
+      delete target.dataset.routeDropLabel;
+      if (dropInfo && dropInfo.acceptsDrop && dropInfo.canAdd) {
+        target.classList.add('is-route-pin-drop-candidate');
+      }
+    }
+
+    function refreshRoutePinDropTargetsForDraggedPin(pinId) {
+      const id = String(pinId || '').trim();
+      document.querySelectorAll('.route-item.dnd-drop-target[data-route-id], .route-pin-list.dnd-drop-target[data-route-id]').forEach(function(target) {
+        const routeId = target.dataset.routeId || '';
+        clearRoutePinDropTargetState(target);
+        if (!id || !routeId) return;
+        setRoutePinDropTargetState(target, getRoutePinDropInfo(routeId, id), false);
+      });
+    }
+
+    function showTransientHint(message) {
+      const text = String(message || '').trim();
+      if (!text) return;
+      showHint(text);
+      setTimeout(function() {
+        const el = document.getElementById('hint-bar');
+        if (el && el.textContent === text) hideHint();
+      }, 1400);
+    }
+
+    function addPlacedPinToRouteFromDrop(routeId, pinId) {
+      const dropInfo = getRoutePinDropInfo(routeId, pinId);
+      if (!dropInfo.acceptsDrop) {
+        const message = getRoutePinDropMessage(dropInfo);
+        if (message) showTransientHint(message);
+        return false;
+      }
+      if (!dropInfo.canAdd) {
+        const message = getRoutePinDropMessage(dropInfo);
+        if (message) showTransientHint(message);
+        return false;
+      }
+      const pinIds = getRoutePinIdsForState(dropInfo.group);
+      pinIds.push(dropInfo.pinId);
+      updateRoutePinsOptimistic(dropInfo.routeId, pinIds);
+      showTransientHint('ピンをルートに追加しました');
+      return true;
+    }
+
+    function removePinFromRoute(routeId, pinId) {
+      if (!canEdit()) return;
+      const group = getRouteGroupById(routeId);
+      const id = String(pinId || '').trim();
+      if (!group || !id) return;
+      updateRoutePinsOptimistic(getRouteId(group), getRoutePinIdsForState(group).filter(function(existingPinId) {
+        return existingPinId !== id;
+      }));
     }
 
     function setTheme(theme) {
@@ -1079,12 +2653,14 @@
     function paletteSelect(containerId, selectedColor, onChange) {
       const container = document.getElementById(containerId);
       container.innerHTML = '';
+      const selected = String(selectedColor || '').toLowerCase();
       PIN_COLORS.forEach(color => {
         const button = document.createElement('button');
         button.type = 'button';
-        button.className = 'color-swatch' + (color.hex === selectedColor ? ' selected' : '');
+        button.className = 'color-swatch' + (color.hex.toLowerCase() === selected ? ' selected' : '');
         button.style.background = color.hex;
         button.title = color.label;
+        button.setAttribute('aria-label', color.label);
         button.addEventListener('click', () => onChange(color.hex));
         container.appendChild(button);
       });
@@ -1098,6 +2674,32 @@
     function setEditColor(color) {
       state.editColor = color;
       paletteSelect('edit-color-palette', color, setEditColor);
+    }
+
+    function iconPickerSelect(containerId, selectedIcon, onChange) {
+      const container = document.getElementById(containerId);
+      container.innerHTML = '';
+      const selected = normalizeIcon(selectedIcon);
+      PIN_ICONS.forEach(function(icon) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'icon-choice' + (icon.id === selected ? ' selected' : '');
+        button.title = icon.label;
+        button.setAttribute('aria-label', icon.label);
+        button.innerHTML = createInlineIconSvg(icon.id);
+        button.addEventListener('click', function() { onChange(icon.id); });
+        container.appendChild(button);
+      });
+    }
+
+    function setUploadIcon(icon) {
+      state.upload.icon = normalizeIcon(icon);
+      iconPickerSelect('upload-icon-picker', state.upload.icon, setUploadIcon);
+    }
+
+    function setEditIcon(icon) {
+      state.editIcon = normalizeIcon(icon);
+      iconPickerSelect('edit-icon-picker', state.editIcon, setEditIcon);
     }
 
     function renderColorFilterUI() {
@@ -1119,6 +2721,36 @@
           if (idx === -1) { state.listColorFilter.push(c.hex); }
           else { state.listColorFilter.splice(idx, 1); }
           renderColorFilterUI();
+          updateFilterButtonIndicators();
+          renderPins();
+          renderSidePanel();
+        });
+        container.appendChild(btn);
+      });
+    }
+
+    function renderIconFilterUI() {
+      const container = document.getElementById('map-icon-filter');
+      container.innerHTML = '';
+      const existingIcons = getBasePins().map(function(pin) { return normalizeIcon(pin.icon); });
+      state.listIconFilter = state.listIconFilter.filter(function(icon) {
+        return existingIcons.includes(icon);
+      });
+      PIN_ICONS.forEach(function(icon) {
+        const hasMatch = existingIcons.includes(icon.id);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'icon-filter-chip'
+          + (state.listIconFilter.includes(icon.id) ? ' active' : '')
+          + (hasMatch ? '' : ' is-empty');
+        btn.title = icon.label;
+        btn.setAttribute('aria-label', icon.label);
+        btn.innerHTML = createInlineIconSvg(icon.id) + '<span>' + escHtml(icon.label) + '</span>';
+        btn.addEventListener('click', function() {
+          const idx = state.listIconFilter.indexOf(icon.id);
+          if (idx === -1) { state.listIconFilter.push(icon.id); }
+          else { state.listIconFilter.splice(idx, 1); }
+          renderIconFilterUI();
           updateFilterButtonIndicators();
           renderPins();
           renderSidePanel();
@@ -1221,17 +2853,22 @@
 
     setUploadColor(PIN_COLORS[0].hex);
     setEditColor(PIN_COLORS[0].hex);
+    setUploadIcon(PIN_ICONS[0].id);
+    setEditIcon(PIN_ICONS[0].id);
     ensureUrlInputs('upload-links', []);
     ensureUrlInputs('edit-links', []);
 
     ['upload-overlay', 'settings-overlay', 'location-choice-overlay', 'pin-detail-overlay',
-     'unplaced-overlay', 'pin-menu-overlay', 'edit-overlay', 'delete-overlay', 'share-overlay', 'dup-warning-overlay']
+     'unplaced-overlay', 'pin-menu-overlay', 'delete-overlay', 'share-overlay', 'dup-warning-overlay']
       .forEach(function(id) {
         document.getElementById(id).addEventListener('click', function(event) {
           if (event.target === document.getElementById(id)) {
             if (id === 'share-overlay') {
               closeShareDialog();
               return;
+            }
+            if (id === 'delete-overlay') {
+              state.bulkDeletePending = false;
             }
             closeOverlay(id);
             if (id === 'pin-detail-overlay') state.shownPinId = null;
@@ -1272,7 +2909,6 @@
       const href = state.appSettings.rootFolderUrl || '#';
       document.getElementById('root-drive-link').href = href;
       document.getElementById('settings-root-drive-link').href = href;
-      document.getElementById('side-root-drive-link').href = href;
     }
 
     function updateRenameToggle() {
@@ -1343,7 +2979,15 @@
       const count = state.pins.filter(pin => pin.lat == null || pin.lng == null).length;
       const badge = document.getElementById('unplaced-badge');
       badge.textContent = '📋 未配置 ' + count + '件';
-      badge.style.display = state.editMode && count > 0 ? 'inline-flex' : 'none';
+      badge.style.display = count > 0 && !state.shareMode ? 'inline-flex' : 'none';
+    }
+
+    function syncListItemSelection(button, pinId) {
+      const check = button.querySelector('.pin-check');
+      if (!check) return;
+      const isSelected = state.selectedPinIds.has(pinId);
+      check.style.background = isSelected ? 'var(--accent)' : 'transparent';
+      check.textContent = isSelected ? '✓' : '';
     }
 
     function buildListItem(pin, options) {
@@ -1353,16 +2997,16 @@
       button.dataset.pinId = pin.id;
       const tagsHtml = renderTagChips(pin.tags);
       const isSelected = state.selectedPinIds.has(pin.id);
-      const checkHtml = state.editMode
+      const checkHtml = canEdit()
         ? `<div class="pin-check" style="width:22px;height:22px;border-radius:50%;border:2px solid var(--border);background:${isSelected ? 'var(--accent)' : 'transparent'};flex:0 0 22px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;">${isSelected ? '✓' : ''}</div>`
         : '';
       button.innerHTML = `
         ${checkHtml}
         ${renderListThumb(pin)}
-        <div class="list-meta"><div class="list-title">${escHtml(pin.title || '(無題)')}</div><div class="list-subtitle">${escHtml(pin.timestamp || '')}</div>${tagsHtml}</div>
+        <div class="list-meta"><div class="list-title">${escHtml(pin.title || '(無題)')}</div><div class="list-subtitle">${escHtml(getPinDisplayTime(pin))}</div>${tagsHtml}</div>
       `;
       button.addEventListener('click', function(e) {
-        if (state.editMode) {
+        if (canEdit()) {
           // チェック UI クリックまたは Shift なし通常クリックで選択トグル
           if (state.selectedPinIds.has(pin.id)) {
             state.selectedPinIds.delete(pin.id);
@@ -1370,13 +3014,22 @@
             state.selectedPinIds.add(pin.id);
           }
           updateBulkBar();
-          renderSidePanel();
+          syncListItemSelection(button, pin.id);
+          if (!options.enableEditorDoubleClick) renderSidePanel();
           return;
         }
         options.onClick(e);
       });
+      if (options.enableEditorDoubleClick) {
+        button.addEventListener('dblclick', function(event) {
+          if (!canEdit()) return;
+          event.preventDefault();
+          event.stopPropagation();
+          openPinEditor(pin);
+        });
+      }
       button.addEventListener('contextmenu', event => {
-        if (!state.editMode || !options.onMenu) return;
+        if (!canEdit() || !options.onMenu) return;
         event.preventDefault();
         options.onMenu();
       });
@@ -1394,15 +3047,20 @@
         if (enableLinkedMarkerHighlight) {
           highlightLinkedMarker(pin.id);
         }
-        if (!state.editMode || !options.onMenu) return;
+        if (!canEdit() || !options.onMenu) return;
         options.onMenu();
-      }, { suppressClick: state.editMode || !enableLinkedMarkerHighlight });
-      if (state.editMode) {
+      }, { suppressClick: canEdit() || !enableLinkedMarkerHighlight });
+      if (canEdit()) {
         button.draggable = true;
         button.addEventListener('dragstart', function(e) {
+          if (!canEdit()) {
+            e.preventDefault();
+            return;
+          }
           state.draggedPinId = pin.id;
           e.dataTransfer.effectAllowed = 'move';
           showDeleteZone();
+          refreshRoutePinDropTargetsForDraggedPin(pin.id);
           setTimeout(function() { button.style.opacity = '0.4'; }, 0);
         });
         button.addEventListener('dragend', function() {
@@ -1410,17 +3068,31 @@
           button.style.opacity = '';
           hideDeleteZone();
           document.querySelectorAll('.dnd-drop-target.dragover').forEach(function(el) { el.classList.remove('dragover'); });
+          clearRoutePinDropTargetStates();
         });
       }
       return button;
     }
 
+    function renderPinTimeRows(pin) {
+      const rows = [
+        ['イベント時刻', pin.eventAt || '未設定'],
+        ['作成時刻', pin.timestamp || '']
+      ];
+      if (pin.updatedAt && pin.updatedAt !== pin.eventAt) {
+        rows.splice(1, 0, ['更新時刻', pin.updatedAt]);
+      }
+      return rows.map(function(row) {
+        return '<div><strong>' + escHtml(row[0]) + ':</strong> ' + escHtml(row[1]) + '</div>';
+      }).join('');
+    }
+
     function openPinDetail(pin) {
       document.getElementById('pin-detail-title').textContent = pin.title || '(無題)';
       document.getElementById('pin-detail-desc').textContent = pin.description || '説明はありません。';
-      document.getElementById('pin-detail-time').textContent = pin.timestamp || '';
+      document.getElementById('pin-detail-time').innerHTML = renderPinTimeRows(pin);
       const statusEl = document.getElementById('pin-detail-status');
-      if (state.editMode && pin.status) {
+      if (canEdit() && pin.status) {
         statusEl.innerHTML = '<span class="status-badge">' + escHtml(pin.status) + '</span>';
         statusEl.style.display = 'block';
       } else {
@@ -1449,7 +3121,7 @@
       });
       const drive = document.getElementById('pin-detail-drive');
       drive.innerHTML = '';
-      if (pin.folderUrl) {
+      if (canEdit() && pin.folderUrl) {
         const anchor = document.createElement('a');
         anchor.className = 'ghost-btn';
         anchor.href = pin.folderUrl;
@@ -1470,6 +3142,7 @@
         gotoBtn.onclick = null;
       }
       state.shownPinId = pin.id;
+      renderPinRouteAddControl(pin);
       openOverlay('pin-detail-overlay');
     }
 
@@ -1479,6 +3152,11 @@
     });
     document.getElementById('pin-detail-share').addEventListener('click', function() {
       openShareDialog(state.shownPinId);
+    });
+    document.getElementById('pin-detail-route-add-btn').addEventListener('click', function() {
+      if (!canEdit()) return;
+      const select = document.getElementById('pin-detail-route-select');
+      addPinToRoute(select.value, state.shownPinId);
     });
     document.getElementById('share-tag-mode-btn').addEventListener('click', function() {
       state.shareManager.tagMode = state.shareManager.tagMode === 'or' ? 'and' : 'or';
@@ -1568,6 +3246,7 @@
     });
 
     function openPinMenu(pin) {
+      if (!canEdit()) return;
       const isUnplaced = pin.lat == null || pin.lng == null;
       state.contextPinId = pin.id;
       document.getElementById('pin-menu-title').textContent = pin.title || '(無題)';
@@ -1581,18 +3260,18 @@
       closeOverlay('pin-menu-overlay');
     }
 
-    document.getElementById('pin-menu-close').addEventListener('click', closePinMenu);
-    document.getElementById('pin-menu-edit').addEventListener('click', () => {
-      const pin = getPinById(state.contextPinId);
+    function openPinEditor(pin) {
+      if (!canEdit()) return;
       if (!pin) return;
-      closePinMenu();
       state.editingPinId = pin.id;
       document.getElementById('edit-title').value = pin.title || '';
       document.getElementById('edit-desc').value = pin.description || '';
+      document.getElementById('edit-event-at').value = pin.eventAt || '';
       document.getElementById('edit-status').value = pin.status || '未対応';
       document.getElementById('edit-tags').value = (pin.tags || []).map(function(t) { return '#' + t; }).join(' ');
       ensureUrlInputs('edit-links', pin.links || []);
       setEditColor(pin.color || PIN_COLORS[0].hex);
+      setEditIcon(pin.icon || PIN_ICONS[0].id);
       const driveArea = document.getElementById('edit-drive-area');
       if (pin.folderUrl) {
         driveArea.style.display = 'block';
@@ -1603,14 +3282,25 @@
       }
       refreshRenameNotes();
       openOverlay('edit-overlay');
+    }
+
+    document.getElementById('pin-menu-close').addEventListener('click', closePinMenu);
+    document.getElementById('pin-menu-edit').addEventListener('click', () => {
+      if (!canEdit()) return;
+      const pin = getPinById(state.contextPinId);
+      if (!pin) return;
+      closePinMenu();
+      openPinEditor(pin);
     });
     document.getElementById('pin-menu-place').addEventListener('click', () => {
+      if (!canEdit()) return;
       const pin = getPinById(state.contextPinId);
       if (!pin) return;
       closePinMenu();
       beginPlacement({ mode: 'existing', pinId: pin.id });
     });
     document.getElementById('pin-menu-unplace').addEventListener('click', async () => {
+      if (!canEdit()) return;
       const pin = getPinById(state.contextPinId);
       if (!pin) return;
       closePinMenu();
@@ -1627,10 +3317,12 @@
       }
     });
     document.getElementById('pin-menu-delete').addEventListener('click', () => {
+      if (!canEdit()) return;
       const pin = getPinById(state.contextPinId);
       if (!pin) return;
       closePinMenu();
       document.getElementById('delete-message').textContent = pin.fileId ? 'このピンを削除すると、対応する Drive 上の写真もゴミ箱に移動します。' : 'このピンを削除します。';
+      document.querySelector('#delete-overlay .sheet-title').textContent = 'ピンを削除';
       state.contextPinId = pin.id;
       openOverlay('delete-overlay');
     });
@@ -1647,7 +3339,9 @@
           id: pin.id,
           title: title,
           description: document.getElementById('edit-desc').value.trim(),
+          eventAt: document.getElementById('edit-event-at').value,
           color: state.editColor,
+          icon: state.editIcon,
           links: collectLinks('edit-links'),
           status: document.getElementById('edit-status').value,
           tags: tags
@@ -1658,7 +3352,10 @@
           if (!result || !result.ok) throw new Error(result && result.error ? result.error : '更新に失敗しました');
           pin.title = payload.title;
           pin.description = payload.description;
+          pin.eventAt = payload.eventAt;
+          pin.updatedAt = result.updatedAt || pin.updatedAt || '';
           pin.color = payload.color;
+          pin.icon = payload.icon;
           pin.links = payload.links;
           pin.status = payload.status;
           pin.tags = payload.tags;
@@ -1668,6 +3365,7 @@
           renderSidePanel();
           updateUnplacedBadge();
           renderColorFilterUI();
+          renderIconFilterUI();
           renderTagFilterUI();
         };
 
@@ -1681,8 +3379,45 @@
       }
     });
 
-    document.getElementById('delete-cancel').addEventListener('click', () => closeOverlay('delete-overlay'));
+    document.getElementById('delete-cancel').addEventListener('click', () => {
+      state.bulkDeletePending = false;
+      closeOverlay('delete-overlay');
+    });
     document.getElementById('delete-confirm').addEventListener('click', async () => {
+      if (state.bulkDeletePending) {
+        const ids = Array.from(state.selectedPinIds);
+        state.bulkDeletePending = false;
+        try {
+          const result = await withGAS('bulkDeletePins', { ids: ids });
+          if (!result || !result.ok) throw new Error(result && result.error ? result.error : '一括削除に失敗しました');
+          const failedSet = new Set(result.failedIds || []);
+          ids.forEach(function(id) {
+            if (failedSet.has(id)) return;
+            if (state.markers[id]) {
+              state.markers[id].remove();
+              delete state.markers[id];
+            }
+          });
+          const idsSet = new Set(ids);
+          state.pins = state.pins.filter(function(p) { return failedSet.has(p.id) || !idsSet.has(p.id); });
+          closeOverlay('delete-overlay');
+          clearSelection();
+          updateUnplacedBadge();
+          renderColorFilterUI();
+          renderIconFilterUI();
+          renderTagFilterUI();
+          renderSidePanel();
+          if (result.failedIds && result.failedIds.length > 0) {
+            alert(ids.length + '件中' + result.failedIds.length + '件の削除に失敗しました。');
+          }
+        } catch (error) {
+          state.bulkDeletePending = false;
+          closeOverlay('delete-overlay');
+          alert('一括削除に失敗しました。\n\n' + (error && error.message ? error.message : String(error)));
+        }
+        return;
+      }
+      // 既存の単体削除フロー
       const pin = getPinById(state.contextPinId);
       if (!pin) return;
       try {
@@ -1698,6 +3433,7 @@
         renderSidePanel();
         updateUnplacedBadge();
         renderColorFilterUI();
+        renderIconFilterUI();
         renderTagFilterUI();
       } catch (error) {
         alert('ピンの削除に失敗しました。\n\n' + (error && error.message ? error.message : String(error)));
@@ -1728,14 +3464,14 @@
         clearLinkedCardHighlight();
       });
       marker.on('contextmenu', event => {
-        if (!state.editMode) return;
+        if (!canEdit()) return;
         if (event.originalEvent) event.originalEvent.preventDefault();
         openPinMenu(pin);
       });
       marker.on('dragstart', () => {
         clearLinkedCardHighlight();
         clearLinkedMarkerHighlight();
-        if (!state.editMode) return;
+        if (!canEdit()) return;
         prevLat = pin.lat;
         prevLng = pin.lng;
         showDeleteZone();
@@ -1743,7 +3479,7 @@
       marker.on('dragend', async () => {
         clearLinkedCardHighlight();
         clearLinkedMarkerHighlight();
-        if (!state.editMode) return;
+        if (!canEdit()) return;
 
         const panelEl = document.getElementById('side-panel');
         const deleteZoneEl = document.getElementById('dnd-delete-zone');
@@ -1760,6 +3496,7 @@
           document.getElementById('delete-message').textContent = pin.fileId
             ? 'このピンを削除すると、対応する Drive 上の写真もゴミ箱に移動します。'
             : 'このピンを削除します。';
+          document.querySelector('#delete-overlay .sheet-title').textContent = 'ピンを削除';
           openOverlay('delete-overlay');
         } else if (overPanel) {
           // ③ マーカー → パネル：未配置に戻す
@@ -1783,6 +3520,7 @@
             if (!result || !result.ok) throw new Error(result && result.error ? result.error : '移動の保存に失敗しました');
             pin.lat = nextLatLng.lat;
             pin.lng = nextLatLng.lng;
+            renderRouteGroupLayers();
             renderSidePanel();
             updateUnplacedBadge();
           } catch (error) {
@@ -1796,7 +3534,7 @@
         if (!el) return;
         if (el.dataset) el.dataset.pinId = pin.id;
         attachLongPress(el, () => {
-          if (!state.editMode) return;
+          if (!canEdit()) return;
           openPinMenu(pin);
         });
       });
@@ -1807,11 +3545,16 @@
       clearLinkedMarkerHighlight();
       Object.values(state.markers).forEach(function(marker) { marker.remove(); });
       state.markers = {};
-      applyListFilters().forEach(function(pin) {
+      const entries = getVisiblePinEntries();
+      renderRouteGroupLayers(entries);
+      entries.forEach(function(entry) {
+        const pin = entry.pin;
         if (pin.lat == null || pin.lng == null) return;
+        if (!canEdit() && state.shareMode !== true && !isPinInAnyVisibleRoute(pin.id)) return;
+        const routeNumberDisplay = getRouteNumberDisplayForPin(pin.id, entries);
         const marker = L.marker([pin.lat, pin.lng], {
-          icon: createPinIcon(pin.color, false, !!pin.imageUrl),
-          draggable: state.editMode
+          icon: createPinIconForDisplay(pin, routeNumberDisplay),
+          draggable: canEdit()
         });
         bindMarkerInteractions(marker, pin);
         marker.addTo(map);
@@ -1819,27 +3562,839 @@
       });
     }
 
+    function createClientRouteId() {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        return window.crypto.randomUUID();
+      }
+      return 'route-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+    }
+
+    function getRouteId(group) {
+      return group ? String(group.id || group.routeId || '').trim() : '';
+    }
+
+    function getRouteGroupIndex(routeId) {
+      const id = String(routeId || '').trim();
+      return state.routeGroups.findIndex(function(group) {
+        return getRouteId(group) === id;
+      });
+    }
+
+    function getRouteGroupById(routeId) {
+      const index = getRouteGroupIndex(routeId);
+      return index === -1 ? null : state.routeGroups[index];
+    }
+
+    function cloneRouteGroupForState(group) {
+      const copy = cloneRouteGroup(group);
+      copy.createdAt = group && group.createdAt ? String(group.createdAt) : '';
+      return copy;
+    }
+
+    function buildRouteGroupSavePayload(group) {
+      const routeId = getRouteId(group);
+      const orderIndex = getRouteGroupIndex(routeId);
+      const endpoints = normalizeRouteEndpointSelection(group);
+      return {
+        id: routeId,
+        routeId: routeId,
+        name: String(group.name || '').trim(),
+        visible: group.visible !== false,
+        color: safeColor(group.color),
+        showNumbers: group.showNumbers !== false,
+        showLine: group.showLine !== false,
+        lineStyle: normalizeRouteLineStyle(group.lineStyle),
+        routeMode: group.routeMode === 'road' ? 'road' : 'straight',
+        closed: group.closed === true,
+        startPinId: endpoints.startPinId,
+        endPinId: group.closed ? null : endpoints.endPinId,
+        order: orderIndex === -1 ? state.routeGroups.length : orderIndex,
+        orderIndex: orderIndex === -1 ? state.routeGroups.length : orderIndex
+      };
+    }
+
+    function mergeSavedRouteGroup(saved, current) {
+      return cloneRouteGroupForState(Object.assign({}, current || {}, saved || {}, {
+        id: getRouteId(saved) || getRouteId(current),
+        routeId: getRouteId(saved) || getRouteId(current),
+        visible: saved && Object.prototype.hasOwnProperty.call(saved, 'visible') ? saved.visible : (current ? current.visible : true),
+        showNumbers: saved && Object.prototype.hasOwnProperty.call(saved, 'showNumbers') ? saved.showNumbers : (current ? current.showNumbers : true),
+        showLine: saved && Object.prototype.hasOwnProperty.call(saved, 'showLine') ? saved.showLine : (current ? current.showLine : true),
+        lineStyle: saved && Object.prototype.hasOwnProperty.call(saved, 'lineStyle')
+          ? normalizeRouteLineStyle(saved.lineStyle)
+          : normalizeRouteLineStyle(current && current.lineStyle)
+      }));
+    }
+
+    function rollbackRouteGroup(routeId, snapshot) {
+      const index = getRouteGroupIndex(routeId);
+      if (!snapshot) {
+        if (index !== -1) state.routeGroups.splice(index, 1);
+        if (state.routeUiOpenGroupId === routeId) state.routeUiOpenGroupId = null;
+        return;
+      }
+      if (index === -1) {
+        state.routeGroups.push(cloneRouteGroupForState(snapshot));
+      } else {
+        state.routeGroups[index] = cloneRouteGroupForState(snapshot);
+      }
+    }
+
+    function setRoutePendingSave(routeId, kind, payload, rollbackSnapshot, useDelay) {
+      const existing = state.routePendingSave[routeId];
+      if (existing && existing.timer) clearTimeout(existing.timer);
+      state.routePendingSave[routeId] = {
+        kind: kind || 'group',
+        payload: payload,
+        rollbackSnapshot: existing ? existing.rollbackSnapshot : rollbackSnapshot,
+        timer: null
+      };
+      if (useDelay) {
+        state.routePendingSave[routeId].timer = setTimeout(function() {
+          flushPendingRouteSave(routeId);
+        }, ROUTE_SAVE_DEBOUNCE_MS);
+      }
+    }
+
+    function queueRouteGroupSave(routeId, rollbackSnapshot) {
+      const group = getRouteGroupById(routeId);
+      if (!group) return;
+      const payload = buildRouteGroupSavePayload(group);
+      setRoutePendingSave(routeId, 'group', payload, rollbackSnapshot, !state.routeSaving[routeId]);
+      renderRoutePanel();
+    }
+
+    function flushPendingRouteSave(routeId) {
+      const pending = state.routePendingSave[routeId];
+      if (!pending || state.routeSaving[routeId]) return null;
+      if (pending.timer) clearTimeout(pending.timer);
+      delete state.routePendingSave[routeId];
+      if (pending.kind === 'pins') {
+        return saveRoutePinsQueued(routeId, pending.payload, pending.rollbackSnapshot);
+      }
+      return saveRouteGroupQueued(routeId, pending.payload, pending.rollbackSnapshot);
+    }
+
+    async function saveRouteGroupQueued(routeId, payload, rollbackSnapshot) {
+      state.routeSaving[routeId] = true;
+      renderRoutePanel();
+      try {
+        const result = await withGAS('saveRouteGroup', payload);
+        if (!result || result.ok === false) {
+          throw new Error(result && result.error ? result.error : 'ルートの保存に失敗しました');
+        }
+        if (!state.routePendingSave[routeId]) {
+          const saved = result.routeGroup || result.group || result.route || payload;
+          const index = getRouteGroupIndex(routeId);
+          if (index !== -1) {
+            state.routeGroups[index] = mergeSavedRouteGroup(saved, state.routeGroups[index]);
+            renderPins();
+          }
+        }
+      } catch (error) {
+        if (state.routePendingSave[routeId] && state.routePendingSave[routeId].timer) {
+          clearTimeout(state.routePendingSave[routeId].timer);
+        }
+        delete state.routePendingSave[routeId];
+        rollbackRouteGroup(routeId, rollbackSnapshot);
+        renderPins();
+        alert('ルートの保存に失敗しました。\n\n' + (error && error.message ? error.message : String(error)));
+      } finally {
+        delete state.routeSaving[routeId];
+        const nextPending = state.routePendingSave[routeId];
+        renderRoutePanel();
+        if (nextPending) {
+          flushPendingRouteSave(routeId);
+        }
+      }
+    }
+
+    function updateRouteGroupOptimistic(routeId, patch) {
+      if (!canEdit()) return;
+      const index = getRouteGroupIndex(routeId);
+      if (index === -1) return;
+      const snapshot = cloneRouteGroupForState(state.routeGroups[index]);
+      const current = Object.assign({}, state.routeGroups[index], patch || {});
+      if (current.closed) current.endPinId = null;
+      Object.assign(current, normalizeRouteEndpointSelection(current));
+      state.routeGroups[index] = cloneRouteGroupForState(current);
+      renderPins();
+      renderRoutePanel();
+      queueRouteGroupSave(routeId, snapshot);
+    }
+
+    function createRouteGroup() {
+      if (!canEdit()) return;
+      const rawName = prompt('ルート名を入力してください', '新しいルート');
+      if (rawName == null) return;
+      const name = rawName.trim();
+      if (!name) {
+        alert('ルート名を入力してください。');
+        return;
+      }
+      const routeId = createClientRouteId();
+      const now = new Date().toISOString();
+      const group = cloneRouteGroupForState({
+        id: routeId,
+        routeId: routeId,
+        name: name,
+        visible: true,
+        color: '#1e88e5',
+        showNumbers: true,
+        showLine: true,
+        lineStyle: 'solid',
+        routeMode: 'straight',
+        closed: false,
+        startPinId: null,
+        endPinId: null,
+        pinIds: [],
+        createdAt: now,
+        updatedAt: now
+      });
+      state.routeGroups.push(group);
+      state.routeUiOpenGroupId = routeId;
+      renderRoutePanel();
+      queueRouteGroupSave(routeId, null);
+    }
+
+    function editRouteGroupName(routeId) {
+      if (!canEdit()) return;
+      const group = getRouteGroupById(routeId);
+      if (!group) return;
+      const rawName = prompt('ルート名を入力してください', group.name || '');
+      if (rawName == null) return;
+      const name = rawName.trim();
+      if (!name) {
+        alert('ルート名を入力してください。');
+        return;
+      }
+      if (name === group.name) return;
+      updateRouteGroupOptimistic(routeId, { name: name });
+    }
+
+    async function deleteRouteGroupFromUi(routeId) {
+      if (!canEdit()) return;
+      const group = getRouteGroupById(routeId);
+      if (!group || state.routeSaving[routeId] || state.routePendingSave[routeId]) return;
+      if (!confirm('ルート「' + (group.name || '名称未設定のルート') + '」を削除しますか？')) return;
+      state.routeSaving[routeId] = true;
+      renderRoutePanel();
+      try {
+        const result = await withGAS('deleteRouteGroup', routeId);
+        if (!result || result.ok === false) {
+          throw new Error(result && result.error ? result.error : 'ルートの削除に失敗しました');
+        }
+        const index = getRouteGroupIndex(routeId);
+        if (index !== -1) state.routeGroups.splice(index, 1);
+        if (state.routeUiOpenGroupId === routeId) state.routeUiOpenGroupId = null;
+        if (state.routeEditOpenId === routeId) closeRouteEditOverlay();
+        if (state.routePendingSave[routeId] && state.routePendingSave[routeId].timer) {
+          clearTimeout(state.routePendingSave[routeId].timer);
+        }
+        delete state.routePendingSave[routeId];
+        renderPins();
+      } catch (error) {
+        alert('ルートの削除に失敗しました。\n\n' + (error && error.message ? error.message : String(error)));
+      } finally {
+        delete state.routeSaving[routeId];
+        renderRoutePanel();
+      }
+    }
+
+    function getRouteModeLabel(group) {
+      return group && group.routeMode === 'road' ? '道路' : '直線';
+    }
+
+    function getRoutePinOrderFromList(list) {
+      return Array.prototype.slice.call(list.querySelectorAll('.route-pin-row')).map(function(row) {
+        return String(row.dataset.pinId || '').trim();
+      }).filter(Boolean);
+    }
+
+    function canSortRoutePins(routeId, pinIds) {
+      return canQueueRoutePinChange(routeId) && Array.isArray(pinIds) && pinIds.length > 1;
+    }
+
+    function attachRoutePinSortable(list, routeId, pinIds) {
+      if (!canEdit() || !window.Sortable || !canSortRoutePins(routeId, pinIds)) return;
+      Sortable.create(list, {
+        animation: 140,
+        draggable: '.route-pin-row',
+        filter: '.route-pin-remove',
+        preventOnFilter: false,
+        ghostClass: 'is-route-drag-ghost',
+        chosenClass: 'is-route-dragging',
+        dragClass: 'is-route-dragging',
+        onStart: function(evt) {
+          state.routeDraggedPinId = evt.item && evt.item.dataset ? evt.item.dataset.pinId || null : null;
+        },
+        onEnd: function() {
+          if (!canEdit()) {
+            state.routeDraggedPinId = null;
+            renderRoutePanel();
+            return;
+          }
+          const group = getRouteGroupById(routeId);
+          const previousPinIds = getRoutePinIdsForState(group);
+          const nextPinIds = getRoutePinOrderFromList(list);
+          state.routeDraggedPinId = null;
+          if (!group || nextPinIds.length !== previousPinIds.length) {
+            renderRoutePanel();
+            return;
+          }
+          if (sameRoutePinOrder(nextPinIds, previousPinIds)) return;
+          updateRoutePinsOptimistic(routeId, nextPinIds);
+        }
+      });
+    }
+
+    function getRouteGroupOrderFromList(list) {
+      return Array.prototype.slice.call(list.querySelectorAll('.route-item')).map(function(item) {
+        return String(item.dataset.routeId || '').trim();
+      }).filter(Boolean);
+    }
+
+    function hasRouteSaveInFlight() {
+      return Object.keys(state.routeSaving).some(function(routeId) {
+        return state.routeSaving[routeId] === true;
+      });
+    }
+
+    function canSortRouteGroups(groups) {
+      if (!canEdit()) return false;
+      const pendingOrInFlight = hasRouteSaveInFlight()
+        || Object.keys(state.routePendingSave).length > 0;
+      return !state.routeOrderSaving
+        && !pendingOrInFlight
+        && Array.isArray(groups)
+        && groups.length > 1;
+    }
+
+    function attachRouteGroupSortable(list, groups) {
+      if (!canEdit() || !window.Sortable || !canSortRouteGroups(groups)) return;
+      Sortable.create(list, {
+        animation: 140,
+        draggable: '.route-item',
+        handle: '.route-summary',
+        ghostClass: 'is-route-drag-ghost',
+        chosenClass: 'is-route-dragging',
+        dragClass: 'is-route-dragging',
+        onStart: function(evt) {
+          state.routeDraggedGroupId = evt.item && evt.item.dataset ? evt.item.dataset.routeId || null : null;
+        },
+        onEnd: function() {
+          if (!canEdit()) {
+            state.routeDraggedGroupId = null;
+            renderRoutePanel();
+            return;
+          }
+          const previousIds = getRouteGroupIdsForState();
+          const nextIds = getRouteGroupOrderFromList(list);
+          state.routeDraggedGroupId = null;
+          state.suppressClickUntil = Date.now() + 200;
+          if (nextIds.length !== previousIds.length) {
+            renderRoutePanel();
+            return;
+          }
+          if (sameRouteGroupOrder(nextIds, previousIds)) return;
+          updateRoutesOrderOptimistic(nextIds);
+        }
+      });
+    }
+
+    function attachRoutePinDropTarget(target, routeId) {
+      if (!target || !canEdit()) return;
+      target.dataset.routeId = routeId;
+      target.title = '配置済みピンをドロップしてルートに追加';
+      target.addEventListener('dragover', function(e) {
+        if (!canEdit() || !state.draggedPinId) return;
+        const dropInfo = getRoutePinDropInfo(routeId, state.draggedPinId);
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = dropInfo.acceptsDrop && dropInfo.canAdd ? 'move' : 'none';
+        target.classList.add('dragover');
+        setRoutePinDropTargetState(target, dropInfo, true);
+      });
+      target.addEventListener('dragleave', function(e) {
+        if (!canEdit()) {
+          clearRoutePinDropTargetState(target);
+          return;
+        }
+        if (!target.contains(e.relatedTarget)) {
+          clearRoutePinDropTargetState(target);
+          if (state.draggedPinId) setRoutePinDropTargetState(target, getRoutePinDropInfo(routeId, state.draggedPinId), false);
+        }
+      });
+      target.addEventListener('drop', function(e) {
+        if (!canEdit() || !state.draggedPinId) return;
+        const id = state.draggedPinId;
+        e.preventDefault();
+        e.stopPropagation();
+        clearRoutePinDropTargetStates();
+        state.draggedPinId = null;
+        addPlacedPinToRouteFromDrop(routeId, id);
+      });
+    }
+
+    function buildRoutePinList(group, routeId, isBusy, filteredPinIdSet) {
+      const list = document.createElement('div');
+      list.className = 'route-pin-list dnd-drop-target';
+      list.dataset.routeId = routeId;
+      const editable = canEdit();
+      const pinIds = getRoutePinIdsForState(group);
+      const routePinSortable = canSortRoutePins(routeId, pinIds);
+      if (!pinIds.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-note';
+        empty.textContent = editable ? '所属ピンはまだありません。配置済みピンをここへドロップできます。' : '所属ピンはまだありません。';
+        list.appendChild(empty);
+        attachRoutePinDropTarget(list, routeId);
+        return list;
+      }
+
+      const endpoints = normalizeRouteEndpointSelection(group);
+      pinIds.forEach(function(pinId, index) {
+        const pin = getPinById(pinId);
+        const isFilteredOut = !filteredPinIdSet || !filteredPinIdSet.has(pinId);
+        const row = document.createElement('div');
+        row.className = 'route-pin-row' + (routePinSortable ? ' is-route-sortable' : '') + (isFilteredOut ? ' is-filtered-out' : '');
+        row.dataset.pinId = pinId;
+
+        const order = document.createElement('span');
+        order.className = 'route-pin-order';
+        order.textContent = String(index + 1);
+        if (routePinSortable) {
+          order.title = 'ドラッグして並び替え';
+        }
+        row.appendChild(order);
+
+        const title = document.createElement('span');
+        title.className = 'route-pin-title';
+        title.textContent = pin ? (pin.title || '(無題)') : '(削除済みピン)';
+        if (pinId === endpoints.startPinId) {
+          const startNote = document.createElement('span');
+          startNote.className = 'route-pin-hidden-note';
+          startNote.textContent = ' 始';
+          title.appendChild(startNote);
+        }
+        if (pinId === endpoints.endPinId) {
+          const endNote = document.createElement('span');
+          endNote.className = 'route-pin-hidden-note';
+          endNote.textContent = ' 終';
+          title.appendChild(endNote);
+        }
+        if (isFilteredOut) {
+          const hiddenNote = document.createElement('span');
+          hiddenNote.className = 'route-pin-hidden-note';
+          hiddenNote.textContent = ' 非表示中';
+          title.appendChild(hiddenNote);
+        }
+        row.appendChild(title);
+
+        if (editable) {
+          const removeButton = document.createElement('button');
+          removeButton.type = 'button';
+          removeButton.className = 'route-pin-remove';
+          removeButton.textContent = '✖';
+          removeButton.title = 'ルートから外す';
+          removeButton.setAttribute('aria-label', 'ルートから外す');
+          removeButton.disabled = isBusy || !canEdit();
+          removeButton.addEventListener('click', function() {
+            if (!canEdit()) return;
+            removePinFromRoute(routeId, pinId);
+          });
+          row.appendChild(removeButton);
+        }
+
+        list.appendChild(row);
+      });
+      attachRoutePinSortable(list, routeId, pinIds);
+      attachRoutePinDropTarget(list, routeId);
+      return list;
+    }
+
+    function buildRoutePinSelect(labelText, value, group, disabled, onChange) {
+      const wrapper = document.createElement('label');
+      wrapper.className = 'route-setting-control';
+      const label = document.createElement('span');
+      label.className = 'route-setting-label';
+      label.textContent = labelText;
+      wrapper.appendChild(label);
+
+      const select = document.createElement('select');
+      select.className = 'route-setting-select';
+      select.disabled = disabled;
+      const none = document.createElement('option');
+      none.value = '';
+      none.textContent = '指定なし';
+      select.appendChild(none);
+
+      getRoutePinIdsForState(group).forEach(function(pinId, index) {
+        const pin = getPinById(pinId);
+        const option = document.createElement('option');
+        option.value = pinId;
+        option.textContent = (index + 1) + '. ' + (pin ? (pin.title || '(無題)') : '(削除済みピン)');
+        select.appendChild(option);
+      });
+      select.value = value || '';
+      select.addEventListener('change', function() {
+        onChange(select.value || null);
+      });
+      wrapper.appendChild(select);
+      return wrapper;
+    }
+
+    function buildRouteSettingSwitch(titleText, target, active, disabled, onClick) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'toggle-switch' + (active ? ' on' : '');
+      button.dataset.target = target;
+      button.title = titleText;
+      button.setAttribute('aria-label', titleText);
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
+      button.disabled = disabled;
+      button.addEventListener('click', onClick);
+      return button;
+    }
+
+    function buildRouteEditToggleControl(titleText, noteText, target, active, disabled, onClick) {
+      const row = document.createElement('div');
+      row.className = 'section-card route-toggle-row';
+      const text = document.createElement('div');
+      text.className = 'route-edit-row-text';
+      const title = document.createElement('div');
+      title.className = 'route-toggle-title';
+      title.textContent = titleText;
+      const note = document.createElement('div');
+      note.className = 'muted';
+      note.textContent = noteText;
+      text.appendChild(title);
+      text.appendChild(note);
+      row.appendChild(text);
+
+      row.appendChild(buildRouteSettingSwitch(titleText, target, active, disabled, onClick));
+      return row;
+    }
+
+    function commitRouteEditName(routeId) {
+      const input = document.getElementById('route-edit-name');
+      const group = getRouteGroupById(routeId);
+      if (!input || !group) return;
+      const name = input.value.trim();
+      if (!name) {
+        alert('ルート名を入力してください。');
+        input.value = group.name || '';
+        return;
+      }
+      if (name === group.name) return;
+      updateRouteGroupOptimistic(routeId, { name: name });
+    }
+
+    function renderRouteEditOverlay() {
+      const overlay = document.getElementById('route-edit-overlay');
+      if (!overlay) return;
+      if (state.shareMode) {
+        state.routeEditOpenId = null;
+        closeOverlay('route-edit-overlay');
+        return;
+      }
+      if (!canEdit()) {
+        state.routeEditOpenId = null;
+        closeOverlay('route-edit-overlay');
+        return;
+      }
+      const routeId = String(state.routeEditOpenId || '').trim();
+      const group = getRouteGroupById(routeId);
+      if (!routeId || !group) {
+        state.routeEditOpenId = null;
+        closeOverlay('route-edit-overlay');
+        return;
+      }
+
+      const isBusy = isRouteBusy(routeId);
+      const disabled = isBusy || state.shareMode;
+      const isVisible = group.visible !== false;
+      const showNumbers = group.showNumbers !== false;
+      const showLine = group.showLine !== false;
+      const isRoad = group.routeMode === 'road';
+      const isClosed = group.closed === true;
+      const endpoints = normalizeRouteEndpointSelection(group);
+
+      document.getElementById('route-edit-title').textContent = 'ルート詳細設定';
+
+      const nameInput = document.getElementById('route-edit-name');
+      nameInput.value = group.name || '';
+      nameInput.disabled = disabled;
+      nameInput.onchange = function() {
+        commitRouteEditName(routeId);
+      };
+      nameInput.onkeydown = function(event) {
+        if (event.key === 'Enter') nameInput.blur();
+      };
+
+      const colorPalette = document.getElementById('route-edit-color-palette');
+      colorPalette.classList.toggle('is-disabled', disabled);
+      paletteSelect('route-edit-color-palette', safeColor(group.color), function(hex) {
+        if (disabled) return;
+        updateRouteGroupOptimistic(routeId, { color: safeColor(hex) });
+      });
+
+      const controls = document.getElementById('route-edit-controls');
+      controls.innerHTML = '';
+      controls.appendChild(buildRouteEditToggleControl('表示/非表示', '地図上のルート表示を切り替えます。', 'visible', isVisible, disabled, function() {
+        updateRouteGroupOptimistic(routeId, { visible: !isVisible });
+      }));
+      controls.appendChild(buildRouteEditToggleControl('番号を表示', '所属ピンにルート内の番号を表示します。', 'showNumbers', showNumbers, disabled, function() {
+        updateRouteGroupOptimistic(routeId, { showNumbers: !showNumbers });
+      }));
+      controls.appendChild(buildRouteEditToggleControl('線を表示', 'ルート線を地図上に描画します。', 'showLine', showLine, disabled, function() {
+        updateRouteGroupOptimistic(routeId, { showLine: !showLine });
+      }));
+      controls.appendChild(buildRouteEditToggleControl('道路に沿わせる', 'ON のとき道路に沿わせ、OFF のときは地点同士を直接結びます。', 'routeModeRoad', isRoad, disabled, function() {
+        updateRouteGroupOptimistic(routeId, { routeMode: isRoad ? 'straight' : 'road' });
+      }));
+      controls.appendChild(buildRouteEditToggleControl('循環ルート', 'ON にすると終点指定を無効にし、終点は保存時に空になります。', 'closed', isClosed, disabled, function() {
+        updateRouteGroupOptimistic(routeId, { closed: !isClosed, endPinId: null });
+      }));
+
+      const lineStyleSelect = document.getElementById('route-edit-line-style');
+      lineStyleSelect.value = normalizeRouteLineStyle(group.lineStyle);
+      lineStyleSelect.disabled = disabled;
+      lineStyleSelect.onchange = function() {
+        const lineStyle = normalizeRouteLineStyle(lineStyleSelect.value);
+        if (lineStyle === normalizeRouteLineStyle(group.lineStyle)) return;
+        updateRouteGroupOptimistic(routeId, { lineStyle: lineStyle });
+      };
+
+      const endpointsEl = document.getElementById('route-edit-endpoints');
+      endpointsEl.innerHTML = '';
+      endpointsEl.appendChild(buildRoutePinSelect('始点', endpoints.startPinId, group, disabled, function(pinId) {
+        updateRouteGroupOptimistic(routeId, { startPinId: pinId });
+      }));
+      endpointsEl.appendChild(buildRoutePinSelect('終点', endpoints.endPinId, group, isClosed || disabled, function(pinId) {
+        updateRouteGroupOptimistic(routeId, { endPinId: pinId });
+      }));
+
+      const deleteButton = document.getElementById('route-edit-delete');
+      deleteButton.disabled = disabled;
+      deleteButton.onclick = async function() {
+        await deleteRouteGroupFromUi(routeId);
+        if (!getRouteGroupById(routeId)) closeRouteEditOverlay();
+      };
+    }
+
+    function openRouteEditOverlay(routeId) {
+      if (!canEdit()) return;
+      const id = String(routeId || '').trim();
+      if (!id || !getRouteGroupById(id)) return;
+      state.routeEditOpenId = id;
+      renderRouteEditOverlay();
+      openOverlay('route-edit-overlay');
+    }
+
+    function closeRouteEditOverlay() {
+      state.routeEditOpenId = null;
+      closeOverlay('route-edit-overlay');
+    }
+
+    function buildRouteItem(group) {
+      const item = document.createElement('div');
+      const routeId = group.id || group.routeId;
+      const isOpen = state.routeUiOpenGroupId === routeId;
+      const isVisible = group.visible !== false;
+      const hasPendingSave = !!state.routePendingSave[routeId];
+      const routePinIds = getRoutePinIdsForState(group);
+      const pinCount = routePinIds.length;
+      const filteredPinIdSet = getFilteredPinIdSet();
+      const visiblePinCount = getRouteVisiblePinCount(group, filteredPinIdSet);
+      const isBusy = isRouteBusy(routeId);
+      const roadStatus = getRouteRoadStatus(routeId);
+      const distanceInfo = getRouteDistanceInfo(group, filteredPinIdSet);
+      const editable = canEdit();
+      const roadFallbackActive = group.routeMode === 'road'
+        && roadStatus
+        && roadStatus.status === 'fallback'
+        && (!roadStatus.key || roadStatus.key === buildRoadRouteCacheKey(group, filteredPinIdSet, ROAD_ROUTE_PROVIDER));
+      const routeGroupSortable = canSortRouteGroups(state.routeGroups);
+      item.className = 'route-item dnd-drop-target' + (routeGroupSortable ? ' is-route-sortable' : '') + (isOpen ? ' is-open' : '') + (isVisible ? '' : ' is-hidden') + (isBusy ? ' is-saving' : '');
+      item.dataset.routeId = routeId;
+      attachRoutePinDropTarget(item, routeId);
+
+      const summary = document.createElement('button');
+      summary.type = 'button';
+      summary.className = 'route-summary';
+      summary.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      summary.addEventListener('click', function() {
+        if (Date.now() < state.suppressClickUntil) return;
+        state.routeUiOpenGroupId = isOpen ? null : routeId;
+        renderRoutePanel();
+      });
+
+      const toggle = document.createElement('span');
+      toggle.className = 'route-toggle';
+      toggle.textContent = isOpen ? '▼' : '▶';
+      summary.appendChild(toggle);
+
+      const swatch = document.createElement('span');
+      swatch.className = 'route-color-swatch';
+      swatch.style.background = safeColor(group.color);
+      summary.appendChild(swatch);
+
+      const main = document.createElement('span');
+      main.className = 'route-main';
+      const name = document.createElement('span');
+      name.className = 'route-name';
+      name.textContent = group.name || '名称未設定のルート';
+      const meta = document.createElement('span');
+      meta.className = 'route-meta';
+      meta.textContent = formatRouteMetaText(visiblePinCount, pinCount, distanceInfo);
+      main.appendChild(name);
+      main.appendChild(meta);
+      if (roadFallbackActive) {
+        const roadNote = document.createElement('span');
+        roadNote.className = 'route-road-note';
+        roadNote.textContent = getRouteRoadFallbackMessage(roadStatus.reason);
+        main.appendChild(roadNote);
+      }
+      summary.appendChild(main);
+
+      const visibility = document.createElement('span');
+      visibility.className = 'route-visibility' + (isVisible ? ' is-visible' : '');
+      visibility.textContent = isVisible ? '表示' : '非表示';
+      summary.appendChild(visibility);
+      const saving = document.createElement('span');
+      saving.className = 'route-saving';
+      saving.textContent = hasPendingSave ? '保存待ち' : '保存中';
+      summary.appendChild(saving);
+      item.appendChild(summary);
+
+      if (roadFallbackActive && editable) {
+        const roadActions = document.createElement('div');
+        roadActions.className = 'route-road-actions';
+        const retryButton = document.createElement('button');
+        retryButton.type = 'button';
+        retryButton.className = 'ghost-btn';
+        retryButton.disabled = !!state.roadRequestAbort[routeId] || !canEdit();
+        retryButton.textContent = '再試行';
+        retryButton.addEventListener('click', function() {
+          if (!canEdit()) return;
+          retryRoadRoute(routeId);
+        });
+        roadActions.appendChild(retryButton);
+        item.appendChild(roadActions);
+      }
+
+      const detail = document.createElement('div');
+      detail.className = 'route-detail';
+      const detailRow = document.createElement('div');
+      detailRow.className = 'route-detail-row';
+      const detailText = document.createElement('div');
+      detailText.className = 'route-detail-title';
+      detailText.textContent = '所属ピン';
+      detailRow.appendChild(detailText);
+
+      const actions = document.createElement('div');
+      actions.className = 'route-item-actions';
+      if (editable) {
+        const chronologicalButton = document.createElement('button');
+        chronologicalButton.type = 'button';
+        chronologicalButton.className = 'ghost-btn';
+        chronologicalButton.disabled = !canSortRoutePins(routeId, routePinIds);
+        chronologicalButton.textContent = '時系列に戻す';
+        chronologicalButton.addEventListener('click', function() {
+          if (!canEdit()) return;
+          resetRoutePinsToChronological(routeId);
+        });
+        actions.appendChild(chronologicalButton);
+
+        const undoButton = document.createElement('button');
+        undoButton.type = 'button';
+        undoButton.className = 'ghost-btn';
+        undoButton.disabled = !canQueueRoutePinChange(routeId) || !canUndoRoutePinChange(routeId);
+        undoButton.textContent = 'Undo';
+        undoButton.addEventListener('click', function() {
+          if (!canEdit()) return;
+          undoRoutePinChange(routeId);
+        });
+        actions.appendChild(undoButton);
+
+        const detailSettingsButton = document.createElement('button');
+        detailSettingsButton.type = 'button';
+        detailSettingsButton.className = 'ghost-btn route-settings-action';
+        detailSettingsButton.disabled = isBusy || !canEdit();
+        detailSettingsButton.textContent = '詳細設定';
+        detailSettingsButton.addEventListener('click', function() {
+          if (!canEdit()) return;
+          openRouteEditOverlay(routeId);
+        });
+        actions.appendChild(detailSettingsButton);
+      }
+      detailRow.appendChild(actions);
+      detail.appendChild(detailRow);
+      detail.appendChild(buildRoutePinList(group, routeId, isBusy, filteredPinIdSet));
+      item.appendChild(detail);
+
+      return item;
+    }
+
+    function renderRoutePanel() {
+      const list = document.getElementById('route-list');
+      if (!list) return;
+      if (state.shareMode) {
+        state.routeUiOpenGroupId = null;
+        if (state.routeEditOpenId) closeRouteEditOverlay();
+        list.innerHTML = '';
+        return;
+      }
+      const groups = Array.isArray(state.routeGroups) ? state.routeGroups : [];
+      if (state.routeUiOpenGroupId && !groups.some(function(group) {
+        return (group.id || group.routeId) === state.routeUiOpenGroupId;
+      })) {
+        state.routeUiOpenGroupId = null;
+      }
+      if (state.routeEditOpenId && !groups.some(function(group) {
+        return (group.id || group.routeId) === state.routeEditOpenId;
+      })) {
+        closeRouteEditOverlay();
+      }
+      list.innerHTML = '';
+      if (!groups.length) {
+        list.innerHTML = '<div class="empty-note">ルートはまだありません。</div>';
+        return;
+      }
+      groups.forEach(function(group) {
+        if (!group || !(group.id || group.routeId)) return;
+        list.appendChild(buildRouteItem(group));
+      });
+      attachRouteGroupSortable(list, groups);
+      if (state.routeEditOpenId) renderRouteEditOverlay();
+    }
+
     function renderSidePanel() {
       clearLinkedCardHighlight();
       clearLinkedMarkerHighlight();
       const unplacedContainer = document.getElementById('side-unplaced');
       const placedContainer = document.getElementById('side-placed');
-      const filtered = applyListFilters();
-      const unplaced = filtered.filter(pin => pin.lat == null || pin.lng == null);
-      const placed = filtered.filter(pin => pin.lat != null && pin.lng != null);
+      const entries = getVisiblePinEntries();
+      const unplaced = entries.filter(entry => entry.pin.lat == null || entry.pin.lng == null);
+      const placed = entries.filter(entry => entry.pin.lat != null && entry.pin.lng != null);
       const filters = getActivePinFilterState();
 
       const isFiltered = filters.query
         || filters.status !== 'all'
         || filters.tags.length > 0
-        || filters.colors.length > 0;
+        || filters.colors.length > 0
+        || filters.icons.length > 0;
+
+      renderRoutePanel();
 
       unplacedContainer.innerHTML = '<div class="side-title">未配置</div>';
       if (!unplaced.length) {
         unplacedContainer.innerHTML += '<div class="empty-note">' + (isFiltered ? '条件に一致するピンがありません。' : '未配置ピンはありません。') + '</div>';
       } else {
-        unplaced.forEach(pin => {
-          unplacedContainer.appendChild(buildListItem(pin, { onClick: () => openPinDetail(pin), onMenu: () => openPinMenu(pin), enableLinkedMarkerHighlight: false }));
+        unplaced.forEach(entry => {
+          const pin = entry.pin;
+          unplacedContainer.appendChild(buildListItem(pin, { onClick: () => openPinDetail(pin), onMenu: canEdit() ? () => openPinMenu(pin) : null, enableLinkedMarkerHighlight: false, enableEditorDoubleClick: canEdit() }));
         });
       }
 
@@ -1847,11 +4402,18 @@
       if (!placed.length) {
         placedContainer.innerHTML += '<div class="empty-note">' + (isFiltered ? '条件に一致するピンがありません。' : 'まだ配置済みピンがありません。') + '</div>';
       } else {
-        placed.forEach(pin => {
-          placedContainer.appendChild(buildListItem(pin, { onClick: () => focusPin(pin), onMenu: () => openPinMenu(pin), enableLinkedMarkerHighlight: true }));
+        placed.forEach(entry => {
+          const pin = entry.pin;
+          placedContainer.appendChild(buildListItem(pin, { onClick: () => focusPin(pin), onMenu: canEdit() ? () => openPinMenu(pin) : null, enableLinkedMarkerHighlight: true, enableEditorDoubleClick: canEdit() }));
         });
       }
     }
+
+    document.getElementById('route-add-btn').addEventListener('click', function() {
+      if (!canEdit()) return;
+      createRouteGroup();
+    });
+    document.getElementById('route-edit-close').addEventListener('click', closeRouteEditOverlay);
 
     document.getElementById('unplaced-badge').addEventListener('click', () => {
       const list = document.getElementById('unplaced-list');
@@ -1860,8 +4422,11 @@
       if (!unplaced.length) {
         list.innerHTML = '<div class="empty-note">未配置ピンはありません。</div>';
       } else {
-        unplaced.forEach(pin => list.appendChild(buildListItem(pin, { onClick: () => openPinDetail(pin), onMenu: () => openPinMenu(pin), enableLinkedMarkerHighlight: false })));
+        unplaced.forEach(pin => list.appendChild(buildListItem(pin, { onClick: () => openPinDetail(pin), onMenu: canEdit() ? () => openPinMenu(pin) : null, enableLinkedMarkerHighlight: false })));
       }
+      document.querySelector('#unplaced-overlay .sheet-subtitle').textContent = canEdit()
+        ? 'タップで詳細、長押しまたは右クリックで操作メニューを開けます。'
+        : 'タップで詳細を確認できます。';
       openOverlay('unplaced-overlay');
     });
     document.getElementById('unplaced-close').addEventListener('click', () => closeOverlay('unplaced-overlay'));
@@ -1875,10 +4440,17 @@
       document.getElementById('upload-status-group').style.display = next ? '' : 'none';
       document.getElementById('map-filter-status-btn').style.display = next ? '' : 'none';
       if (!next) {
+        if (state.routeEditOpenId) closeRouteEditOverlay();
+        clearPlacement();
+        state.draggedPinId = null;
+        state.routeDraggedGroupId = null;
+        state.routeDraggedPinId = null;
+        hideDeleteZone();
         state.listStatusFilter = 'all';
         document.getElementById('map-status-filter').value = 'all';
         document.getElementById('map-filter-status-detail').style.display = 'none';
         state.selectedPinIds = new Set();
+        state.bulkDeletePending = false;
         updateBulkBar();
       }
       renderPins();
@@ -1889,6 +4461,15 @@
     document.getElementById('edit-toggle').addEventListener('click', () => setEditMode(!state.editMode));
 
     document.getElementById('bulk-cancel-btn').addEventListener('click', clearSelection);
+    document.getElementById('bulk-delete-btn').addEventListener('click', function() {
+      const count = state.selectedPinIds.size;
+      if (!count) return;
+      state.bulkDeletePending = true;
+      document.querySelector('#delete-overlay .sheet-title').textContent = 'ピンを一括削除';
+      document.getElementById('delete-message').textContent =
+        count + '件のピンを削除します。写真がある場合は Drive のゴミ箱に移動します。この操作は取り消せません。';
+      openOverlay('delete-overlay');
+    });
     document.getElementById('bulk-apply-btn').addEventListener('click', async function() {
       if (!state.selectedPinIds.size) return;
       const nextStatus = document.getElementById('bulk-status-select').value;
@@ -1908,10 +4489,13 @@
 
     function updateFilterButtonIndicators() {
       const colorActive = state.listColorFilter.length > 0;
+      const iconActive = state.listIconFilter.length > 0;
       const tagActive = state.listTagFilter.length > 0;
       const statusActive = state.listStatusFilter !== 'all';
       document.getElementById('map-filter-color-btn')
         .classList.toggle('filter-active', colorActive);
+      document.getElementById('map-filter-icon-btn')
+        .classList.toggle('filter-active', iconActive);
       document.getElementById('map-filter-tag-btn')
         .classList.toggle('filter-active', tagActive);
       document.getElementById('map-filter-status-btn')
@@ -1925,16 +4509,125 @@
       state.listTagFilter = [];
       state.listTagMode = 'or';
       state.listColorFilter = [];
+      state.listIconFilter = [];
       document.getElementById('map-search-input').value = '';
       document.getElementById('map-status-filter').value = 'all';
       document.getElementById('map-sort').value = 'newest';
       document.getElementById('map-tag-mode-btn').textContent = 'OR';
       renderColorFilterUI();
+      renderIconFilterUI();
       renderTagFilterUI();
       updateFilterButtonIndicators();
       renderPins();
       renderSidePanel();
     }
+
+    // --- ジオコーディング検索 ---
+    function closeGeocodePanel(panelEl) {
+      panelEl.dataset.geocodeRequestId = '';
+      panelEl.style.display = 'none';
+      panelEl.innerHTML = '';
+    }
+
+    function renderGeocodeResults(results, getMapFn, panelEl) {
+      panelEl.innerHTML = '';
+      if (!results || results.length === 0) {
+        var msg = document.createElement('div');
+        msg.className = 'geocode-result-msg';
+        msg.textContent = '場所が見つかりません';
+        panelEl.appendChild(msg);
+        return;
+      }
+      results.forEach(function(r) {
+        var parts = r.display_name.split(', ');
+        var name = r.name || parts[0];
+        var address = parts.slice(1).join(', ');
+
+        var item = document.createElement('div');
+        item.className = 'geocode-result-item';
+
+        var nameEl = document.createElement('div');
+        nameEl.className = 'geocode-result-name';
+        nameEl.textContent = name;
+
+        var addrEl = document.createElement('div');
+        addrEl.className = 'geocode-result-address';
+        addrEl.textContent = address;
+
+        item.appendChild(nameEl);
+        item.appendChild(addrEl);
+        item.addEventListener('click', function() {
+          getMapFn().flyTo([parseFloat(r.lat), parseFloat(r.lon)], 15);
+          closeGeocodePanel(panelEl);
+        });
+        panelEl.appendChild(item);
+      });
+    }
+
+    async function geocodeSearch(query, getMapFn, panelEl, requestId) {
+      panelEl.dataset.geocodeRequestId = requestId;
+      panelEl.style.display = '';
+      var spinner = document.createElement('div');
+      spinner.className = 'geocode-result-msg';
+      spinner.textContent = '検索中...';
+      panelEl.innerHTML = '';
+      panelEl.appendChild(spinner);
+      try {
+        var url = 'https://nominatim.openstreetmap.org/search'
+          + '?format=json&limit=5&accept-language=ja'
+          + '&viewbox=122,46,154,24&bounded=0'
+          + '&q=' + encodeURIComponent(query);
+        var res = await fetch(url);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        var results = await res.json();
+        if (panelEl.dataset.geocodeRequestId !== requestId) return;
+        renderGeocodeResults(results, getMapFn, panelEl);
+      } catch (err) {
+        if (panelEl.dataset.geocodeRequestId !== requestId) return;
+        panelEl.innerHTML = '';
+        var errMsg = document.createElement('div');
+        errMsg.className = 'geocode-result-msg';
+        errMsg.textContent = '通信エラーが発生しました';
+        panelEl.appendChild(errMsg);
+      }
+    }
+
+    function setupGeoSearch(inputEl, getMapFn, panelEl) {
+      var isSearching = false;
+      var requestSeq = 0;
+      function closeCurrentPanel() {
+        isSearching = false;
+        closeGeocodePanel(panelEl);
+      }
+      inputEl.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+          closeCurrentPanel();
+          return;
+        }
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        var query = inputEl.value.trim();
+        if (!query) {
+          closeCurrentPanel();
+          return;
+        }
+        if (isSearching) return;
+        isSearching = true;
+        requestSeq += 1;
+        var requestId = String(requestSeq);
+        geocodeSearch(query, getMapFn, panelEl, requestId).finally(function() {
+          if (panelEl.dataset.geocodeRequestId === requestId) {
+            isSearching = false;
+          }
+        });
+      });
+      document.addEventListener('click', function(e) {
+        if (!panelEl.contains(e.target) && e.target !== inputEl) {
+          closeCurrentPanel();
+        }
+      });
+    }
+    // --- ジオコーディング検索ここまで ---
 
     document.getElementById('map-search-input').addEventListener('input', function() {
       state.listQuery = this.value;
@@ -1952,6 +4645,11 @@
       renderSidePanel();
     });
     document.getElementById('map-filter-clear-btn').addEventListener('click', clearMapSearchFilters);
+    setupGeoSearch(
+      document.getElementById('map-search-input'),
+      function() { return map; },
+      document.getElementById('geocode-results')
+    );
 
     document.getElementById('map-search-toggle').addEventListener('click', function() {
       const expanded = document.getElementById('map-search-expanded');
@@ -1964,6 +4662,7 @@
       const categories = [
         { btnId: 'map-filter-status-btn', detailId: 'map-filter-status-detail' },
         { btnId: 'map-filter-color-btn',  detailId: 'map-filter-color-detail'  },
+        { btnId: 'map-filter-icon-btn',   detailId: 'map-filter-icon-detail'   },
         { btnId: 'map-filter-tag-btn',    detailId: 'map-filter-tag-detail'    },
       ];
       categories.forEach(function(cat) {
@@ -2043,10 +4742,11 @@
     });
 
     function resetUploadState() {
-      state.upload = { file: null, lat: null, lng: null, color: PIN_COLORS[0].hex };
+      state.upload = { file: null, lat: null, lng: null, color: PIN_COLORS[0].hex, icon: PIN_ICONS[0].id };
       document.getElementById('file-input').value = '';
       document.getElementById('upload-title').value = '';
       document.getElementById('upload-desc').value = '';
+      document.getElementById('upload-event-at').value = '';
       document.getElementById('upload-status').value = '未対応';
       document.getElementById('upload-tags').value = '';
       document.getElementById('upload-preview').style.display = 'none';
@@ -2055,6 +4755,7 @@
       document.getElementById('file-drop').classList.remove('has-file');
       ensureUrlInputs('upload-links', []);
       setUploadColor(PIN_COLORS[0].hex);
+      setUploadIcon(PIN_ICONS[0].id);
       uploadFolderState.stack = [];
       uploadFolderState.currentFolderId = state.appSettings.rootFolderId;
       uploadFolderState.currentFolderUrl = state.appSettings.rootFolderUrl;
@@ -2064,6 +4765,7 @@
     }
 
     function openUploadModal() {
+      if (!canEdit()) return;
       resetUploadState();
       openOverlay('upload-overlay');
     }
@@ -2102,6 +4804,33 @@
           resolve(lat != null && lng != null ? { lat, lng } : null);
         });
       });
+    }
+
+    function parseExifDateTimeOriginal(value) {
+      const match = String(value || '').trim().match(/^(\d{4}):(\d{2}):(\d{2})\s+(\d{2}):(\d{2})(?::\d{2})?$/);
+      if (!match) return '';
+      return match[1] + '-' + match[2] + '-' + match[3] + 'T' + match[4] + ':' + match[5];
+    }
+
+    function readExifDateTimeOriginal(file) {
+      return new Promise(resolve => {
+        if (!file) {
+          resolve('');
+          return;
+        }
+        EXIF.getData(file, function() {
+          resolve(parseExifDateTimeOriginal(EXIF.getTag(this, 'DateTimeOriginal')));
+        });
+      });
+    }
+
+    async function fillUploadEventAtFromExif(showMessage) {
+      const value = await readExifDateTimeOriginal(state.upload.file);
+      if (value) {
+        document.getElementById('upload-event-at').value = value;
+      } else if (showMessage) {
+        alert('EXIFから撮影日時を取得できませんでした。');
+      }
     }
 
     function resizeWithOrientation(file, maxSize) {
@@ -2160,11 +4889,20 @@
       const gps = await readExifGps(file);
       state.upload.lat = gps ? gps.lat : null;
       state.upload.lng = gps ? gps.lng : null;
+      if (!document.getElementById('upload-event-at').value) {
+        await fillUploadEventAtFromExif(false);
+      }
       refreshRenameNotes();
     });
 
     document.getElementById('upload-title').addEventListener('input', refreshRenameNotes);
     document.getElementById('edit-title').addEventListener('input', refreshRenameNotes);
+    document.getElementById('upload-event-at-exif').addEventListener('click', function() {
+      fillUploadEventAtFromExif(true).catch(showAsyncError_);
+    });
+    document.getElementById('edit-event-at-exif').addEventListener('click', function() {
+      alert('EXIFから取得できるのは、新規追加時に選択した写真のみです。');
+    });
 
     function openLocationChoice(message, onPlaceNow, onSaveLater) {
       document.getElementById('location-choice-message').textContent = message;
@@ -2185,7 +4923,8 @@
       clearPlacement();
       const pin = options.mode === 'existing' ? getPinById(options.pinId) : null;
       const color = pin ? pin.color : options.draft.color;
-      const marker = L.marker(map.getCenter(), { icon: createPinIcon(color, true, false), draggable: true }).addTo(map);
+      const icon = pin ? pin.icon : options.draft.icon;
+      const marker = L.marker(map.getCenter(), { icon: createPinIcon(color, true, false, icon), draggable: true }).addTo(map);
       state.placement = { mode: options.mode, pinId: options.pinId || null, draft: options.draft || null, marker: marker };
       if (options.mode === 'new') closeOverlay('upload-overlay');
       showHint('ドラッグで位置を調整して「ここに置く」を押してください');
@@ -2208,9 +4947,11 @@
           filename: draft.file ? draft.file.name : '',
           title: draft.title,
           description: draft.description,
+          eventAt: draft.eventAt,
           lat: coords && coords.lat != null ? coords.lat : null,
           lng: coords && coords.lng != null ? coords.lng : null,
           color: draft.color,
+          icon: draft.icon,
           links: draft.links,
           targetFolderId: currentFolderIdOrRoot(),
           status: draft.status || '未対応',
@@ -2224,9 +4965,12 @@
           lat: coords && coords.lat != null ? coords.lat : null,
           lng: coords && coords.lng != null ? coords.lng : null,
           color: draft.color,
+          icon: draft.icon,
           imageUrl: result.imageUrl || '',
           fileId: result.fileId || '',
           timestamp: new Date().toLocaleString('ja-JP'),
+          eventAt: draft.eventAt,
+          updatedAt: '',
           links: draft.links,
           folderUrl: result.folderUrl || '',
           status: draft.status || '未対応',
@@ -2237,6 +4981,7 @@
         renderSidePanel();
         updateUnplacedBadge();
         renderColorFilterUI();
+        renderIconFilterUI();
         renderTagFilterUI();
       } finally {
         button.disabled = false;
@@ -2283,7 +5028,9 @@
         file: state.upload.file,
         title: title,
         description: document.getElementById('upload-desc').value.trim(),
+        eventAt: document.getElementById('upload-event-at').value,
         color: state.upload.color,
+        icon: state.upload.icon,
         links: collectLinks('upload-links'),
         status: document.getElementById('upload-status').value,
         tags: tags
@@ -2323,19 +5070,46 @@
     document.getElementById('upload-save-unplaced').addEventListener('click', () => handleUploadSubmit('unplaced'));
 
     async function loadMapData() {
-      const result = await withGASNoArg('getMapData');
+      const results = await Promise.allSettled([
+        withGASNoArg('getMapData'),
+        loadRouteGroups()
+      ]);
+      if (results[0].status === 'rejected') throw results[0].reason;
+      if (results[1].status === 'rejected') {
+        console.error('loadRouteGroups failed', results[1].reason);
+        state.routeGroups = [];
+      }
+      const result = results[0].value;
       state.pins = Array.isArray(result) ? result.map(clonePin) : [];
       renderPins();
       renderSidePanel();
       updateUnplacedBadge();
       renderColorFilterUI();
+      renderIconFilterUI();
       renderTagFilterUI();
+    }
+
+    async function loadRouteGroups() {
+      const result = await withGASNoArg('getRouteGroups');
+      if (result && result.ok === false) {
+        throw new Error(result.error || 'ルートグループの読み込みに失敗しました');
+      }
+      const groups = Array.isArray(result)
+        ? result
+        : (result && Array.isArray(result.groups)
+          ? result.groups
+          : (result && Array.isArray(result.routeGroups) ? result.routeGroups : []));
+      state.routeGroups = groups.map(cloneRouteGroup).filter(function(group) {
+        return group.id;
+      });
+      return state.routeGroups;
     }
 
     function setupDndDropTargets() {
       // ② 配置済み → 未配置エリアにドロップ
       const unplacedEl = document.getElementById('side-unplaced');
       unplacedEl.addEventListener('dragover', function(e) {
+        if (!canEdit() || state.placement) return;
         if (!state.draggedPinId) return;
         const pin = getPinById(state.draggedPinId);
         if (!pin || pin.lat == null) return; // 配置済みピンのみ受け付ける
@@ -2348,7 +5122,7 @@
       unplacedEl.addEventListener('drop', async function(e) {
         e.preventDefault();
         unplacedEl.classList.remove('dragover');
-        if (!state.editMode || state.placement) return;
+        if (!canEdit() || state.placement) return;
         const id = state.draggedPinId;
         state.draggedPinId = null;
         if (!id) return;
@@ -2370,6 +5144,7 @@
       // ④ 未配置 → 配置済みエリアにドロップ（地図中央に配置）
       const placedEl = document.getElementById('side-placed');
       placedEl.addEventListener('dragover', function(e) {
+        if (!canEdit() || state.placement) return;
         if (!state.draggedPinId) return;
         const pin = getPinById(state.draggedPinId);
         if (!pin || pin.lat != null) return; // 未配置ピンのみ受け付ける
@@ -2382,7 +5157,7 @@
       placedEl.addEventListener('drop', async function(e) {
         e.preventDefault();
         placedEl.classList.remove('dragover');
-        if (!state.editMode || state.placement) return;
+        if (!canEdit() || state.placement) return;
         const id = state.draggedPinId;
         state.draggedPinId = null;
         if (!id) return;
@@ -2405,6 +5180,7 @@
       // ⑤ 削除ゾーンへのドロップ（パネルアイテム経路）
       const deleteZoneEl = document.getElementById('dnd-delete-zone');
       deleteZoneEl.addEventListener('dragover', function(e) {
+        if (!canEdit() || state.placement) return;
         if (!state.draggedPinId) return;
         e.preventDefault();
         deleteZoneEl.classList.add('dragover');
@@ -2415,7 +5191,7 @@
       deleteZoneEl.addEventListener('drop', function(e) {
         e.preventDefault();
         deleteZoneEl.classList.remove('dragover');
-        if (!state.editMode || state.placement) return;
+        if (!canEdit() || state.placement) return;
         const id = state.draggedPinId;
         state.draggedPinId = null;
         if (!id) return;
@@ -2425,6 +5201,7 @@
         document.getElementById('delete-message').textContent = pin.fileId
           ? 'このピンを削除すると、対応する Drive 上の写真もゴミ箱に移動します。'
           : 'このピンを削除します。';
+        document.querySelector('#delete-overlay .sheet-title').textContent = 'ピンを削除';
         openOverlay('delete-overlay');
       });
     }
@@ -2432,6 +5209,7 @@
     function setupMapDropTarget() {
       const mapEl = document.getElementById('map');
       mapEl.addEventListener('dragover', function(e) {
+        if (!canEdit() || state.placement) return;
         if (!state.draggedPinId) return;
         const pin = getPinById(state.draggedPinId);
         if (!pin || pin.lat != null) return; // 未配置ピンのみ受け付ける
@@ -2445,7 +5223,7 @@
       mapEl.addEventListener('drop', async function(e) {
         e.preventDefault();
         mapEl.classList.remove('dragover');
-        if (!state.editMode || state.placement) return;
+        if (!canEdit() || state.placement) return;
         const id = state.draggedPinId;
         state.draggedPinId = null;
         if (!id) return;
@@ -2714,6 +5492,7 @@
       renderPins();
       renderSidePanel();
       renderColorFilterUI();
+      renderIconFilterUI();
       renderTagFilterUI();
       updateUnplacedBadge();
 
@@ -2749,6 +5528,13 @@
 
       setupDndDropTargets();
       setupMapDropTarget();
+
+      window.addEventListener('beforeunload', function(event) {
+        if (!hasRouteSaveInFlight()) return;
+        event.preventDefault();
+        event.returnValue = '';
+        return '';
+      });
     }
 
     initializeApp();

@@ -12,10 +12,13 @@ node_modules/
 .superpowers/
 .worktrees/
 .vscode/
+.playwright-mcp/
+.playwright/
 docs/superpowers/
 
 # Scratch files and logs
-Plan.md
+plan.md
+tests/
 .tests/
 .tmp-*
 *.log

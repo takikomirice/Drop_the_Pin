@@ -129,6 +129,40 @@
       padding: 10px 12px;
       font-size: 14px;
     }
+    .geocode-result-item {
+      padding: 8px 10px;
+      cursor: pointer;
+      border-bottom: 1px solid var(--border);
+    }
+    .geocode-result-item:last-child { border-bottom: none; }
+    .geocode-result-name {
+      font-size: 13px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .geocode-result-address {
+      font-size: 11px;
+      color: var(--text-sub);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-top: 2px;
+    }
+    .geocode-result-msg {
+      padding: 10px;
+      font-size: 13px;
+      color: var(--text-sub);
+      text-align: center;
+    }
+    #shared-geocode-results {
+      overflow: hidden;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface-strong);
+    }
+    #shared-geocode-results .geocode-result-item:hover { background: var(--surface); }
     .shared-control-btn,
     #shared-sort {
       border: 1px solid var(--border);
@@ -152,7 +186,8 @@
       min-width: 140px;
     }
     .filter-toggle-btn.active,
-    #shared-tag-mode {
+    #shared-tag-mode,
+    #shared-order-mode-toggle.active {
       border-color: rgba(185, 95, 45, 0.22);
       background: rgba(185, 95, 45, 0.1);
       color: var(--accent);
@@ -219,6 +254,7 @@
       flex: 0 0 auto;
     }
     #shared-theme-toggle,
+    #shared-order-mode-toggle,
     #shared-panel-toggle {
       width: 34px;
       height: 34px;
@@ -500,6 +536,7 @@
     </div>
     <div class="shared-topbar-actions">
       <button id="shared-theme-toggle" class="shared-control-btn" type="button" title="テーマ切替">🌙</button>
+      <button id="shared-order-mode-toggle" class="shared-control-btn" type="button" title="順番表示モード">🔢</button>
       <button id="shared-panel-toggle" class="shared-control-btn" type="button" title="リストを隠す">🗺️</button>
     </div>
   </div>
@@ -510,6 +547,7 @@
       <input id="shared-search-input" type="search" placeholder="タイトル・説明・タグで検索">
       <button id="shared-search-toggle" class="shared-control-btn" type="button" title="検索設定">▼</button>
     </div>
+    <div id="shared-geocode-results" style="display:none;"></div>
     <div id="shared-search-expanded" style="display:none;">
       <div id="shared-search-controls">
         <select id="shared-sort">
@@ -548,19 +586,50 @@
     const SHARED_SVG_XMLNS = 'http:' + SHARED_PROTOCOL_SEPARATOR + 'www.w3.org/2000/svg';
     const SHARED_OSM_TILE_URL = 'https:' + SHARED_PROTOCOL_SEPARATOR + '{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
     const SHARED_OSM_ATTRIBUTION = '© <a href="https:' + SHARED_PROTOCOL_SEPARATOR + 'www.openstreetmap.org/">OpenStreetMap</a> contributors';
+    const SHARED_PIN_ICONS = [
+      { id: 'default', label: '標準' },
+      { id: 'photo', label: '写真' },
+      { id: 'food', label: '食事' },
+      { id: 'hotel', label: '宿' },
+      { id: 'nature', label: '自然' },
+      { id: 'shop', label: '店' },
+      { id: 'transit', label: '交通' },
+      { id: 'warning', label: '注意' }
+    ];
 
     function safeColor(color) {
       return SHARED_SAFE_COLOR_RE.test(String(color || '')) ? String(color) : SHARED_DEFAULT_COLOR;
     }
 
-    function createPinIcon(color, hasPhoto) {
+    function normalizeSharedIcon(value) {
+      const icon = String(value || '').trim().toLowerCase();
+      return SHARED_PIN_ICONS.some(function(item) { return item.id === icon; }) ? icon : SHARED_PIN_ICONS[0].id;
+    }
+
+    function sharedPinIconGlyph(icon) {
+      switch (normalizeSharedIcon(icon)) {
+        case 'photo':
+          return '<rect x="7.5" y="8" width="15" height="9.5" rx="1.6" fill="currentColor"/><rect x="11.5" y="6.2" width="7" height="3" rx="1" fill="currentColor"/><circle cx="15" cy="12.8" r="3.1" fill="none" stroke="currentColor" stroke-width="1.8"/>';
+        case 'food':
+          return '<path d="M10 5v14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M7.5 5v5.5c0 1.4 1.1 2.5 2.5 2.5s2.5-1.1 2.5-2.5V5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M19 5c-2.2 1.7-3.3 4-3.3 7.2H19V19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+        case 'hotel':
+          return '<rect x="7" y="11" width="16" height="6" rx="1.2" fill="currentColor"/><rect x="8" y="8" width="5" height="3" rx="1" fill="currentColor"/><path d="M7 7v12M23 10v9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
+        case 'nature':
+          return '<path d="M15 18V9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="15" cy="8" r="4" fill="currentColor"/><circle cx="11.5" cy="11.5" r="3.5" fill="currentColor"/><circle cx="18.5" cy="11.5" r="3.5" fill="currentColor"/>';
+        case 'shop':
+          return '<path d="M9 10h12l-1 9H10l-1-9Z" fill="currentColor"/><path d="M11 10c0-3 1.5-4.5 4-4.5S19 7 19 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>';
+        case 'transit':
+          return '<rect x="8" y="5.5" width="14" height="12" rx="2.2" fill="currentColor"/><rect x="10" y="8" width="10" height="4" rx="0.8" fill="#000" opacity="0.22"/><circle cx="12" cy="15" r="1.2" fill="#000" opacity="0.26"/><circle cx="18" cy="15" r="1.2" fill="#000" opacity="0.26"/>';
+        case 'warning':
+          return '<path d="M15 5.5 23 19H7L15 5.5Z" fill="currentColor"/><path d="M15 10v4.5" stroke="#000" stroke-width="2" stroke-linecap="round" opacity="0.28"/><circle cx="15" cy="16.8" r="1.1" fill="#000" opacity="0.28"/>';
+        default:
+          return '<circle cx="15" cy="12" r="4.6" fill="currentColor"/>';
+      }
+    }
+
+    function createPinIcon(color, hasPhoto, icon) {
       const fill = safeColor(color);
-      const innerDetail = hasPhoto ? `
-          <rect x="7.5" y="9" width="15" height="9" rx="1.5" fill="#fff" opacity="0.9"/>
-          <rect x="12" y="7" width="6" height="3" rx="1" fill="#fff" opacity="0.9"/>
-          <circle cx="15" cy="13" r="3.2" fill="${fill}" opacity="1"/>
-          <circle cx="15" cy="13" r="2" fill="#fff" opacity="0.65"/>` : `
-          <circle cx="11" cy="8" r="3.4" fill="#fff" opacity="0.34"/>`;
+      const innerDetail = '<g color="#fff" opacity="0.92">' + sharedPinIconGlyph(icon || (hasPhoto ? 'photo' : 'default')) + '</g>';
       const svg = `
         <svg xmlns="${SHARED_SVG_XMLNS}" width="30" height="46" viewBox="0 0 30 46">
           <line x1="15" y1="23" x2="15" y2="44" stroke="#4d4d4d" stroke-width="1.6" stroke-linecap="round" opacity="1"/>
@@ -569,6 +638,27 @@
           ${innerDetail}
         </svg>`;
       return L.divIcon({ html: '<div class="pin-icon-visual">' + svg + '</div>', iconSize: [30, 46], iconAnchor: [15, 44], className: '' });
+    }
+
+    function createSharedNumberedPinIcon(color, number) {
+      const fill = safeColor(color);
+      const label = String(number || '');
+      const fontSize = label.length > 2 ? 9 : 12;
+      const svg = `
+        <svg xmlns="${SHARED_SVG_XMLNS}" width="30" height="46" viewBox="0 0 30 46">
+          <line x1="15" y1="23" x2="15" y2="44" stroke="#4d4d4d" stroke-width="1.6" stroke-linecap="round" opacity="1"/>
+          <circle cx="15" cy="12" r="11.5" fill="${fill}" opacity="0.24"/>
+          <circle cx="15" cy="12" r="10.5" fill="${fill}" opacity="1"/>
+          <text x="15" y="16" text-anchor="middle" font-size="${fontSize}" font-weight="800" fill="#fff" font-family="Arial, sans-serif">${escHtml(label)}</text>
+        </svg>`;
+      return L.divIcon({ html: '<div class="pin-icon-visual">' + svg + '</div>', iconSize: [30, 46], iconAnchor: [15, 44], className: '' });
+    }
+
+    function createSharedPinIconForDisplay(pin, displayOrder) {
+      if (state.orderMode && displayOrder != null) {
+        return createSharedNumberedPinIcon(pin.color, displayOrder);
+      }
+      return createPinIcon(pin.color, !!pin.imageUrl, pin.icon);
     }
 
     const EXEC_URL = <?!= JSON.stringify(execUrl || '') ?>;
@@ -586,6 +676,7 @@
       status: 'loading',
       panelVisible: true,
       sort: 'newest',
+      orderMode: false,
       searchExpanded: false,
       tagFilterExpanded: false,
       colorFilterExpanded: false
@@ -733,7 +824,7 @@
           '<div class="detail-header">',
             '<div>',
               '<div class="detail-title">' + escHtml(pin.title || '(無題)') + '</div>',
-              '<div class="muted" style="margin-top:6px;">' + escHtml(pin.timestamp || '') + '</div>',
+              '<div class="muted" style="margin-top:6px;">' + escHtml(getSharedDisplayTime(pin)) + '</div>',
             '</div>',
             '<button class="detail-close" type="button" data-action="close">閉じる</button>',
           '</div>',
@@ -825,9 +916,60 @@
       return colors;
     }
 
+    function parseSharedDateTimeValue(value) {
+      const raw = String(value || '').trim();
+      if (!raw) return 0;
+      let match = raw.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
+      if (match) {
+        return new Date(
+          Number(match[1]),
+          Number(match[2]) - 1,
+          Number(match[3]),
+          Number(match[4]),
+          Number(match[5]),
+          Number(match[6] || '0')
+        ).getTime();
+      }
+      match = raw.match(/^(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2})(?::(\d{2}))?$/);
+      if (match) {
+        return new Date(
+          Number(match[1]),
+          Number(match[2]) - 1,
+          Number(match[3]),
+          Number(match[4]),
+          Number(match[5]),
+          Number(match[6] || '0')
+        ).getTime();
+      }
+      const parsed = Date.parse(raw);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    function getSharedDisplayTime(pin) {
+      return pin && (pin.eventAt || pin.timestamp) || '';
+    }
+
     function getSharedSortTime(pin) {
-      const timestamp = Date.parse(String(pin && pin.timestamp || ''));
-      return Number.isFinite(timestamp) ? timestamp : 0;
+      return parseSharedDateTimeValue(getSharedDisplayTime(pin));
+    }
+
+    function getSharedOrderTime(pin) {
+      return parseSharedDateTimeValue(pin && (pin.eventAt || pin.timestamp));
+    }
+
+    function compareSharedPinsForDisplayOrder(a, b) {
+      const aTime = getSharedOrderTime(a) || Number.MAX_SAFE_INTEGER;
+      const bTime = getSharedOrderTime(b) || Number.MAX_SAFE_INTEGER;
+      if (aTime !== bTime) return aTime - bTime;
+      const titleDiff = String(a.title || '').localeCompare(String(b.title || ''), 'ja');
+      if (titleDiff) return titleDiff;
+      return String(a.id || '').localeCompare(String(b.id || ''), 'ja');
+    }
+
+    function getSharedOrderModePins(pins) {
+      return pins.slice().sort(compareSharedPinsForDisplayOrder).map(function(pin, index) {
+        return { pin: pin, displayOrder: index + 1 };
+      });
     }
 
     function sortSharedPins(pins) {
@@ -851,6 +993,13 @@
       return sortSharedPins(state.pins.filter(function(pin) {
         return matchesSharedSearch(pin) && matchesSharedTags(pin) && matchesSharedColors(pin);
       }));
+    }
+
+    function getVisibleSharedPinEntries() {
+      const pins = getFilteredSharedPins();
+      return state.orderMode ? getSharedOrderModePins(pins) : pins.map(function(pin) {
+        return { pin: pin, displayOrder: null };
+      });
     }
 
     function renderSharedTagChips() {
@@ -978,16 +1127,18 @@
         renderSharedStatusNote();
         return;
       }
-      const pins = getFilteredSharedPins();
-      if (!pins.length) {
+      const entries = getVisibleSharedPinEntries();
+      if (!entries.length) {
         list.innerHTML = '<div class="empty-note">共有対象のピンがありません。</div>';
         renderSharedStatusNote();
         return;
       }
-      list.innerHTML = pins.map(function(pin) {
+      list.innerHTML = entries.map(function(entry) {
+        const pin = entry.pin;
+        const orderLabel = state.orderMode && entry.displayOrder != null ? entry.displayOrder + '. ' : '';
         return '<button type="button" class="list-item" data-pin-id="' + escHtml(pin.id) + '">' +
-          '<div class="list-title">' + escHtml(pin.title || '(無題)') + '</div>' +
-          '<div class="list-subtitle">' + escHtml(pin.timestamp || '') + '</div>' +
+          '<div class="list-title">' + escHtml(orderLabel + (pin.title || '(無題)')) + '</div>' +
+          '<div class="list-subtitle">' + escHtml(getSharedDisplayTime(pin)) + '</div>' +
           renderTagChips(pin.tags) +
           '</button>';
       }).join('');
@@ -1017,16 +1168,25 @@
       }
     }
 
+    function updateSharedOrderModeUi() {
+      const button = document.getElementById('shared-order-mode-toggle');
+      if (!button) return;
+      button.classList.toggle('active', state.orderMode);
+      button.setAttribute('aria-pressed', state.orderMode ? 'true' : 'false');
+      button.title = state.orderMode ? '順番表示モードを解除' : '順番表示モード';
+    }
+
     function renderSharedMap() {
       const map = ensureSharedMap();
       Object.keys(sharedMarkers).forEach(function(id) { map.removeLayer(sharedMarkers[id]); });
       sharedMarkers = {};
-      const pins = getFilteredSharedPins().filter(function(pin) {
-        return pin.lat != null && pin.lng != null;
+      const entries = getVisibleSharedPinEntries().filter(function(entry) {
+        return entry.pin.lat != null && entry.pin.lng != null;
       });
-      pins.forEach(function(pin) {
+      entries.forEach(function(entry) {
+        const pin = entry.pin;
         const marker = L.marker([pin.lat, pin.lng], {
-          icon: createPinIcon(pin.color, !!pin.imageUrl)
+          icon: createSharedPinIconForDisplay(pin, entry.displayOrder)
         }).addTo(map);
         marker.bindTooltip(pin.title || '(無題)', { direction: 'top' });
         marker.on('click', function() {
@@ -1041,10 +1201,11 @@
         });
         sharedMarkers[pin.id] = marker;
       });
-      if (pins.length === 1) {
-        map.setView([pins[0].lat, pins[0].lng], 14);
-      } else if (pins.length > 1) {
-        map.fitBounds(L.latLngBounds(pins.map(function(pin) {
+      if (entries.length === 1) {
+        map.setView([entries[0].pin.lat, entries[0].pin.lng], 14);
+      } else if (entries.length > 1) {
+        map.fitBounds(L.latLngBounds(entries.map(function(entry) {
+          const pin = entry.pin;
           return [pin.lat, pin.lng];
         })), { padding: [24, 24] });
       } else {
@@ -1053,8 +1214,116 @@
       setTimeout(function() { map.invalidateSize(); }, 0);
     }
 
+    // --- ジオコーディング検索 ---
+    function closeGeocodePanel(panelEl) {
+      panelEl.dataset.geocodeRequestId = '';
+      panelEl.style.display = 'none';
+      panelEl.innerHTML = '';
+    }
+
+    function renderGeocodeResults(results, getMapFn, panelEl) {
+      panelEl.innerHTML = '';
+      if (!results || results.length === 0) {
+        var msg = document.createElement('div');
+        msg.className = 'geocode-result-msg';
+        msg.textContent = '場所が見つかりません';
+        panelEl.appendChild(msg);
+        return;
+      }
+      results.forEach(function(r) {
+        var parts = r.display_name.split(', ');
+        var name = r.name || parts[0];
+        var address = parts.slice(1).join(', ');
+
+        var item = document.createElement('div');
+        item.className = 'geocode-result-item';
+
+        var nameEl = document.createElement('div');
+        nameEl.className = 'geocode-result-name';
+        nameEl.textContent = name;
+
+        var addrEl = document.createElement('div');
+        addrEl.className = 'geocode-result-address';
+        addrEl.textContent = address;
+
+        item.appendChild(nameEl);
+        item.appendChild(addrEl);
+        item.addEventListener('click', function() {
+          getMapFn().flyTo([parseFloat(r.lat), parseFloat(r.lon)], 15);
+          closeGeocodePanel(panelEl);
+        });
+        panelEl.appendChild(item);
+      });
+    }
+
+    async function geocodeSearch(query, getMapFn, panelEl, requestId) {
+      panelEl.dataset.geocodeRequestId = requestId;
+      panelEl.style.display = '';
+      var spinner = document.createElement('div');
+      spinner.className = 'geocode-result-msg';
+      spinner.textContent = '検索中...';
+      panelEl.innerHTML = '';
+      panelEl.appendChild(spinner);
+      try {
+        var url = 'https://nominatim.openstreetmap.org/search'
+          + '?format=json&limit=5&accept-language=ja'
+          + '&viewbox=122,46,154,24&bounded=0'
+          + '&q=' + encodeURIComponent(query);
+        var res = await fetch(url);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        var results = await res.json();
+        if (panelEl.dataset.geocodeRequestId !== requestId) return;
+        renderGeocodeResults(results, getMapFn, panelEl);
+      } catch (err) {
+        if (panelEl.dataset.geocodeRequestId !== requestId) return;
+        panelEl.innerHTML = '';
+        var errMsg = document.createElement('div');
+        errMsg.className = 'geocode-result-msg';
+        errMsg.textContent = '通信エラーが発生しました';
+        panelEl.appendChild(errMsg);
+      }
+    }
+
+    function setupGeoSearch(inputEl, getMapFn, panelEl) {
+      var isSearching = false;
+      var requestSeq = 0;
+      function closeCurrentPanel() {
+        isSearching = false;
+        closeGeocodePanel(panelEl);
+      }
+      inputEl.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+          closeCurrentPanel();
+          return;
+        }
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        var query = inputEl.value.trim();
+        if (!query) {
+          closeCurrentPanel();
+          return;
+        }
+        if (isSearching) return;
+        isSearching = true;
+        requestSeq += 1;
+        var requestId = String(requestSeq);
+        geocodeSearch(query, getMapFn, panelEl, requestId).finally(function() {
+          if (panelEl.dataset.geocodeRequestId === requestId) {
+            isSearching = false;
+          }
+        });
+      });
+      document.addEventListener('click', function(e) {
+        if (!panelEl.contains(e.target) && e.target !== inputEl) {
+          closeCurrentPanel();
+        }
+      });
+    }
+    // --- ジオコーディング検索ここまで ---
+
     async function initializeSharedView() {
       renderSharedPanelUi();
+      updateSharedOrderModeUi();
       ensureSharedMap();
       renderSharedSearchUi();
       if (!state.token) {
@@ -1106,6 +1375,11 @@
       renderSharedPins();
       renderSharedMap();
     });
+    setupGeoSearch(
+      document.getElementById('shared-search-input'),
+      function() { return ensureSharedMap(); },
+      document.getElementById('shared-geocode-results')
+    );
 
     document.getElementById('shared-search-toggle').addEventListener('click', function() {
       state.searchExpanded = !state.searchExpanded;
@@ -1129,6 +1403,13 @@
     document.getElementById('shared-panel-toggle').addEventListener('click', function() {
       state.panelVisible = !state.panelVisible;
       renderSharedPanelUi();
+    });
+
+    document.getElementById('shared-order-mode-toggle').addEventListener('click', function() {
+      state.orderMode = !state.orderMode;
+      updateSharedOrderModeUi();
+      renderSharedPins();
+      renderSharedMap();
     });
 
     document.getElementById('shared-filter-tag-btn').addEventListener('click', function() {
