@@ -300,12 +300,12 @@
       position: fixed; top: 62px; left: 50%; transform: translateX(-50%); z-index: 1350; min-width: min(90vw, 360px); max-width: 90vw;
       display: none; padding: 10px 16px; text-align: center; border-radius: 999px; border: 1px solid var(--border); background: var(--sheet-bg); box-shadow: var(--shadow); font-size: 13px;
     }
-    #placement-bar {
+    #placement-bar, #duplicate-placement-bar {
       position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 1300; display: none; gap: 10px; padding: 10px 12px;
       width: auto; max-width: calc(100vw - 28px); border: 1px solid var(--border); border-radius: 18px; background: var(--sheet-bg); box-shadow: var(--shadow);
     }
-    #placement-bar.open { display: flex; }
-    #placement-bar button { flex: 0 0 auto; min-width: 120px; }
+    #placement-bar.open, #duplicate-placement-bar.open { display: flex; }
+    #placement-bar button, #duplicate-placement-bar button { flex: 0 0 auto; min-width: 120px; }
     #placement-confirm { background: var(--accent); color: #fff; border-color: transparent; }
     #placement-cancel { background: #fff7d6; color: #5d4300; border-color: #f0cf59; }
     [data-theme="dark"] #placement-cancel { background: #473700; color: #ffe08a; border-color: #8c7112; }
@@ -734,6 +734,9 @@
     <button id="placement-confirm" class="text-btn" type="button">配置</button>
     <button id="placement-cancel" class="ghost-btn" type="button">戻る</button>
   </div>
+  <div id="duplicate-placement-bar">
+    <button id="duplicate-placement-cancel" class="ghost-btn" type="button">キャンセル</button>
+  </div>
 
   <div id="help-overlay" class="sheet-overlay" role="dialog" aria-modal="true" aria-labelledby="help-title"><div class="sheet-body">
     <div class="sheet-handle"></div>
@@ -852,6 +855,9 @@
       <button id="pin-menu-edit" class="text-btn" type="button">編集</button>
       <button id="pin-menu-unplace" class="text-btn" type="button">未配置に戻す</button>
       <button id="pin-menu-place" class="text-btn" type="button">配置開始</button>
+      <button id="pin-menu-duplicate-unplaced" class="text-btn" type="button">未配置で複製</button>
+      <button id="pin-menu-duplicate-same" class="text-btn" type="button">同じ場所に複製</button>
+      <button id="pin-menu-duplicate-point" class="text-btn" type="button">場所を指定して複製</button>
       <button id="pin-menu-delete" class="danger-btn" type="button">削除</button>
       <button id="pin-menu-close" class="ghost-btn" type="button">閉じる</button>
     </div>
@@ -996,6 +1002,9 @@
       routeRoadStatus: {},
       routeDraggedPinId: null,
       routeDraggedGroupId: null,
+      activePinId: null,
+      copiedPinSourceId: null,
+      duplicatePlacement: null,
       contextPinId: null,
       editingPinId: null,
       placement: null,
@@ -1517,6 +1526,182 @@
     function hideHint() { document.getElementById('hint-bar').style.display = 'none'; }
     const HELP_SEEN_STORAGE_KEY = 'dtp-help-seen-v112';
 
+    function duplicateTitleForMessage(pin) {
+      const title = String(pin && pin.title || '').trim();
+      return title || '無題（コピー）';
+    }
+
+    function addDuplicatedPinToState(pin) {
+      const duplicated = clonePin(pin || {});
+      state.pins.push(duplicated);
+      setActivePinId(duplicated.id);
+      renderPins();
+      renderSidePanel();
+      updateUnplacedBadge();
+      renderColorFilterUI();
+      renderIconFilterUI();
+      renderTagFilterUI();
+      return duplicated;
+    }
+
+    function handleDuplicateError(error, sourcePinId) {
+      const message = error && error.message ? error.message : String(error || '');
+      if (message === 'pin_not_found' || message.includes('pin_not_found')) {
+        if (state.copiedPinSourceId === sourcePinId) state.copiedPinSourceId = null;
+        showHint('コピー元のピンが見つかりません');
+        return;
+      }
+      alert('ピンの複製に失敗しました。\n\n' + message);
+    }
+
+    async function duplicatePinFromSource(sourcePinId, mode, coords, messageKind) {
+      if (!canEdit()) {
+        showHint('編集モードでのみ複製できます');
+        return null;
+      }
+      const source = getPinById(sourcePinId);
+      if (!source) {
+        if (state.copiedPinSourceId === sourcePinId) state.copiedPinSourceId = null;
+        showHint('コピー元のピンが見つかりません');
+        return null;
+      }
+      const payload = { sourcePinId: source.id, mode: mode };
+      if (coords) {
+        payload.lat = coords.lat;
+        payload.lng = coords.lng;
+      }
+      try {
+        const result = await withGAS('duplicatePin', payload);
+        if (!result || !result.ok) throw new Error(result && result.error ? result.error : '複製に失敗しました');
+        const duplicated = addDuplicatedPinToState(result.pin);
+        const title = duplicateTitleForMessage(duplicated);
+        if (messageKind === 'same') {
+          showHint(title + 'を同じ場所に複製しました');
+        } else if (messageKind === 'point') {
+          showHint(title + 'を地図上に複製しました');
+        } else if (messageKind === 'paste-point') {
+          showHint(title + 'を地図上に貼り付けました');
+        } else if (messageKind === 'paste-unplaced') {
+          showHint(title + 'を未配置ピンとして貼り付けました');
+        } else {
+          showHint(title + 'を未配置ピンとして作成しました');
+        }
+        return duplicated;
+      } catch (error) {
+        handleDuplicateError(error, source.id);
+        return null;
+      }
+    }
+
+    function clearDuplicatePlacement() {
+      const hadPlacement = !!state.duplicatePlacement;
+      state.duplicatePlacement = null;
+      document.getElementById('duplicate-placement-bar').classList.remove('open');
+      hideHint();
+      if (hadPlacement) renderPins();
+    }
+
+    function beginDuplicatePlacement(sourcePinId, from) {
+      if (!canEdit()) {
+        showHint('編集モードでのみ複製できます');
+        return;
+      }
+      const pin = getPinById(sourcePinId);
+      if (!pin) {
+        if (state.copiedPinSourceId === sourcePinId) state.copiedPinSourceId = null;
+        showHint('コピー元のピンが見つかりません');
+        return;
+      }
+      clearPlacement();
+      state.duplicatePlacement = { sourcePinId: pin.id, from: from || 'menu' };
+      document.getElementById('duplicate-placement-bar').classList.add('open');
+      showHint(from === 'paste' ? '貼り付ける場所を地図上でクリックしてください' : '複製先の場所を地図上で選んでください');
+      renderPins();
+    }
+
+    function isTypingTarget(target) {
+      return target && (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.isContentEditable
+      );
+    }
+
+    function isShortcutOverlayOpen() {
+      return ['help-overlay', 'upload-overlay', 'edit-overlay', 'settings-overlay', 'location-choice-overlay',
+        'delete-overlay', 'share-overlay', 'dup-warning-overlay', 'route-edit-overlay'].some(function(id) {
+        const el = document.getElementById(id);
+        return el && el.classList.contains('open');
+      });
+    }
+
+    function hasMultipleSelectedPins() {
+      return state.selectedPinIds.size > 1;
+    }
+
+    function getMapLatLngFromPointer() {
+      const container = map.getContainer();
+      const rect = container.getBoundingClientRect();
+      if (!isOverRect(state.pointerX, state.pointerY, rect)) return null;
+      const point = L.point(state.pointerX - rect.left, state.pointerY - rect.top);
+      const latLng = map.containerPointToLatLng(point);
+      if (!latLng || !Number.isFinite(latLng.lat) || !Number.isFinite(latLng.lng)) return null;
+      return { lat: latLng.lat, lng: latLng.lng };
+    }
+
+    function handleDuplicateShortcut(event) {
+      if (!event || !(event.ctrlKey || event.metaKey) || event.altKey) return;
+      if (!canEdit()) return;
+      if (isTypingTarget(event.target) || isTypingTarget(document.activeElement)) return;
+      if (isShortcutOverlayOpen()) return;
+
+      if (event.key.toLowerCase() === 'd') {
+        if (hasMultipleSelectedPins()) {
+          event.preventDefault();
+          showHint('複製は1件ずつ行ってください');
+          return;
+        }
+        if (!state.activePinId) return;
+        event.preventDefault();
+        duplicatePinFromSource(state.activePinId, 'unplaced', null, 'unplaced');
+        return;
+      }
+      if (event.key.toLowerCase() === 'c') {
+        if (hasMultipleSelectedPins()) {
+          event.preventDefault();
+          showHint('コピーは1件ずつ行ってください');
+          return;
+        }
+        const pin = getPinById(state.activePinId);
+        if (!pin) return;
+        event.preventDefault();
+        state.copiedPinSourceId = pin.id;
+        showHint((pin.title || '無題') + 'をコピーしました。Ctrl+Vで貼り付けできます');
+        return;
+      }
+      if (event.key.toLowerCase() === 'v') {
+        if (!state.copiedPinSourceId) return;
+        const pin = getPinById(state.copiedPinSourceId);
+        event.preventDefault();
+        if (!pin) {
+          state.copiedPinSourceId = null;
+          showHint('コピー元のピンが見つかりません');
+          return;
+        }
+        if (event.shiftKey) {
+          duplicatePinFromSource(pin.id, 'unplaced', null, 'paste-unplaced');
+          return;
+        }
+        const latLng = getMapLatLngFromPointer();
+        if (latLng) {
+          duplicatePinFromSource(pin.id, 'point', latLng, 'paste-point');
+        } else {
+          beginDuplicatePlacement(pin.id, 'paste');
+        }
+      }
+    }
+
     function rememberHelpSeen() {
       try {
         localStorage.setItem(HELP_SEEN_STORAGE_KEY, '1');
@@ -1550,6 +1735,27 @@
     document.addEventListener('mousemove', function(e) {
       state.pointerX = e.clientX;
       state.pointerY = e.clientY;
+    });
+
+    map.on('click', function(event) {
+      if (!state.duplicatePlacement) return;
+      if (event.originalEvent) {
+        event.originalEvent.preventDefault();
+        event.originalEvent.stopPropagation();
+      }
+      const placement = state.duplicatePlacement;
+      const latLng = event.latlng;
+      if (!canEdit() || !latLng) {
+        clearDuplicatePlacement();
+        return;
+      }
+      clearDuplicatePlacement();
+      duplicatePinFromSource(
+        placement.sourcePinId,
+        'point',
+        { lat: latLng.lat, lng: latLng.lng },
+        placement.from === 'paste' ? 'paste-point' : 'point'
+      );
     });
 
     const GAS_RETRY_MAX = 4;
@@ -2641,7 +2847,7 @@
       if (!canEdit()) {
         return { acceptsDrop: false, reason: 'view-mode' };
       }
-      if (state.placement) {
+      if (state.placement || state.duplicatePlacement) {
         return { acceptsDrop: false, reason: 'placement' };
       }
       if (!group || !targetRouteId) {
@@ -3019,6 +3225,10 @@
       return state.pins.find(pin => pin.id === id) || null;
     }
 
+    function setActivePinId(pinId) {
+      state.activePinId = pinId ? String(pinId) : null;
+    }
+
     function attachLongPress(target, handler, options) {
       const suppressClick = !options || options.suppressClick !== false;
       let timer = null;
@@ -3097,9 +3307,16 @@
     document.getElementById('help-open-btn').addEventListener('click', openHelpPanel);
     document.getElementById('help-close').addEventListener('click', closeHelpPanel);
     document.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape' && state.duplicatePlacement) {
+        event.preventDefault();
+        clearDuplicatePlacement();
+        return;
+      }
       if (event.key === 'Escape' && document.getElementById('help-overlay').classList.contains('open')) {
         closeHelpPanel();
+        return;
       }
+      handleDuplicateShortcut(event);
     });
     document.getElementById('share-open-btn').addEventListener('click', function() {
       openShareDialog(null);
@@ -3152,6 +3369,7 @@
         <div class="list-meta"><div class="list-title">${escHtml(pin.title || '(無題)')}</div><div class="list-subtitle">${escHtml(getPinDisplayTime(pin))}</div>${tagsHtml}</div>
       `;
       button.addEventListener('click', function(e) {
+        setActivePinId(pin.id);
         if (canEdit()) {
           // チェック UI クリックまたは Shift なし通常クリックで選択トグル
           if (state.selectedPinIds.has(pin.id)) {
@@ -3199,7 +3417,7 @@
       if (canEdit()) {
         button.draggable = true;
         button.addEventListener('dragstart', function(e) {
-          if (!canEdit()) {
+          if (!canEdit() || state.duplicatePlacement) {
             e.preventDefault();
             return;
           }
@@ -3234,6 +3452,7 @@
     }
 
     function openPinDetail(pin) {
+      setActivePinId(pin.id);
       document.getElementById('pin-detail-title').textContent = pin.title || '(無題)';
       document.getElementById('pin-detail-desc').textContent = pin.description || '説明はありません。';
       document.getElementById('pin-detail-time').innerHTML = renderPinTimeRows(pin);
@@ -3404,6 +3623,7 @@
     function openPinMenu(pin) {
       if (!canEdit()) return;
       const isUnplaced = pin.lat == null || pin.lng == null;
+      setActivePinId(pin.id);
       state.contextPinId = pin.id;
       document.getElementById('pin-menu-title').textContent = pin.title || '(無題)';
       document.getElementById('pin-menu-unplace').style.display = isUnplaced ? 'none' : 'block';
@@ -3419,6 +3639,7 @@
     function openPinEditor(pin) {
       if (!canEdit()) return;
       if (!pin) return;
+      setActivePinId(pin.id);
       state.editingPinId = pin.id;
       document.getElementById('edit-title').value = pin.title || '';
       document.getElementById('edit-desc').value = pin.description || '';
@@ -3471,6 +3692,27 @@
       } catch (error) {
         alert('ピンを未配置に戻せませんでした。\n\n' + (error && error.message ? error.message : String(error)));
       }
+    });
+    document.getElementById('pin-menu-duplicate-unplaced').addEventListener('click', () => {
+      if (!canEdit()) return;
+      const pin = getPinById(state.contextPinId);
+      if (!pin) return;
+      closePinMenu();
+      duplicatePinFromSource(pin.id, 'unplaced', null, 'unplaced');
+    });
+    document.getElementById('pin-menu-duplicate-same').addEventListener('click', () => {
+      if (!canEdit()) return;
+      const pin = getPinById(state.contextPinId);
+      if (!pin) return;
+      closePinMenu();
+      duplicatePinFromSource(pin.id, 'same', null, 'same');
+    });
+    document.getElementById('pin-menu-duplicate-point').addEventListener('click', () => {
+      if (!canEdit()) return;
+      const pin = getPinById(state.contextPinId);
+      if (!pin) return;
+      closePinMenu();
+      beginDuplicatePlacement(pin.id, 'menu');
     });
     document.getElementById('pin-menu-delete').addEventListener('click', () => {
       if (!canEdit()) return;
@@ -3556,6 +3798,9 @@
           });
           const idsSet = new Set(ids);
           state.pins = state.pins.filter(function(p) { return failedSet.has(p.id) || !idsSet.has(p.id); });
+          if (idsSet.has(state.activePinId) && !failedSet.has(state.activePinId)) setActivePinId(null);
+          if (idsSet.has(state.copiedPinSourceId) && !failedSet.has(state.copiedPinSourceId)) state.copiedPinSourceId = null;
+          if (state.duplicatePlacement && idsSet.has(state.duplicatePlacement.sourcePinId) && !failedSet.has(state.duplicatePlacement.sourcePinId)) clearDuplicatePlacement();
           closeOverlay('delete-overlay');
           clearSelection();
           updateUnplacedBadge();
@@ -3584,6 +3829,9 @@
           delete state.markers[pin.id];
         }
         state.pins = state.pins.filter(item => item.id !== pin.id);
+        if (state.activePinId === pin.id) setActivePinId(null);
+        if (state.copiedPinSourceId === pin.id) state.copiedPinSourceId = null;
+        if (state.duplicatePlacement && state.duplicatePlacement.sourcePinId === pin.id) clearDuplicatePlacement();
         closeOverlay('delete-overlay');
         closeOverlay('pin-detail-overlay');
         renderSidePanel();
@@ -3610,6 +3858,7 @@
 
       marker.on('click', () => {
         if (Date.now() < state.suppressClickUntil) return;
+        setActivePinId(pin.id);
         focusPin(pin);
         highlightLinkedCard(pin.id);
       });
@@ -3627,7 +3876,7 @@
       marker.on('dragstart', () => {
         clearLinkedCardHighlight();
         clearLinkedMarkerHighlight();
-        if (!canEdit()) return;
+        if (!canEdit() || state.duplicatePlacement) return;
         prevLat = pin.lat;
         prevLng = pin.lng;
         showDeleteZone();
@@ -3635,7 +3884,7 @@
       marker.on('dragend', async () => {
         clearLinkedCardHighlight();
         clearLinkedMarkerHighlight();
-        if (!canEdit()) return;
+        if (!canEdit() || state.duplicatePlacement) return;
 
         const panelEl = document.getElementById('side-panel');
         const deleteZoneEl = document.getElementById('dnd-delete-zone');
@@ -3709,7 +3958,7 @@
         const routeNumberDisplay = getRouteNumberDisplayForPin(pin.id, entries);
         const marker = L.marker([pin.lat, pin.lng], {
           icon: createPinIconForDisplay(pin, routeNumberDisplay),
-          draggable: canEdit()
+          draggable: canEdit() && !state.duplicatePlacement
         });
         bindMarkerInteractions(marker, pin);
         marker.addTo(map);
@@ -4574,6 +4823,7 @@
       if (!next) {
         if (state.routeEditOpenId) closeRouteEditOverlay();
         clearPlacement();
+        clearDuplicatePlacement();
         state.draggedPinId = null;
         state.routeDraggedGroupId = null;
         state.routeDraggedPinId = null;
@@ -5052,6 +5302,7 @@
     }
 
     function beginPlacement(options) {
+      clearDuplicatePlacement();
       clearPlacement();
       const pin = options.mode === 'existing' ? getPinById(options.pinId) : null;
       const color = pin ? pin.color : options.draft.color;
@@ -5068,6 +5319,7 @@
       clearPlacement();
       if (wasNew) openOverlay('upload-overlay');
     });
+    document.getElementById('duplicate-placement-cancel').addEventListener('click', clearDuplicatePlacement);
 
     async function saveNewPin(draft, coords) {
       const button = document.getElementById('upload-submit');
@@ -5241,7 +5493,7 @@
       // ② 配置済み → 未配置エリアにドロップ
       const unplacedEl = document.getElementById('side-unplaced');
       unplacedEl.addEventListener('dragover', function(e) {
-        if (!canEdit() || state.placement) return;
+        if (!canEdit() || state.placement || state.duplicatePlacement) return;
         if (!state.draggedPinId) return;
         const pin = getPinById(state.draggedPinId);
         if (!pin || pin.lat == null) return; // 配置済みピンのみ受け付ける
@@ -5254,7 +5506,7 @@
       unplacedEl.addEventListener('drop', async function(e) {
         e.preventDefault();
         unplacedEl.classList.remove('dragover');
-        if (!canEdit() || state.placement) return;
+        if (!canEdit() || state.placement || state.duplicatePlacement) return;
         const id = state.draggedPinId;
         state.draggedPinId = null;
         if (!id) return;
@@ -5276,7 +5528,7 @@
       // ④ 未配置 → 配置済みエリアにドロップ（地図中央に配置）
       const placedEl = document.getElementById('side-placed');
       placedEl.addEventListener('dragover', function(e) {
-        if (!canEdit() || state.placement) return;
+        if (!canEdit() || state.placement || state.duplicatePlacement) return;
         if (!state.draggedPinId) return;
         const pin = getPinById(state.draggedPinId);
         if (!pin || pin.lat != null) return; // 未配置ピンのみ受け付ける
@@ -5289,7 +5541,7 @@
       placedEl.addEventListener('drop', async function(e) {
         e.preventDefault();
         placedEl.classList.remove('dragover');
-        if (!canEdit() || state.placement) return;
+        if (!canEdit() || state.placement || state.duplicatePlacement) return;
         const id = state.draggedPinId;
         state.draggedPinId = null;
         if (!id) return;
@@ -5312,7 +5564,7 @@
       // ⑤ 削除ゾーンへのドロップ（パネルアイテム経路）
       const deleteZoneEl = document.getElementById('dnd-delete-zone');
       deleteZoneEl.addEventListener('dragover', function(e) {
-        if (!canEdit() || state.placement) return;
+        if (!canEdit() || state.placement || state.duplicatePlacement) return;
         if (!state.draggedPinId) return;
         e.preventDefault();
         deleteZoneEl.classList.add('dragover');
@@ -5323,7 +5575,7 @@
       deleteZoneEl.addEventListener('drop', function(e) {
         e.preventDefault();
         deleteZoneEl.classList.remove('dragover');
-        if (!canEdit() || state.placement) return;
+        if (!canEdit() || state.placement || state.duplicatePlacement) return;
         const id = state.draggedPinId;
         state.draggedPinId = null;
         if (!id) return;
@@ -5341,7 +5593,7 @@
     function setupMapDropTarget() {
       const mapEl = document.getElementById('map');
       mapEl.addEventListener('dragover', function(e) {
-        if (!canEdit() || state.placement) return;
+        if (!canEdit() || state.placement || state.duplicatePlacement) return;
         if (!state.draggedPinId) return;
         const pin = getPinById(state.draggedPinId);
         if (!pin || pin.lat != null) return; // 未配置ピンのみ受け付ける
@@ -5355,7 +5607,7 @@
       mapEl.addEventListener('drop', async function(e) {
         e.preventDefault();
         mapEl.classList.remove('dragover');
-        if (!canEdit() || state.placement) return;
+        if (!canEdit() || state.placement || state.duplicatePlacement) return;
         const id = state.draggedPinId;
         state.draggedPinId = null;
         if (!id) return;
