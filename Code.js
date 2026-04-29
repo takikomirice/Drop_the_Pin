@@ -201,11 +201,12 @@ const DEFAULT_COLOR = PinData.DEFAULT_COLOR;
 const DEFAULT_SHARE_LINK_LABEL = 'Drop the Pin!';
 const DEFAULT_ROUTE_COLOR = '#1e88e5';
 const MAX_ROUTE_PINS = 100;
-const SHARE_LINKS_HEADERS = ['createdAt', 'label', 'token', 'tags', 'tagMode', 'enabled', 'revokedAt', 'colors'];
+const SHARE_LINKS_HEADERS = ['createdAt', 'label', 'token', 'tags', 'tagMode', 'enabled', 'revokedAt', 'colors', 'routeIds'];
 const ROUTES_HEADERS = ['routeId', 'name', 'color', 'routeMode', 'closed', 'startPinId', 'endPinId', 'createdAt', 'updatedAt', 'orderIndex', 'visible', 'showNumbers', 'showLine', 'lineStyle'];
 const ROUTE_PINS_HEADERS = ['routeId', 'pinId', 'pinOrder', 'createdAt', 'updatedAt'];
 const ROUTE_CACHE_HEADERS = ['cacheKey', 'routeId', 'coordsJson', 'provider', 'createdAt', 'expiresAt'];
 const SHARED_ROAD_ROUTE_CACHE_PROVIDER = 'osrm';
+const SHARE_ROUTE_NONE_SENTINEL = '__share_no_routes__';
 const SAFE_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const ROUTE_LINE_STYLES = { solid: true, dashed: true, dotted: true };
 
@@ -401,11 +402,26 @@ function ensureShareLinksSheet_(spreadsheet) {
   if (!sheet) {
     sheet = spreadsheet.insertSheet(SHARE_LINKS_SHEET_NAME);
   }
-  sheet.getRange(1, 1, 1, SHARE_LINKS_HEADERS.length).setValues([SHARE_LINKS_HEADERS]);
-  sheet.getRange('A1:H1')
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, SHARE_LINKS_HEADERS.length).setValues([SHARE_LINKS_HEADERS]);
+  } else {
+    const columnCount = Math.max(
+      SHARE_LINKS_HEADERS.length,
+      typeof sheet.getLastColumn === 'function' ? sheet.getLastColumn() : SHARE_LINKS_HEADERS.length
+    );
+    const headerValues = sheet.getRange(1, 1, 1, columnCount).getValues()[0];
+    SHARE_LINKS_HEADERS.forEach(function(header, index) {
+      if (headerValues[index] === '' || headerValues[index] == null) {
+        sheet.getRange(1, index + 1).setValue(header);
+        headerValues[index] = header;
+      }
+    });
+  }
+  sheet.getRange(1, 1, 1, SHARE_LINKS_HEADERS.length)
     .setBackground('#1565c0')
     .setFontColor('#ffffff')
     .setFontWeight('bold');
+  if (typeof sheet.setFrozenRows === 'function') sheet.setFrozenRows(1);
   return sheet;
 }
 
@@ -469,6 +485,59 @@ function deserializeShareColors_(value) {
   return normalizeShareColors_(String(value || '').split('|'));
 }
 
+function getExistingRouteIdSetForShare_() {
+  try {
+    const result = {};
+    getRouteGroups().forEach(function(group) {
+      const routeId = normalizeRouteId_(group && (group.routeId || group.id));
+      if (routeId) result[routeId] = true;
+    });
+    return result;
+  } catch (error) {
+    if (typeof Logger !== 'undefined' && Logger.log) {
+      Logger.log('share_route_ids_normalize_skipped: ' + (error && error.message ? error.message : error));
+    }
+    return null;
+  }
+}
+
+function normalizeShareRouteIdsWithSet_(values, routeIdSet) {
+  if (!Array.isArray(values)) return [];
+  for (var i = 0; i < values.length; i += 1) {
+    if (isShareRouteNoneSentinel_(values[i])) return [SHARE_ROUTE_NONE_SENTINEL];
+  }
+  var seen = {};
+  var result = [];
+  values.forEach(function(value) {
+    var routeId = normalizeRouteId_(value);
+    if (!routeId || seen[routeId]) return;
+    if (routeIdSet && !routeIdSet[routeId]) return;
+    seen[routeId] = true;
+    result.push(routeId);
+  });
+  return result;
+}
+
+function isShareRouteNoneSentinel_(value) {
+  return String(value || '').trim() === SHARE_ROUTE_NONE_SENTINEL;
+}
+
+function isShareRouteSelectionNone_(routeIds) {
+  return Array.isArray(routeIds) && routeIds.length === 1 && isShareRouteNoneSentinel_(routeIds[0]);
+}
+
+function normalizeShareRouteIds_(values) {
+  return normalizeShareRouteIdsWithSet_(values, getExistingRouteIdSetForShare_());
+}
+
+function serializeShareRouteIds_(values) {
+  return normalizeShareRouteIds_(values).join('|');
+}
+
+function deserializeShareRouteIds_(value) {
+  return normalizeShareRouteIdsWithSet_(String(value || '').split('|'), null);
+}
+
 function isShareLinkEnabled_(value) {
   if (value === '' || value == null) return true;
   if (value === false) return false;
@@ -484,7 +553,8 @@ function shareRowToLink_(row) {
     tagMode: String(row[4] || 'or') === 'and' ? 'and' : 'or',
     enabled: isShareLinkEnabled_(row[5]),
     revokedAt: row[6] ? String(row[6]) : '',
-    colors: deserializeShareColors_(row[7] || '')
+    colors: deserializeShareColors_(row[7] || ''),
+    routeIds: deserializeShareRouteIds_(row[8] || '')
   };
 }
 
@@ -1113,32 +1183,13 @@ function getSharedRoutePinIdsForDisplay_(group) {
   const basePinIds = group.pinIds.map(function(pinId) {
     return normalizeRoutePinId_(pinId);
   }).filter(Boolean);
-  const basePinIdSet = {};
-  basePinIds.forEach(function(pinId) {
-    basePinIdSet[pinId] = true;
-  });
 
   const seen = {};
-  const pinIds = [];
-  function canUsePinId(pinId) {
-    return !!pinId && !!basePinIdSet[pinId];
-  }
-  function addPinId(pinId) {
-    if (!canUsePinId(pinId) || seen[pinId]) return;
+  return basePinIds.filter(function(pinId) {
+    if (seen[pinId]) return false;
     seen[pinId] = true;
-    pinIds.push(pinId);
-  }
-
-  const startPinId = normalizeRoutePinId_(group.startPinId);
-  const endPinId = normalizeRoutePinId_(group.endPinId);
-  const shouldAppendEndPin = group.closed !== true && canUsePinId(endPinId);
-  if (canUsePinId(startPinId)) addPinId(startPinId);
-  basePinIds.forEach(function(pinId) {
-    if (pinId === startPinId || (shouldAppendEndPin && pinId === endPinId)) return;
-    addPinId(pinId);
+    return true;
   });
-  if (shouldAppendEndPin) addPinId(endPinId);
-  return pinIds;
 }
 
 function roundSharedRouteCacheCoord_(value) {
@@ -1173,12 +1224,29 @@ function buildSharedRoadRouteCacheKey_(group, pinById, provider) {
   ].join('|');
 }
 
-function getSharedPinsForShareLink_(shareLink) {
+function getSharedPinsForShareLink_(shareLink, routeGroups) {
   return getMapPinsForShare_().filter(function(pin) {
     return matchesTagFilter_(pin, shareLink.tags, shareLink.tagMode)
       && matchesColorFilter_(pin, shareLink.colors);
   }).map(function(pin) {
     return toSharedPin_(pin, shareLink.tags);
+  });
+}
+
+function isShareRouteIdAllowed_(routeId, routeIds) {
+  routeId = normalizeRouteId_(routeId);
+  if (!routeId) return false;
+  if (isShareRouteSelectionNone_(routeIds)) return false;
+  if (!routeIds || !routeIds.length) return true;
+  return routeIds.indexOf(routeId) !== -1;
+}
+
+function filterSharedRouteGroupsForShareLink_(routeGroups, shareLink) {
+  const routeIds = shareLink && Array.isArray(shareLink.routeIds) ? shareLink.routeIds : [];
+  if (isShareRouteSelectionNone_(routeIds)) return [];
+  if (!routeIds.length) return routeGroups;
+  return routeGroups.filter(function(group) {
+    return isShareRouteIdAllowed_(group && (group.routeId || group.id), routeIds);
   });
 }
 
@@ -1216,14 +1284,15 @@ function getSharedRoadRouteCache_(token, routeId) {
 
   routeId = normalizeRouteId_(routeId);
   if (!routeId) return { ok: false };
+  if (!isShareRouteIdAllowed_(routeId, shareLink.routeIds)) return { ok: false };
   function miss(reason, group, expectedCacheKey) {
     logSharedRoadRouteCache_(routeId, group, expectedCacheKey, false, reason);
     return { ok: false };
   }
 
-  const sharedPins = getSharedPinsForShareLink_(shareLink);
-  const allowedPinIdSet = buildSharedAllowedPinIdSet_(sharedPins);
   const allRouteGroups = getRouteGroups();
+  const sharedPins = getSharedPinsForShareLink_(shareLink, allRouteGroups);
+  const allowedPinIdSet = buildSharedAllowedPinIdSet_(sharedPins);
   let rawGroup = null;
   for (var rawIndex = 0; rawIndex < allRouteGroups.length; rawIndex += 1) {
     if (normalizeRouteId_(allRouteGroups[rawIndex].routeId) === routeId) {
@@ -1233,7 +1302,7 @@ function getSharedRoadRouteCache_(token, routeId) {
   }
   if (!rawGroup || !isRouteClosedToAllowedPins_(rawGroup, allowedPinIdSet)) return miss('no_group', rawGroup, '');
 
-  const sharedRouteGroups = getSharedRouteGroups_(sharedPins);
+  const sharedRouteGroups = getSharedRouteGroups_(sharedPins, allRouteGroups);
   let group = null;
   for (var i = 0; i < sharedRouteGroups.length; i += 1) {
     if (normalizeRouteId_(sharedRouteGroups[i].routeId) === routeId) {
@@ -1336,10 +1405,21 @@ function createShareLink(data) {
   const tags = PinData.normalizeTags(data && data.tags || []);
   const tagMode = String(data && data.tagMode || 'or') === 'and' ? 'and' : 'or';
   const colors = normalizeShareColors_(data && data.colors || []);
+  const routeIds = normalizeShareRouteIds_(data && data.routeIds || []);
   const sheet = openShareLinksSheet_();
   const token = Utilities.getUuid();
   const createdAt = new Date().toISOString();
-  sheet.appendRow([createdAt, label, token, PinData.serializeTags(tags), tagMode, true, '', serializeShareColors_(colors)]);
+  sheet.appendRow([
+    createdAt,
+    label,
+    token,
+    PinData.serializeTags(tags),
+    tagMode,
+    true,
+    '',
+    serializeShareColors_(colors),
+    serializeShareRouteIds_(routeIds)
+  ]);
 
   return {
     ok: true,
@@ -1352,6 +1432,7 @@ function createShareLink(data) {
       tags: tags,
       tagMode: tagMode,
       colors: colors,
+      routeIds: routeIds,
       enabled: true,
       revokedAt: ''
     }
@@ -1498,7 +1579,7 @@ function toSharedRouteGroup_(group, allowedPinIdSet) {
   };
 }
 
-function getSharedRouteGroups_(pins) {
+function getSharedRouteGroups_(pins, routeGroups) {
   var allowedPinIdSet = {};
   (Array.isArray(pins) ? pins : []).forEach(function(pin) {
     var pinId = normalizeRoutePinId_(pin && pin.id);
@@ -1506,7 +1587,8 @@ function getSharedRouteGroups_(pins) {
   });
   if (Object.keys(allowedPinIdSet).length === 0) return [];
 
-  return getRouteGroups().map(function(group) {
+  var sourceRouteGroups = Array.isArray(routeGroups) ? routeGroups : getRouteGroups();
+  return sourceRouteGroups.map(function(group) {
     return toSharedRouteGroup_(group, allowedPinIdSet);
   }).filter(function(group) {
     return !!group;
@@ -1518,26 +1600,27 @@ function getSharedViewData(token) {
   if (!shareLink) return { ok: false, error: 'invalid_share_link' };
   if (!shareLink.enabled) return { ok: false, error: 'revoked_share_link' };
 
-  var pins = getMapPinsForShare_().filter(function(pin) {
-    return matchesTagFilter_(pin, shareLink.tags, shareLink.tagMode)
-      && matchesColorFilter_(pin, shareLink.colors);
-  }).map(function(pin) {
-    return toSharedPin_(pin, shareLink.tags);
-  });
+  var allRouteGroups = getRouteGroups();
+  var pins = getSharedPinsForShareLink_(shareLink, allRouteGroups);
+  var routeGroups = filterSharedRouteGroupsForShareLink_(getSharedRouteGroups_(pins, allRouteGroups), shareLink);
+  var noRoutes = isShareRouteSelectionNone_(shareLink.routeIds);
 
   return {
     ok: true,
+    noRoutes: noRoutes,
     shareLink: {
       label: shareLink.label,
       token: shareLink.token,
       tags: shareLink.tags,
       tagMode: shareLink.tagMode,
-      colors: shareLink.colors.slice()
+      colors: shareLink.colors.slice(),
+      routeIds: shareLink.routeIds.slice()
     },
     allowedTags: shareLink.tags.slice(),
     allowedColors: shareLink.colors.slice(),
+    allowedRouteIds: noRoutes ? [] : shareLink.routeIds.slice(),
     pins: pins,
-    routeGroups: getSharedRouteGroups_(pins)
+    routeGroups: routeGroups
   };
 }
 

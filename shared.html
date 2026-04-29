@@ -697,7 +697,7 @@
         <button id="shared-filter-color-btn" class="shared-control-btn filter-toggle-btn" type="button">色で検索</button>
         <button id="shared-filter-tag-btn" class="shared-control-btn filter-toggle-btn" type="button">タグで検索</button>
         <button id="shared-clear-filters" class="shared-control-btn" type="button">条件クリア</button>
-        <button id="shared-reset-routes" class="shared-control-btn" type="button" title="ルート表示と『ルート外も表示』を初期状態に戻します">ルートも初期化</button>
+        <button id="shared-reset-routes" class="shared-control-btn" type="button" title="ルート表示を初期状態に戻します">ルートも初期化</button>
       </div>
       <div id="shared-filter-color-detail" style="display:none;margin-top:4px;">
         <div id="shared-color-filter-header">
@@ -718,7 +718,6 @@
     <section id="shared-route-section">
       <div class="shared-route-section-header">
         <h3 class="shared-section-title">ルート</h3>
-        <button id="shared-orphan-toggle" class="shared-control-btn" type="button">ルート外も表示</button>
       </div>
       <div id="shared-route-list"></div>
     </section>
@@ -818,6 +817,7 @@
 
     const EXEC_URL = <?!= JSON.stringify(execUrl || '') ?>;
     const SHARED_TOKEN = <?!= JSON.stringify(token || '') ?>;
+    const SHARED_ROUTE_NONE_SENTINEL = '__share_no_routes__';
     // 共有ビューは読み取り専用。編集・追加・削除・D&D・ルート編集は持たない。
     // ルート情報は表示制御・ルート線・番号表示のために読むだけ。
     const state = {
@@ -826,6 +826,7 @@
       routeGroups: [],
       allowedTags: [],
       allowedColors: [],
+      allowedRouteIds: [],
       listQuery: '',
       activeTags: [],
       activeColors: [],
@@ -833,7 +834,6 @@
       routeDisplayMode: {},
       initialRouteVisibility: {},
       initialRouteDisplayMode: {},
-      showOrphanPins: true,
       roadRouteCache: {},
       tagMode: 'or',
       initialTagMode: 'or',
@@ -1138,7 +1138,7 @@
 
     function getFilteredSharedPins() {
       return sortSharedPins(state.pins.filter(function(pin) {
-        return matchesSharedSearch(pin) && matchesSharedTags(pin) && matchesSharedColors(pin) && isPinAllowedByRoutes(pin);
+        return matchesSharedSearch(pin) && matchesSharedTags(pin) && matchesSharedColors(pin);
       }));
     }
 
@@ -1248,18 +1248,29 @@
       return 'road';
     }
 
-    function isPinAllowedByRoutes(pin) {
-      const groups = state.routeGroups;
-      if (!groups || !groups.length) return true;
-      const pinId = String(pin && pin.id != null ? pin.id : '');
-      let inAnyRoute = false;
-      groups.forEach(function(g) {
-        if (!g || !Array.isArray(g.pinIds) || g.pinIds.indexOf(pinId) === -1) return;
-        inAnyRoute = true;
+    function isSharedRouteSelectionNone(routeIds) {
+      return Array.isArray(routeIds)
+        && routeIds.length === 1
+        && String(routeIds[0] || '').trim() === SHARED_ROUTE_NONE_SENTINEL;
+    }
+
+    function normalizeSharedAllowedRouteIds(routeIds) {
+      if (isSharedRouteSelectionNone(routeIds)) return [];
+      if (!Array.isArray(routeIds)) return [];
+      return routeIds.map(function(routeId) {
+        return String(routeId || '').trim();
+      }).filter(function(routeId) {
+        return !!routeId && routeId !== SHARED_ROUTE_NONE_SENTINEL;
       });
-      if (inAnyRoute) return true;
-      if (!inAnyRoute && state.showOrphanPins) return true;
-      return false;
+    }
+
+    function hasSharedRouteRestriction() {
+      if (isSharedRouteSelectionNone(state.allowedRouteIds)) return false;
+      return Array.isArray(state.allowedRouteIds) && state.allowedRouteIds.length > 0;
+    }
+
+    function isPinAllowedByRoutes(pin) {
+      return true;
     }
 
     function getSharedRoutePinIdsForDisplay(group, filteredPinIdSet) {
@@ -1267,31 +1278,13 @@
       const basePinIds = group.pinIds.map(function(pinId) {
         return String(pinId || '').trim();
       }).filter(Boolean);
-      const basePinIdSet = {};
-      basePinIds.forEach(function(pinId) {
-        basePinIdSet[pinId] = true;
-      });
       const seen = {};
-      const pinIds = [];
-      function canUsePinId(pinId) {
-        return !!pinId && !!basePinIdSet[pinId] && (!filteredPinIdSet || filteredPinIdSet.has(pinId));
-      }
-      function addPinId(pinId) {
-        if (!canUsePinId(pinId) || seen[pinId]) return;
+      return basePinIds.filter(function(pinId) {
+        if (seen[pinId]) return false;
+        if (filteredPinIdSet && !filteredPinIdSet.has(pinId)) return false;
         seen[pinId] = true;
-        pinIds.push(pinId);
-      }
-
-      const startPinId = String(group.startPinId || '').trim();
-      const endPinId = String(group.endPinId || '').trim();
-      const shouldAppendEndPin = group.closed !== true && canUsePinId(endPinId);
-      if (canUsePinId(startPinId)) addPinId(startPinId);
-      basePinIds.forEach(function(pinId) {
-        if (pinId === startPinId || (shouldAppendEndPin && pinId === endPinId)) return;
-        addPinId(pinId);
+        return true;
       });
-      if (shouldAppendEndPin) addPinId(endPinId);
-      return pinIds;
     }
 
     function getSharedRouteNumberDisplayForPin(pinId) {
@@ -1418,11 +1411,17 @@
     function getSharedRouteDistanceMetersForDisplay(group) {
       const routeId = getSharedRouteId(group);
       const latLngs = getSharedRouteLatLngsForDisplay(group);
+      if (getSharedRouteDisplayState(routeId) === 'hidden') return sumLatLngDistanceMeters(latLngs);
       if (getSharedRouteEffectiveMode(group) === 'road') {
         const roadLatLngs = getSharedCachedRoadRouteCoords(routeId);
         if (roadLatLngs) return sumLatLngDistanceMeters(roadLatLngs);
       }
       return sumLatLngDistanceMeters(latLngs);
+    }
+
+    function getSharedRouteMetaText(group, routePins) {
+      const hiddenDistanceNote = getSharedRouteDisplayState(getSharedRouteId(group)) === 'hidden' ? '（直線距離）' : '';
+      return routePins.length + '地点・' + formatSharedRouteDistance(getSharedRouteDistanceMetersForDisplay(group)) + hiddenDistanceNote;
     }
 
     function buildSharedRouteInfoPopupHtml(group, latLngs, methodLabel) {
@@ -1636,7 +1635,6 @@
     function resetSharedRouteState() {
       state.routeVisibility = Object.assign({}, state.initialRouteVisibility);
       state.routeDisplayMode = Object.assign({}, state.initialRouteDisplayMode);
-      state.showOrphanPins = true;
       renderSharedRouteList();
       renderSharedPins();
       renderSharedMap();
@@ -1764,23 +1762,16 @@
     function renderSharedRouteList() {
       const routeSection = document.getElementById('shared-route-section');
       const routeList = document.getElementById('shared-route-list');
-      const orphanToggle = document.getElementById('shared-orphan-toggle');
       const resetRoutesButton = document.getElementById('shared-reset-routes');
       if (!routeSection || !routeList) return;
       const routeGroups = getSharedRouteGroups();
       if (!routeGroups.length) {
         routeSection.style.display = 'none';
         routeList.innerHTML = '';
-        if (orphanToggle) orphanToggle.style.display = 'none';
         if (resetRoutesButton) resetRoutesButton.style.display = 'none';
         return;
       }
       routeSection.style.display = '';
-      if (orphanToggle) {
-        orphanToggle.style.display = '';
-        orphanToggle.className = 'shared-control-btn' + (state.showOrphanPins ? '' : ' is-off');
-        orphanToggle.setAttribute('aria-pressed', state.showOrphanPins ? 'true' : 'false');
-      }
       if (resetRoutesButton) resetRoutesButton.style.display = '';
       routeList.innerHTML = '';
       routeGroups.forEach(function(group) {
@@ -1819,7 +1810,7 @@
 
         const meta = document.createElement('div');
         meta.className = 'shared-route-meta';
-        meta.textContent = routePins.length + '地点・' + formatSharedRouteDistance(getSharedRouteDistanceMetersForDisplay(group));
+        meta.textContent = getSharedRouteMetaText(group, routePins);
 
         const pinList = document.createElement('ul');
         pinList.className = 'shared-route-pin-list';
@@ -1935,7 +1926,7 @@
         const marker = L.marker([pin.lat, pin.lng], {
           icon: createSharedPinIconForDisplay(pin)
         }).addTo(map);
-        marker.bindTooltip(pin.title || '(無題)', { direction: 'top' });
+        marker.bindTooltip(pin.title || '(無題)', { direction: 'top', offset: [0, -34] });
         marker.on('click', function() {
           highlightLinkedCard(pin.id);
           openSharedDetail(pin);
@@ -2077,11 +2068,11 @@
       if (!state.token) {
         state.status = 'invalid_share_link';
         state.routeGroups = [];
+        state.allowedRouteIds = [];
         state.routeVisibility = {};
         state.routeDisplayMode = {};
         state.initialRouteVisibility = {};
         state.initialRouteDisplayMode = {};
-        state.showOrphanPins = true;
         state.roadRouteCache = {};
         renderSharedTagChips();
         renderSharedColorFilter();
@@ -2096,11 +2087,11 @@
         if (!result || !result.ok) {
           state.status = result && result.error ? result.error : 'invalid_share_link';
           state.routeGroups = [];
+          state.allowedRouteIds = [];
           state.routeVisibility = {};
           state.routeDisplayMode = {};
           state.initialRouteVisibility = {};
           state.initialRouteDisplayMode = {};
-          state.showOrphanPins = true;
           state.roadRouteCache = {};
           renderSharedTagChips();
           renderSharedColorFilter();
@@ -2112,6 +2103,7 @@
         }
         state.pins = Array.isArray(result.pins) ? result.pins : [];
         state.routeGroups = Array.isArray(result.routeGroups) ? result.routeGroups.map(normalizeSharedRouteGroup) : [];
+        state.allowedRouteIds = normalizeSharedAllowedRouteIds(result.allowedRouteIds);
         state.routeVisibility = {};
         state.routeDisplayMode = {};
         state.routeGroups.forEach(function(group) {
@@ -2120,7 +2112,6 @@
         });
         state.initialRouteVisibility = Object.assign({}, state.routeVisibility);
         state.initialRouteDisplayMode = Object.assign({}, state.routeDisplayMode);
-        state.showOrphanPins = true;
         state.roadRouteCache = {};
         state.allowedTags = Array.isArray(result.allowedTags) ? result.allowedTags : [];
         state.allowedColors = Array.isArray(result.allowedColors) ? result.allowedColors : [];
@@ -2140,11 +2131,11 @@
       } catch (_error) {
         state.status = 'invalid_share_link';
         state.routeGroups = [];
+        state.allowedRouteIds = [];
         state.routeVisibility = {};
         state.routeDisplayMode = {};
         state.initialRouteVisibility = {};
         state.initialRouteDisplayMode = {};
-        state.showOrphanPins = true;
         state.roadRouteCache = {};
         renderSharedTagChips();
         renderSharedColorFilter();
@@ -2205,14 +2196,6 @@
 
     document.getElementById('shared-reset-routes').addEventListener('click', function() {
       resetSharedRouteState();
-    });
-
-    document.getElementById('shared-orphan-toggle').addEventListener('click', function() {
-      state.showOrphanPins = !state.showOrphanPins;
-      renderSharedPins();
-      renderSharedMap();
-      renderSharedRouteLayers();
-      renderSharedRouteList();
     });
 
     document.getElementById('shared-filter-color-btn').addEventListener('click', function() {
