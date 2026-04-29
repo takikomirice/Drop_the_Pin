@@ -178,6 +178,12 @@
     .shared-control-btn.is-off {
       opacity: 0.55;
     }
+    .shared-inline-help {
+      margin-top: 6px;
+      color: var(--text-sub);
+      font-size: 11px;
+      line-height: 1.5;
+    }
     #shared-search-controls {
       display: flex;
       flex-wrap: wrap;
@@ -394,6 +400,7 @@
       gap: 6px;
       flex: 0 0 auto;
     }
+    #shared-help-open-btn,
     #shared-theme-toggle,
     #shared-panel-toggle {
       width: 34px;
@@ -513,6 +520,22 @@
       border: 1px solid var(--border);
       background: var(--surface);
       box-shadow: 0 24px 48px rgba(37, 25, 14, 0.25);
+    }
+    .shared-help-content {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .shared-help-content h3 {
+      margin-bottom: 4px;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .shared-help-content p {
+      color: var(--text-sub);
+      font-size: 12px;
+      line-height: 1.55;
     }
     .detail-header {
       display: flex;
@@ -675,6 +698,7 @@
       <div id="shared-title">Drop the Pin!</div>
     </div>
     <div class="shared-topbar-actions">
+      <button id="shared-help-open-btn" class="shared-control-btn" type="button" title="使い方">?</button>
       <button id="shared-theme-toggle" class="shared-control-btn" type="button" title="テーマ切替">🌙</button>
       <button id="shared-panel-toggle" class="shared-control-btn" type="button" title="リストを隠す">🗺️</button>
     </div>
@@ -687,6 +711,7 @@
       <button id="shared-search-toggle" class="shared-control-btn" type="button" title="検索設定">▼</button>
     </div>
     <div id="shared-geocode-results" style="display:none;"></div>
+    <div class="shared-inline-help">ピンは検索・タグ・色で絞り込めます。</div>
     <div id="shared-search-expanded" style="display:none;">
       <div id="shared-search-controls">
         <select id="shared-sort">
@@ -719,6 +744,7 @@
       <div class="shared-route-section-header">
         <h3 class="shared-section-title">ルート</h3>
       </div>
+      <div class="shared-inline-help">ルートのボタンで 道路 / 直線 / 非表示 を切り替えできます。</div>
       <div id="shared-route-list"></div>
     </section>
     <section id="shared-pin-section">
@@ -726,6 +752,35 @@
       <div id="shared-list"></div>
     </section>
   </aside>
+
+  <div id="shared-help-overlay" class="sheet-overlay" role="dialog" aria-modal="true" aria-labelledby="shared-help-title"><div class="detail-card">
+    <div class="detail-header">
+      <div id="shared-help-title" class="detail-title">使い方</div>
+      <button id="shared-help-close" class="shared-control-btn" type="button">閉じる</button>
+    </div>
+    <div class="shared-help-content" style="margin-top:14px;">
+      <section>
+        <h3>このページは閲覧専用</h3>
+        <p>ピンの追加・編集・削除はできません。</p>
+      </section>
+      <section>
+        <h3>ピン</h3>
+        <p>地図上のピンや一覧のピンを押すと詳細を表示できます。</p>
+      </section>
+      <section>
+        <h3>検索・絞り込み</h3>
+        <p>タイトル・説明・タグで検索できます。タグ・色で絞り込みでき、並び順も変更できます。</p>
+      </section>
+      <section>
+        <h3>ルート</h3>
+        <p>ルートカードの表示ボタンで「道路 / 直線 / 非表示」を切り替えできます。「ルートも初期化」で共有時の初期状態に戻せます。</p>
+      </section>
+      <section>
+        <h3>注意</h3>
+        <p>表示するルートが限定されていても、説明用の未所属ピンが表示されることがあります。ピンの表示は共有作成時のタグ・色条件、および閲覧中の検索・絞り込み条件で変わります。</p>
+      </section>
+    </div>
+  </div></div>
 
   <div id="shared-detail-overlay" class="sheet-overlay" style="display:none;"></div>
 
@@ -956,6 +1011,29 @@
       } catch (_error) {
         // Storage may be unavailable in some embedded/public browser contexts.
       }
+    }
+
+    const SHARED_HELP_SEEN_STORAGE_KEY = 'dtp-shared-help-seen-v112';
+
+    function rememberSharedHelpSeen() {
+      try {
+        localStorage.setItem(SHARED_HELP_SEEN_STORAGE_KEY, '1');
+      } catch (_error) {}
+    }
+
+    function openSharedHelpOverlay() {
+      const overlay = document.getElementById('shared-help-overlay');
+      overlay.classList.add('open');
+    }
+
+    function closeSharedHelpPanel() {
+      const overlay = document.getElementById('shared-help-overlay');
+      overlay.classList.remove('open');
+    }
+
+    function openSharedHelpPanel() {
+      openSharedHelpOverlay();
+      rememberSharedHelpSeen();
     }
 
     function getPreferredTheme() {
@@ -2177,6 +2255,17 @@
 
     document.getElementById('shared-theme-toggle').addEventListener('click', function() {
       setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+    });
+
+    document.getElementById('shared-help-open-btn').addEventListener('click', openSharedHelpPanel);
+    document.getElementById('shared-help-close').addEventListener('click', closeSharedHelpPanel);
+    document.getElementById('shared-help-overlay').addEventListener('click', function(event) {
+      if (event.target === this) closeSharedHelpPanel();
+    });
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape' && document.getElementById('shared-help-overlay').classList.contains('open')) {
+        closeSharedHelpPanel();
+      }
     });
 
     document.getElementById('shared-panel-toggle').addEventListener('click', function() {

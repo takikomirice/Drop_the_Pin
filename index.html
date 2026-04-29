@@ -78,6 +78,12 @@
     .sheet-title { font-size: 17px; font-weight: 800; margin-bottom: 14px; }
     .sheet-subtitle, .muted { font-size: 12px; line-height: 1.5; color: var(--text-sub); }
     .section-card { margin-bottom: 14px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; }
+    .help-content { display: flex; flex-direction: column; gap: 12px; }
+    .help-content h3 { margin-bottom: 4px; font-size: 13px; font-weight: 800; color: var(--text); }
+    .help-content p { font-size: 12px; line-height: 1.55; color: var(--text-sub); }
+    .inline-help {
+      margin-top: 6px; font-size: 11px; line-height: 1.5; color: var(--text-sub);
+    }
     .form-group { margin-bottom: 14px; }
     .form-label { display: block; margin-bottom: 5px; font-size: 12px; font-weight: 700; color: var(--text-sub); }
     .form-input, .form-textarea {
@@ -536,6 +542,13 @@
     body:not(.edit-mode):not(.share-mode) #route-add-btn,
     body:not(.edit-mode):not(.share-mode) #pin-detail-drive,
     body:not(.edit-mode):not(.share-mode) #pin-detail-route-add { display: none !important; }
+    @media (max-width: 520px) {
+      #topbar { gap: 6px; padding: 0 8px; }
+      .topbar-title { max-width: 44px; overflow: hidden; text-overflow: ellipsis; }
+      .topbar-actions { gap: 4px; }
+      #mode-badge { display: none; }
+      .text-btn, .ghost-btn, .danger-btn { padding-inline: 9px; }
+    }
     #map-search-bar {
       position: fixed;
       top: calc(52px + 8px);
@@ -620,6 +633,7 @@
     <div class="topbar-actions">
       <button id="theme-toggle" class="icon-btn" type="button" title="テーマ切替">🌙</button>
       <button id="panel-toggle" class="icon-btn" type="button" title="リスト表示/非表示">🗺️</button>
+      <button id="help-open-btn" class="icon-btn" type="button" title="使い方">?</button>
       <button id="share-open-btn" class="icon-btn" type="button" title="共有リンク生成">🔗</button>
       <button id="settings-toggle" class="icon-btn" type="button" title="設定">⚙️</button>
       <span id="mode-badge" class="badge">閲覧中</span>
@@ -694,6 +708,7 @@
           <button id="route-add-btn" class="ghost-btn" type="button" title="ルートを追加">＋</button>
         </div>
       </div>
+      <div class="inline-help">ルートの表示/非表示は閲覧中でも切り替えできます。</div>
       <div id="route-list" class="route-list"></div>
     </div>
     <div class="side-section dnd-drop-target" id="side-unplaced"></div>
@@ -719,6 +734,36 @@
     <button id="placement-confirm" class="text-btn" type="button">配置</button>
     <button id="placement-cancel" class="ghost-btn" type="button">戻る</button>
   </div>
+
+  <div id="help-overlay" class="sheet-overlay" role="dialog" aria-modal="true" aria-labelledby="help-title"><div class="sheet-body">
+    <div class="sheet-handle"></div>
+    <div id="help-title" class="sheet-title">使い方</div>
+    <div class="help-content">
+      <section>
+        <h3>基本</h3>
+        <p>地図上のピンを押すと詳細を確認できます。検索欄でタイトル・説明・タグを検索でき、色・アイコン・タグ・状態で絞り込みできます。</p>
+      </section>
+      <section>
+        <h3>編集モード</h3>
+        <p>ピンの追加・編集・削除、未配置ピンの配置、ルート編集ができます。閲覧モードでは編集操作はできません。</p>
+      </section>
+      <section>
+        <h3>未配置ピン</h3>
+        <p>位置が未指定のピンです。あとから地図上に配置できます。ピンを挿さずに説明用データとして残す用途もあります。</p>
+      </section>
+      <section>
+        <h3>ルート</h3>
+        <p>ピン同士をつないで順路を表します。ルート線は表示/非表示を切り替えでき、道路表示と直線表示を切り替えできます。ルートに入っていないピンも検索・絞り込み対象です。</p>
+      </section>
+      <section>
+        <h3>共有リンク</h3>
+        <p>タグ・色・表示するルートを選んで閲覧専用ページを作れます。表示するルートは共有ビューに出すルート線・ルートリストの設定で、ピンそのものをルート所属ピンだけに限定する設定ではありません。ピンの絞り込みはタグ・色の条件で行います。</p>
+      </section>
+    </div>
+    <div class="inline-actions" style="margin-top:14px;">
+      <button id="help-close" class="ghost-btn" type="button">閉じる</button>
+    </div>
+  </div></div>
 
   <div id="upload-overlay" class="sheet-overlay" role="dialog" aria-modal="true"><div class="sheet-body">
     <div class="sheet-handle"></div><div class="sheet-title">＋ ピンを追加</div>
@@ -872,12 +917,14 @@
         <div id="share-color-filter"></div>
       </div>
       <div class="form-group" style="margin-bottom:12px;">
-        <div class="form-label">対象ルート</div>
+        <div class="form-label">表示するルート</div>
+        <div class="inline-help">選んだルート線だけを共有ビューに表示します。ピンはタグ・色の条件で絞り込まれます。</div>
         <div id="share-route-actions" class="share-route-actions">
           <button id="share-route-all-btn" class="ghost-btn" type="button">全ルート</button>
           <button id="share-route-clear-btn" class="ghost-btn" type="button">選択解除</button>
         </div>
         <div id="share-route-options" class="share-route-options"></div>
+        <div class="inline-help">表示するルートはルート線の表示対象です。ピンの絞り込みはタグ・色で行います。</div>
       </div>
       <div class="inline-actions">
         <button id="share-tag-mode-btn" class="ghost-btn" type="button" style="min-width:64px;">OR</button>
@@ -1468,6 +1515,22 @@
     function closeOverlay(id) { document.getElementById(id).classList.remove('open'); }
     function showHint(message) { const el = document.getElementById('hint-bar'); el.textContent = message; el.style.display = 'block'; }
     function hideHint() { document.getElementById('hint-bar').style.display = 'none'; }
+    const HELP_SEEN_STORAGE_KEY = 'dtp-help-seen-v112';
+
+    function rememberHelpSeen() {
+      try {
+        localStorage.setItem(HELP_SEEN_STORAGE_KEY, '1');
+      } catch (_error) {}
+    }
+
+    function openHelpPanel() {
+      openOverlay('help-overlay');
+      rememberHelpSeen();
+    }
+
+    function closeHelpPanel() {
+      closeOverlay('help-overlay');
+    }
 
     function showDeleteZone() {
       if (!canEdit()) return;
@@ -2930,11 +2993,15 @@
     ensureUrlInputs('upload-links', []);
     ensureUrlInputs('edit-links', []);
 
-    ['upload-overlay', 'settings-overlay', 'location-choice-overlay', 'pin-detail-overlay',
+    ['help-overlay', 'upload-overlay', 'settings-overlay', 'location-choice-overlay', 'pin-detail-overlay',
      'unplaced-overlay', 'pin-menu-overlay', 'delete-overlay', 'share-overlay', 'dup-warning-overlay']
       .forEach(function(id) {
         document.getElementById(id).addEventListener('click', function(event) {
           if (event.target === document.getElementById(id)) {
+            if (id === 'help-overlay') {
+              closeHelpPanel();
+              return;
+            }
             if (id === 'share-overlay') {
               closeShareDialog();
               return;
@@ -3027,6 +3094,13 @@
     }
 
     document.getElementById('settings-toggle').addEventListener('click', openSettingsModal);
+    document.getElementById('help-open-btn').addEventListener('click', openHelpPanel);
+    document.getElementById('help-close').addEventListener('click', closeHelpPanel);
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape' && document.getElementById('help-overlay').classList.contains('open')) {
+        closeHelpPanel();
+      }
+    });
     document.getElementById('share-open-btn').addEventListener('click', function() {
       openShareDialog(null);
     });
@@ -5376,16 +5450,16 @@
     }
 
     function formatShareLinkRouteTargets(routeIds) {
-      if (isShareRouteSelectionNone(routeIds)) return '対象ルート: なし';
+      if (isShareRouteSelectionNone(routeIds)) return '表示するルート: なし';
       const ids = (Array.isArray(routeIds) ? routeIds : []).map(function(routeId) {
         return String(routeId || '').trim();
       }).filter(Boolean);
-      if (!ids.length) return '対象ルート: すべて';
+      if (!ids.length) return '表示するルート: すべて';
       const names = ids.map(function(routeId) {
         const group = getRouteGroupById(routeId);
         return group && group.name ? group.name : '削除済みルート';
       });
-      return '対象ルート: ' + names.join('、');
+      return '表示するルート: ' + names.join('、');
     }
 
     function renderShareFilterUi() {
