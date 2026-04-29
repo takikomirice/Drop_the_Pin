@@ -209,6 +209,7 @@ const SHARED_ROAD_ROUTE_CACHE_PROVIDER = 'osrm';
 const SHARE_ROUTE_NONE_SENTINEL = '__share_no_routes__';
 const SAFE_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const ROUTE_LINE_STYLES = { solid: true, dashed: true, dotted: true };
+const PIN_TITLE_MAX_LENGTH = 80;
 
 // ============================================================
 //  メニュー / 初期設定
@@ -1698,6 +1699,86 @@ function saveMapData(data) {
     folderUrl: folderUrl,
     links: links
   };
+}
+
+function buildDuplicatePinTitle_(title) {
+  const suffix = '（コピー）';
+  const base = String(title || '').trim() || '無題';
+  const maxBaseLength = Math.max(0, PIN_TITLE_MAX_LENGTH - suffix.length);
+  return base.slice(0, maxBaseLength) + suffix;
+}
+
+function normalizeDuplicateLocation_(mode, sourcePin, data) {
+  if (mode === 'unplaced') {
+    return { ok: true, lat: null, lng: null };
+  }
+  if (mode === 'same') {
+    return {
+      ok: true,
+      lat: sourcePin.lat == null || sourcePin.lng == null ? null : sourcePin.lat,
+      lng: sourcePin.lat == null || sourcePin.lng == null ? null : sourcePin.lng
+    };
+  }
+  if (mode === 'point') {
+    const lat = Number(data && data.lat);
+    const lng = Number(data && data.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      return { ok: false, error: 'invalid_location' };
+    }
+    return { ok: true, lat: lat, lng: lng };
+  }
+  return { ok: false, error: 'invalid_location' };
+}
+
+function duplicatePin(data) {
+  const sourcePinId = String(data && data.sourcePinId || '').trim();
+  const mode = String(data && data.mode || 'unplaced').trim();
+  const sheet = openMapInfoSheet_();
+  const rows = sheet.getDataRange().getValues();
+  const rowIndex = rows.findIndex(function(row) {
+    return row && String(row[8] || '') === sourcePinId;
+  });
+  if (rowIndex === -1) return { ok: false, error: 'pin_not_found' };
+
+  const sourcePin = PinData.rowToPin(rows[rowIndex]);
+  const location = normalizeDuplicateLocation_(mode, sourcePin, data);
+  if (!location.ok) return { ok: false, error: location.error };
+
+  const title = buildDuplicatePinTitle_(sourcePin.title);
+  const description = String(sourcePin.description || '');
+  const color = SAFE_COLOR_RE.test(String(sourcePin.color || '')) ? sourcePin.color : DEFAULT_COLOR;
+  const icon = PinData.normalizeIcon(sourcePin.icon);
+  const eventAt = PinData.normalizeEventAt(sourcePin.eventAt);
+  const links = PinData.normalizeLinks(sourcePin.links || []);
+  const status = sourcePin.status ? PinData.normalizeStatus(String(sourcePin.status)) : '';
+  const tags = PinData.normalizeTags(sourcePin.tags || []);
+  const id = Utilities.getUuid();
+  const now = Utilities.formatDate(
+    new Date(), Session.getScriptTimeZone(), 'yyyy/MM/dd HH:mm:ss'
+  );
+
+  const row = [
+    now,
+    title,
+    description,
+    location.lat != null ? location.lat : '',
+    location.lng != null ? location.lng : '',
+    color,
+    '',
+    '',
+    id,
+    PinData.serializeLinks(links),
+    status,
+    PinData.serializeTags(tags),
+    eventAt,
+    now,
+    icon
+  ];
+  sheet.appendRow(row);
+
+  const pin = PinData.rowToPin(row);
+  pin.folderUrl = '';
+  return { ok: true, pin: pin };
 }
 
 function updatePinDetails(data) {
