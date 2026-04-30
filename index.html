@@ -78,6 +78,12 @@
     .sheet-title { font-size: 17px; font-weight: 800; margin-bottom: 14px; }
     .sheet-subtitle, .muted { font-size: 12px; line-height: 1.5; color: var(--text-sub); }
     .section-card { margin-bottom: 14px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; }
+    .help-content { display: flex; flex-direction: column; gap: 12px; }
+    .help-content h3 { margin-bottom: 4px; font-size: 13px; font-weight: 800; color: var(--text); }
+    .help-content p { font-size: 12px; line-height: 1.55; color: var(--text-sub); }
+    .inline-help {
+      margin-top: 6px; font-size: 11px; line-height: 1.5; color: var(--text-sub);
+    }
     .form-group { margin-bottom: 14px; }
     .form-label { display: block; margin-bottom: 5px; font-size: 12px; font-weight: 700; color: var(--text-sub); }
     .form-input, .form-textarea {
@@ -214,8 +220,10 @@
     .route-visibility {
       flex: 0 0 auto; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--border);
       font-size: 10px; font-weight: 700; color: var(--text-sub); background: var(--surface);
+      cursor: pointer; user-select: none;
     }
     .route-visibility.is-visible { color: var(--accent); background: rgba(46,125,50,0.1); border-color: rgba(46,125,50,0.24); }
+    .route-visibility:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .route-saving {
       display: none; flex: 0 0 auto; font-size: 10px; font-weight: 700; color: var(--warn);
     }
@@ -276,8 +284,6 @@
     .route-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .route-toggle-row .toggle-switch { flex: 0 0 44px; }
     .route-toggle-title { font-size: 14px; font-weight: 800; color: var(--text); }
-    .route-edit-endpoints { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-    @media (max-width: 480px) { .route-edit-endpoints { grid-template-columns: 1fr; } }
     .empty-note { padding: 8px 4px; font-size: 12px; color: var(--text-sub); line-height: 1.5; }
     .url-row { display: flex; gap: 8px; margin-bottom: 8px; }
     .url-input { flex: 1; }
@@ -294,12 +300,12 @@
       position: fixed; top: 62px; left: 50%; transform: translateX(-50%); z-index: 1350; min-width: min(90vw, 360px); max-width: 90vw;
       display: none; padding: 10px 16px; text-align: center; border-radius: 999px; border: 1px solid var(--border); background: var(--sheet-bg); box-shadow: var(--shadow); font-size: 13px;
     }
-    #placement-bar {
+    #placement-bar, #duplicate-placement-bar {
       position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 1300; display: none; gap: 10px; padding: 10px 12px;
       width: auto; max-width: calc(100vw - 28px); border: 1px solid var(--border); border-radius: 18px; background: var(--sheet-bg); box-shadow: var(--shadow);
     }
-    #placement-bar.open { display: flex; }
-    #placement-bar button { flex: 0 0 auto; min-width: 120px; }
+    #placement-bar.open, #duplicate-placement-bar.open { display: flex; }
+    #placement-bar button, #duplicate-placement-bar button { flex: 0 0 auto; min-width: 120px; }
     #placement-confirm { background: var(--accent); color: #fff; border-color: transparent; }
     #placement-cancel { background: #fff7d6; color: #5d4300; border-color: #f0cf59; }
     [data-theme="dark"] #placement-cancel { background: #473700; color: #ffe08a; border-color: #8c7112; }
@@ -414,6 +420,7 @@
     .share-link-actions .text-btn,
     .share-link-actions .danger-btn { padding: 6px 10px; font-size: 11px; }
     .share-link-tags { margin-top: 8px; }
+    .share-link-routes { margin-top: 8px; font-size: 11px; line-height: 1.45; color: var(--text-sub); overflow-wrap: anywhere; }
     .status-badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(255,152,0,0.12); color: var(--warn); border: 1px solid rgba(255,152,0,0.3); white-space: nowrap; margin-top: 4px; }
     .form-select { width: 100%; padding: 11px 12px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); border-radius: 12px; font-size: 14px; }
     .filter-tag-chip {
@@ -430,6 +437,28 @@
       border: 2px solid transparent; cursor: pointer; flex-shrink: 0;
     }
     .color-filter-swatch.active { border-color: var(--text); transform: scale(1.2); }
+    .share-route-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+    .share-route-actions .ghost-btn { padding: 6px 10px; font-size: 11px; border-radius: 8px; }
+    .share-route-actions .ghost-btn.active {
+      color: var(--accent); border-color: rgba(46,125,50,0.28); background: rgba(46,125,50,0.08);
+    }
+    .share-route-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+    .share-route-option {
+      width: 100%; min-width: 0; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 8px;
+      min-height: 42px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
+      background: var(--surface); color: var(--text); text-align: left; cursor: pointer;
+    }
+    .share-route-option.active {
+      border-color: rgba(46,125,50,0.34); background: rgba(46,125,50,0.08); box-shadow: inset 0 0 0 1px rgba(46,125,50,0.1);
+    }
+    .share-route-option:disabled { opacity: 0.55; cursor: default; }
+    .share-route-dot {
+      width: 16px; height: 16px; border-radius: 50%; border: 1px solid rgba(0,0,0,0.18);
+      box-shadow: inset 0 0 0 2px rgba(255,255,255,0.42);
+    }
+    .share-route-name { min-width: 0; font-size: 12px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .share-route-count { font-size: 10px; font-weight: 700; color: var(--text-sub); white-space: nowrap; }
+    @media (max-width: 560px) { .share-route-options { grid-template-columns: 1fr; } }
     .share-banner {
       position: fixed; top: 52px; inset-inline: 0; z-index: 1100;
       display: none; padding: 6px 12px; text-align: center;
@@ -513,6 +542,13 @@
     body:not(.edit-mode):not(.share-mode) #route-add-btn,
     body:not(.edit-mode):not(.share-mode) #pin-detail-drive,
     body:not(.edit-mode):not(.share-mode) #pin-detail-route-add { display: none !important; }
+    @media (max-width: 520px) {
+      #topbar { gap: 6px; padding: 0 8px; }
+      .topbar-title { max-width: 44px; overflow: hidden; text-overflow: ellipsis; }
+      .topbar-actions { gap: 4px; }
+      #mode-badge { display: none; }
+      .text-btn, .ghost-btn, .danger-btn { padding-inline: 9px; }
+    }
     #map-search-bar {
       position: fixed;
       top: calc(52px + 8px);
@@ -597,6 +633,7 @@
     <div class="topbar-actions">
       <button id="theme-toggle" class="icon-btn" type="button" title="テーマ切替">🌙</button>
       <button id="panel-toggle" class="icon-btn" type="button" title="リスト表示/非表示">🗺️</button>
+      <button id="help-open-btn" class="icon-btn" type="button" title="使い方">?</button>
       <button id="share-open-btn" class="icon-btn" type="button" title="共有リンク生成">🔗</button>
       <button id="settings-toggle" class="icon-btn" type="button" title="設定">⚙️</button>
       <span id="mode-badge" class="badge">閲覧中</span>
@@ -671,6 +708,7 @@
           <button id="route-add-btn" class="ghost-btn" type="button" title="ルートを追加">＋</button>
         </div>
       </div>
+      <div class="inline-help">ルートの表示/非表示は閲覧中でも切り替えできます。</div>
       <div id="route-list" class="route-list"></div>
     </div>
     <div class="side-section dnd-drop-target" id="side-unplaced"></div>
@@ -696,6 +734,39 @@
     <button id="placement-confirm" class="text-btn" type="button">配置</button>
     <button id="placement-cancel" class="ghost-btn" type="button">戻る</button>
   </div>
+  <div id="duplicate-placement-bar">
+    <button id="duplicate-placement-cancel" class="ghost-btn" type="button">キャンセル</button>
+  </div>
+
+  <div id="help-overlay" class="sheet-overlay" role="dialog" aria-modal="true" aria-labelledby="help-title"><div class="sheet-body">
+    <div class="sheet-handle"></div>
+    <div id="help-title" class="sheet-title">使い方</div>
+    <div class="help-content">
+      <section>
+        <h3>基本</h3>
+        <p>地図上のピンを押すと詳細を確認できます。検索欄でタイトル・説明・タグを検索でき、色・アイコン・タグ・状態で絞り込みできます。</p>
+      </section>
+      <section>
+        <h3>編集モード</h3>
+        <p>ピンの追加・編集・削除、未配置ピンの配置、ルート編集ができます。閲覧モードでは編集操作はできません。</p>
+      </section>
+      <section>
+        <h3>未配置ピン</h3>
+        <p>位置が未指定のピンです。あとから地図上に配置できます。ピンを挿さずに説明用データとして残す用途もあります。</p>
+      </section>
+      <section>
+        <h3>ルート</h3>
+        <p>ピン同士をつないで順路を表します。ルート線は表示/非表示を切り替えでき、道路表示と直線表示を切り替えできます。ルートに入っていないピンも検索・絞り込み対象です。</p>
+      </section>
+      <section>
+        <h3>共有リンク</h3>
+        <p>タグ・色・表示するルートを選んで閲覧専用ページを作れます。表示するルートは共有ビューに出すルート線・ルートリストの設定で、ピンそのものをルート所属ピンだけに限定する設定ではありません。ピンの絞り込みはタグ・色の条件で行います。</p>
+      </section>
+    </div>
+    <div class="inline-actions" style="margin-top:14px;">
+      <button id="help-close" class="ghost-btn" type="button">閉じる</button>
+    </div>
+  </div></div>
 
   <div id="upload-overlay" class="sheet-overlay" role="dialog" aria-modal="true"><div class="sheet-body">
     <div class="sheet-handle"></div><div class="sheet-title">＋ ピンを追加</div>
@@ -784,6 +855,9 @@
       <button id="pin-menu-edit" class="text-btn" type="button">編集</button>
       <button id="pin-menu-unplace" class="text-btn" type="button">未配置に戻す</button>
       <button id="pin-menu-place" class="text-btn" type="button">配置開始</button>
+      <button id="pin-menu-duplicate-unplaced" class="text-btn" type="button">未配置で複製</button>
+      <button id="pin-menu-duplicate-same" class="text-btn" type="button">同じ場所に複製</button>
+      <button id="pin-menu-duplicate-point" class="text-btn" type="button">場所を指定して複製</button>
       <button id="pin-menu-delete" class="danger-btn" type="button">削除</button>
       <button id="pin-menu-close" class="ghost-btn" type="button">閉じる</button>
     </div>
@@ -827,9 +901,6 @@
         <option value="dotted">点線</option>
       </select>
     </div>
-    <div class="form-group">
-      <div class="route-edit-endpoints" id="route-edit-endpoints"></div>
-    </div>
     <div class="inline-actions">
       <button id="route-edit-close" class="ghost-btn" type="button">閉じる</button>
       <button id="route-edit-delete" class="danger-btn" type="button">削除</button>
@@ -850,6 +921,16 @@
       <div class="form-group" style="margin-bottom:12px;">
         <div class="form-label">対象のピン色</div>
         <div id="share-color-filter"></div>
+      </div>
+      <div class="form-group" style="margin-bottom:12px;">
+        <div class="form-label">表示するルート</div>
+        <div class="inline-help">選んだルート線だけを共有ビューに表示します。ピンはタグ・色の条件で絞り込まれます。</div>
+        <div id="share-route-actions" class="share-route-actions">
+          <button id="share-route-all-btn" class="ghost-btn" type="button">全ルート</button>
+          <button id="share-route-clear-btn" class="ghost-btn" type="button">選択解除</button>
+        </div>
+        <div id="share-route-options" class="share-route-options"></div>
+        <div class="inline-help">表示するルートはルート線の表示対象です。ピンの絞り込みはタグ・色で行います。</div>
       </div>
       <div class="inline-actions">
         <button id="share-tag-mode-btn" class="ghost-btn" type="button" style="min-width:64px;">OR</button>
@@ -896,6 +977,7 @@
       { id: 'warning', label: '注意' }
     ];
     const ROUTE_LINE_STYLES = ['solid', 'dashed', 'dotted'];
+    const SHARE_ROUTE_NONE_SENTINEL = '__share_no_routes__';
 
     const state = {
       editMode: false,
@@ -908,6 +990,7 @@
       routeGroups: [],
       routeLayers: {},
       routeCache: {},
+      routeVisibilityOverrides: {},
       routeUiOpenGroupId: null,
       routeEditOpenId: null,
       routeUndoStack: [],
@@ -919,6 +1002,9 @@
       routeRoadStatus: {},
       routeDraggedPinId: null,
       routeDraggedGroupId: null,
+      activePinId: null,
+      copiedPinSourceId: null,
+      duplicatePlacement: null,
       contextPinId: null,
       editingPinId: null,
       placement: null,
@@ -936,7 +1022,7 @@
       listIconFilter: [],       // string[] — icon ids
       linkedCardHighlightPinId: null,
       linkedCardHighlightTimer: null,
-      shareManager: { tags: [], colors: [], tagMode: 'or', links: [], loading: false, previewing: false },
+      shareManager: { tags: [], colors: [], routeIds: [], tagMode: 'or', links: [], loading: false, previewing: false },
       shareMode: false,
       shareBasePins: null,      // null = 通常モード / Pin[] = 共有モードの固定集合（share-mode中はpins変更不可）
       shownPinId: null,
@@ -1108,6 +1194,38 @@
     function matchesIconFilter(pin, icons) {
       if (!icons || !icons.length) return true;
       return icons.includes(normalizeIcon(pin.icon));
+    }
+
+    function isShareRouteSelectionNone(routeIds) {
+      return Array.isArray(routeIds)
+        && routeIds.length === 1
+        && String(routeIds[0] || '').trim() === SHARE_ROUTE_NONE_SENTINEL;
+    }
+
+    function getSelectedRoutePinIdSet(routeIds) {
+      if (isShareRouteSelectionNone(routeIds)) return new Set();
+      const selectedIds = new Set();
+      (Array.isArray(routeIds) ? routeIds : []).forEach(function(routeId) {
+        const id = String(routeId || '').trim();
+        if (id) selectedIds.add(id);
+      });
+      if (!selectedIds.size) return null;
+      const pinIds = new Set();
+      state.routeGroups.forEach(function(group) {
+        if (!selectedIds.has(getRouteId(group))) return;
+        normalizeRoutePinIds(group.pinIds).forEach(function(pinId) {
+          pinIds.add(pinId);
+        });
+      });
+      return pinIds;
+    }
+
+    function matchesRouteFilter(pin, routeIds) {
+      if (isShareRouteSelectionNone(routeIds)) return false;
+      if (!routeIds || !routeIds.length) return true;
+      if (!pin || !pin.id) return false;
+      const routePinIds = getSelectedRoutePinIdSet(routeIds);
+      return !!routePinIds && routePinIds.has(String(pin.id));
     }
 
     function getBasePins() {
@@ -1406,6 +1524,198 @@
     function closeOverlay(id) { document.getElementById(id).classList.remove('open'); }
     function showHint(message) { const el = document.getElementById('hint-bar'); el.textContent = message; el.style.display = 'block'; }
     function hideHint() { document.getElementById('hint-bar').style.display = 'none'; }
+    const HELP_SEEN_STORAGE_KEY = 'dtp-help-seen-v112';
+
+    function duplicateTitleForMessage(pin) {
+      const title = String(pin && pin.title || '').trim();
+      return title || '無題（コピー）';
+    }
+
+    function addDuplicatedPinToState(pin) {
+      const duplicated = clonePin(pin || {});
+      state.pins.push(duplicated);
+      setActivePinId(duplicated.id);
+      renderPins();
+      renderSidePanel();
+      updateUnplacedBadge();
+      renderColorFilterUI();
+      renderIconFilterUI();
+      renderTagFilterUI();
+      return duplicated;
+    }
+
+    function handleDuplicateError(error, sourcePinId) {
+      const message = error && error.message ? error.message : String(error || '');
+      if (message === 'pin_not_found' || message.includes('pin_not_found')) {
+        if (state.copiedPinSourceId === sourcePinId) state.copiedPinSourceId = null;
+        showHint('コピー元のピンが見つかりません');
+        return;
+      }
+      alert('ピンの複製に失敗しました。\n\n' + message);
+    }
+
+    async function duplicatePinFromSource(sourcePinId, mode, coords, messageKind) {
+      if (!canEdit()) {
+        showHint('編集モードでのみ複製できます');
+        return null;
+      }
+      const source = getPinById(sourcePinId);
+      if (!source) {
+        if (state.copiedPinSourceId === sourcePinId) state.copiedPinSourceId = null;
+        showHint('コピー元のピンが見つかりません');
+        return null;
+      }
+      const payload = { sourcePinId: source.id, mode: mode };
+      if (coords) {
+        payload.lat = coords.lat;
+        payload.lng = coords.lng;
+      }
+      try {
+        const result = await withGAS('duplicatePin', payload);
+        if (!result || !result.ok) throw new Error(result && result.error ? result.error : '複製に失敗しました');
+        const duplicated = addDuplicatedPinToState(result.pin);
+        const title = duplicateTitleForMessage(duplicated);
+        if (messageKind === 'same') {
+          showHint(title + 'を同じ場所に複製しました');
+        } else if (messageKind === 'point') {
+          showHint(title + 'を地図上に複製しました');
+        } else if (messageKind === 'paste-point') {
+          showHint(title + 'を地図上に貼り付けました');
+        } else if (messageKind === 'paste-unplaced') {
+          showHint(title + 'を未配置ピンとして貼り付けました');
+        } else {
+          showHint(title + 'を未配置ピンとして作成しました');
+        }
+        return duplicated;
+      } catch (error) {
+        handleDuplicateError(error, source.id);
+        return null;
+      }
+    }
+
+    function clearDuplicatePlacement() {
+      const hadPlacement = !!state.duplicatePlacement;
+      state.duplicatePlacement = null;
+      document.getElementById('duplicate-placement-bar').classList.remove('open');
+      hideHint();
+      if (hadPlacement) renderPins();
+    }
+
+    function beginDuplicatePlacement(sourcePinId, from) {
+      if (!canEdit()) {
+        showHint('編集モードでのみ複製できます');
+        return;
+      }
+      const pin = getPinById(sourcePinId);
+      if (!pin) {
+        if (state.copiedPinSourceId === sourcePinId) state.copiedPinSourceId = null;
+        showHint('コピー元のピンが見つかりません');
+        return;
+      }
+      clearPlacement();
+      state.duplicatePlacement = { sourcePinId: pin.id, from: from || 'menu' };
+      document.getElementById('duplicate-placement-bar').classList.add('open');
+      showHint(from === 'paste' ? '貼り付ける場所を地図上でクリックしてください' : '複製先の場所を地図上で選んでください');
+      renderPins();
+    }
+
+    function isTypingTarget(target) {
+      return target && (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.isContentEditable
+      );
+    }
+
+    function isShortcutOverlayOpen() {
+      return ['help-overlay', 'upload-overlay', 'edit-overlay', 'settings-overlay', 'location-choice-overlay',
+        'delete-overlay', 'share-overlay', 'dup-warning-overlay', 'route-edit-overlay'].some(function(id) {
+        const el = document.getElementById(id);
+        return el && el.classList.contains('open');
+      });
+    }
+
+    function hasMultipleSelectedPins() {
+      return state.selectedPinIds.size > 1;
+    }
+
+    function getMapLatLngFromPointer() {
+      const container = map.getContainer();
+      const rect = container.getBoundingClientRect();
+      if (!isOverRect(state.pointerX, state.pointerY, rect)) return null;
+      const point = L.point(state.pointerX - rect.left, state.pointerY - rect.top);
+      const latLng = map.containerPointToLatLng(point);
+      if (!latLng || !Number.isFinite(latLng.lat) || !Number.isFinite(latLng.lng)) return null;
+      return { lat: latLng.lat, lng: latLng.lng };
+    }
+
+    function handleDuplicateShortcut(event) {
+      if (!event || !(event.ctrlKey || event.metaKey) || event.altKey) return;
+      if (!canEdit()) return;
+      if (isTypingTarget(event.target) || isTypingTarget(document.activeElement)) return;
+      if (isShortcutOverlayOpen()) return;
+
+      if (event.key.toLowerCase() === 'd') {
+        if (hasMultipleSelectedPins()) {
+          event.preventDefault();
+          showHint('複製は1件ずつ行ってください');
+          return;
+        }
+        if (!state.activePinId) return;
+        event.preventDefault();
+        duplicatePinFromSource(state.activePinId, 'unplaced', null, 'unplaced');
+        return;
+      }
+      if (event.key.toLowerCase() === 'c') {
+        if (hasMultipleSelectedPins()) {
+          event.preventDefault();
+          showHint('コピーは1件ずつ行ってください');
+          return;
+        }
+        const pin = getPinById(state.activePinId);
+        if (!pin) return;
+        event.preventDefault();
+        state.copiedPinSourceId = pin.id;
+        showHint((pin.title || '無題') + 'をコピーしました。Ctrl+Vで貼り付けできます');
+        return;
+      }
+      if (event.key.toLowerCase() === 'v') {
+        if (!state.copiedPinSourceId) return;
+        const pin = getPinById(state.copiedPinSourceId);
+        event.preventDefault();
+        if (!pin) {
+          state.copiedPinSourceId = null;
+          showHint('コピー元のピンが見つかりません');
+          return;
+        }
+        if (event.shiftKey) {
+          duplicatePinFromSource(pin.id, 'unplaced', null, 'paste-unplaced');
+          return;
+        }
+        const latLng = getMapLatLngFromPointer();
+        if (latLng) {
+          duplicatePinFromSource(pin.id, 'point', latLng, 'paste-point');
+        } else {
+          beginDuplicatePlacement(pin.id, 'paste');
+        }
+      }
+    }
+
+    function rememberHelpSeen() {
+      try {
+        localStorage.setItem(HELP_SEEN_STORAGE_KEY, '1');
+      } catch (_error) {}
+    }
+
+    function openHelpPanel() {
+      openOverlay('help-overlay');
+      rememberHelpSeen();
+    }
+
+    function closeHelpPanel() {
+      closeOverlay('help-overlay');
+    }
 
     function showDeleteZone() {
       if (!canEdit()) return;
@@ -1425,6 +1735,27 @@
     document.addEventListener('mousemove', function(e) {
       state.pointerX = e.clientX;
       state.pointerY = e.clientY;
+    });
+
+    map.on('click', function(event) {
+      if (!state.duplicatePlacement) return;
+      if (event.originalEvent) {
+        event.originalEvent.preventDefault();
+        event.originalEvent.stopPropagation();
+      }
+      const placement = state.duplicatePlacement;
+      const latLng = event.latlng;
+      if (!canEdit() || !latLng) {
+        clearDuplicatePlacement();
+        return;
+      }
+      clearDuplicatePlacement();
+      duplicatePinFromSource(
+        placement.sourcePinId,
+        'point',
+        { lat: latLng.lat, lng: latLng.lng },
+        placement.from === 'paste' ? 'paste-point' : 'point'
+      );
     });
 
     const GAS_RETRY_MAX = 4;
@@ -1559,6 +1890,19 @@
       return result;
     }
 
+    function getSharePreviewRouteIdSet() {
+      if (!state.shareManager.previewing) return null;
+      const ids = [];
+      const seen = new Set();
+      (Array.isArray(state.shareManager.routeIds) ? state.shareManager.routeIds : []).forEach(function(routeId) {
+        const id = String(routeId || '').trim();
+        if (!id || seen.has(id)) return;
+        seen.add(id);
+        ids.push(id);
+      });
+      return ids.length ? new Set(ids) : null;
+    }
+
     function normalizeRouteEndpointSelection(group) {
       const source = group || {};
       const included = new Set(normalizeRoutePinIds(source.pinIds));
@@ -1576,23 +1920,9 @@
     }
 
     function getRoutePinIdsForDisplay(group, filteredPinIdSet) {
-      const pinIds = normalizeRoutePinIds(group && group.pinIds).filter(function(pinId) {
+      return normalizeRoutePinIds(group && group.pinIds).filter(function(pinId) {
         return !filteredPinIdSet || filteredPinIdSet.has(pinId);
       });
-      const included = new Set(pinIds);
-      const startPinId = group && group.startPinId ? String(group.startPinId) : '';
-      const endPinId = group && !group.closed && group.endPinId ? String(group.endPinId) : '';
-      const hasStart = startPinId && included.has(startPinId);
-      const hasEnd = endPinId && included.has(endPinId) && endPinId !== startPinId;
-      const ordered = [];
-
-      if (hasStart) ordered.push(startPinId);
-      pinIds.forEach(function(pinId) {
-        if ((hasStart && pinId === startPinId) || (hasEnd && pinId === endPinId)) return;
-        ordered.push(pinId);
-      });
-      if (hasEnd) ordered.push(endPinId);
-      return ordered;
     }
 
     function getRouteLatLngsForDisplay(group, filteredPinIdSet) {
@@ -1608,7 +1938,12 @@
     }
 
     function getRouteGroupsForLayerRender(entries) {
-      return Array.isArray(state.routeGroups) ? state.routeGroups.slice() : [];
+      const groups = Array.isArray(state.routeGroups) ? state.routeGroups.slice() : [];
+      const selectedRouteIds = getSharePreviewRouteIdSet();
+      if (!selectedRouteIds) return groups;
+      return groups.filter(function(group) {
+        return selectedRouteIds.has(getRouteId(group));
+      });
     }
 
     function normalizeRoadLatLng(latLng) {
@@ -1953,7 +2288,7 @@
 
     function isRoadRouteStillCurrent(routeId, key) {
       const group = getRouteGroupById(routeId);
-      if (!group || group.routeMode !== 'road' || group.visible === false || group.showLine === false) return false;
+      if (!group || group.routeMode !== 'road' || !getRouteDisplayVisible(group) || group.showLine === false) return false;
       const currentLatLngs = getRouteLatLngsForDisplay(group, getFilteredPinIdSet());
       return currentLatLngs.length >= 2
         && buildRoadRouteCacheKey(group, getFilteredPinIdSet(), ROAD_ROUTE_PROVIDER) === key;
@@ -2106,7 +2441,7 @@
         const layerGroup = getRouteLayerGroup(routeId);
         if (!layerGroup) return;
         layerGroup.clearLayers();
-        if (group.visible === false || group.showLine === false) {
+        if (!getRouteDisplayVisible(group) || group.showLine === false) {
           clearRoadRouteState(routeId);
           return;
         }
@@ -2132,10 +2467,13 @@
     function getRouteNumberDisplayForPin(pinId, entries) {
       const id = String(pinId || '').trim();
       if (!id) return null;
-      const groups = Array.isArray(state.routeGroups) ? state.routeGroups : [];
+      const selectedRouteIds = getSharePreviewRouteIdSet();
+      const groups = (Array.isArray(state.routeGroups) ? state.routeGroups : []).filter(function(group) {
+        return !selectedRouteIds || selectedRouteIds.has(getRouteId(group));
+      });
       for (let index = 0; index < groups.length; index++) {
         const group = groups[index];
-        if (!group || group.visible === false || group.showNumbers === false) continue;
+        if (!group || !getRouteDisplayVisible(group) || group.showNumbers === false) continue;
         const routePinIds = getRoutePinIdsForDisplay(group);
         const pinIndex = routePinIds.indexOf(id);
         if (pinIndex !== -1) {
@@ -2155,7 +2493,10 @@
     function isPinInAnyVisibleRoute(pinId) {
       const id = String(pinId || '').trim();
       if (!id) return false;
-      const groups = Array.isArray(state.routeGroups) ? state.routeGroups : [];
+      const selectedRouteIds = getSharePreviewRouteIdSet();
+      const groups = (Array.isArray(state.routeGroups) ? state.routeGroups : []).filter(function(group) {
+        return !selectedRouteIds || selectedRouteIds.has(getRouteId(group));
+      });
       for (let index = 0; index < groups.length; index += 1) {
         const group = groups[index];
         if (!group || group.visible === false) continue;
@@ -2506,7 +2847,7 @@
       if (!canEdit()) {
         return { acceptsDrop: false, reason: 'view-mode' };
       }
-      if (state.placement) {
+      if (state.placement || state.duplicatePlacement) {
         return { acceptsDrop: false, reason: 'placement' };
       }
       if (!group || !targetRouteId) {
@@ -2858,11 +3199,15 @@
     ensureUrlInputs('upload-links', []);
     ensureUrlInputs('edit-links', []);
 
-    ['upload-overlay', 'settings-overlay', 'location-choice-overlay', 'pin-detail-overlay',
+    ['help-overlay', 'upload-overlay', 'settings-overlay', 'location-choice-overlay', 'pin-detail-overlay',
      'unplaced-overlay', 'pin-menu-overlay', 'delete-overlay', 'share-overlay', 'dup-warning-overlay']
       .forEach(function(id) {
         document.getElementById(id).addEventListener('click', function(event) {
           if (event.target === document.getElementById(id)) {
+            if (id === 'help-overlay') {
+              closeHelpPanel();
+              return;
+            }
             if (id === 'share-overlay') {
               closeShareDialog();
               return;
@@ -2878,6 +3223,10 @@
 
     function getPinById(id) {
       return state.pins.find(pin => pin.id === id) || null;
+    }
+
+    function setActivePinId(pinId) {
+      state.activePinId = pinId ? String(pinId) : null;
     }
 
     function attachLongPress(target, handler, options) {
@@ -2955,6 +3304,20 @@
     }
 
     document.getElementById('settings-toggle').addEventListener('click', openSettingsModal);
+    document.getElementById('help-open-btn').addEventListener('click', openHelpPanel);
+    document.getElementById('help-close').addEventListener('click', closeHelpPanel);
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape' && state.duplicatePlacement) {
+        event.preventDefault();
+        clearDuplicatePlacement();
+        return;
+      }
+      if (event.key === 'Escape' && document.getElementById('help-overlay').classList.contains('open')) {
+        closeHelpPanel();
+        return;
+      }
+      handleDuplicateShortcut(event);
+    });
     document.getElementById('share-open-btn').addEventListener('click', function() {
       openShareDialog(null);
     });
@@ -3006,6 +3369,7 @@
         <div class="list-meta"><div class="list-title">${escHtml(pin.title || '(無題)')}</div><div class="list-subtitle">${escHtml(getPinDisplayTime(pin))}</div>${tagsHtml}</div>
       `;
       button.addEventListener('click', function(e) {
+        setActivePinId(pin.id);
         if (canEdit()) {
           // チェック UI クリックまたは Shift なし通常クリックで選択トグル
           if (state.selectedPinIds.has(pin.id)) {
@@ -3053,7 +3417,7 @@
       if (canEdit()) {
         button.draggable = true;
         button.addEventListener('dragstart', function(e) {
-          if (!canEdit()) {
+          if (!canEdit() || state.duplicatePlacement) {
             e.preventDefault();
             return;
           }
@@ -3088,6 +3452,7 @@
     }
 
     function openPinDetail(pin) {
+      setActivePinId(pin.id);
       document.getElementById('pin-detail-title').textContent = pin.title || '(無題)';
       document.getElementById('pin-detail-desc').textContent = pin.description || '説明はありません。';
       document.getElementById('pin-detail-time').innerHTML = renderPinTimeRows(pin);
@@ -3165,11 +3530,20 @@
     document.getElementById('share-filter-clear-btn').addEventListener('click', function() {
       clearShareFilters();
     });
+    document.getElementById('share-route-all-btn').addEventListener('click', function() {
+      state.shareManager.routeIds = [];
+      updateShareFilterPreview();
+    });
+    document.getElementById('share-route-clear-btn').addEventListener('click', function() {
+      state.shareManager.routeIds = [SHARE_ROUTE_NONE_SENTINEL];
+      updateShareFilterPreview();
+    });
     document.getElementById('share-create-btn').addEventListener('click', async function() {
       const labelInput = document.getElementById('share-link-label');
       const label = labelInput ? labelInput.value.trim() : '';
       const tags = state.shareManager.tags.slice();
       const colors = state.shareManager.colors.slice();
+      const routeIds = state.shareManager.routeIds.slice();
       state.shareManager.loading = true;
       renderShareLinks();
       try {
@@ -3177,7 +3551,8 @@
           label: label || 'Drop the Pin!',
           tags: tags,
           tagMode: state.shareManager.tagMode,
-          colors: state.shareManager.colors.slice()
+          colors: colors,
+          routeIds: routeIds
         });
         if (!result || !result.ok) throw new Error(result && result.error ? result.error : '共有リンクの作成に失敗しました');
         if (labelInput) {
@@ -3248,6 +3623,7 @@
     function openPinMenu(pin) {
       if (!canEdit()) return;
       const isUnplaced = pin.lat == null || pin.lng == null;
+      setActivePinId(pin.id);
       state.contextPinId = pin.id;
       document.getElementById('pin-menu-title').textContent = pin.title || '(無題)';
       document.getElementById('pin-menu-unplace').style.display = isUnplaced ? 'none' : 'block';
@@ -3263,6 +3639,7 @@
     function openPinEditor(pin) {
       if (!canEdit()) return;
       if (!pin) return;
+      setActivePinId(pin.id);
       state.editingPinId = pin.id;
       document.getElementById('edit-title').value = pin.title || '';
       document.getElementById('edit-desc').value = pin.description || '';
@@ -3315,6 +3692,27 @@
       } catch (error) {
         alert('ピンを未配置に戻せませんでした。\n\n' + (error && error.message ? error.message : String(error)));
       }
+    });
+    document.getElementById('pin-menu-duplicate-unplaced').addEventListener('click', () => {
+      if (!canEdit()) return;
+      const pin = getPinById(state.contextPinId);
+      if (!pin) return;
+      closePinMenu();
+      duplicatePinFromSource(pin.id, 'unplaced', null, 'unplaced');
+    });
+    document.getElementById('pin-menu-duplicate-same').addEventListener('click', () => {
+      if (!canEdit()) return;
+      const pin = getPinById(state.contextPinId);
+      if (!pin) return;
+      closePinMenu();
+      duplicatePinFromSource(pin.id, 'same', null, 'same');
+    });
+    document.getElementById('pin-menu-duplicate-point').addEventListener('click', () => {
+      if (!canEdit()) return;
+      const pin = getPinById(state.contextPinId);
+      if (!pin) return;
+      closePinMenu();
+      beginDuplicatePlacement(pin.id, 'menu');
     });
     document.getElementById('pin-menu-delete').addEventListener('click', () => {
       if (!canEdit()) return;
@@ -3400,6 +3798,9 @@
           });
           const idsSet = new Set(ids);
           state.pins = state.pins.filter(function(p) { return failedSet.has(p.id) || !idsSet.has(p.id); });
+          if (idsSet.has(state.activePinId) && !failedSet.has(state.activePinId)) setActivePinId(null);
+          if (idsSet.has(state.copiedPinSourceId) && !failedSet.has(state.copiedPinSourceId)) state.copiedPinSourceId = null;
+          if (state.duplicatePlacement && idsSet.has(state.duplicatePlacement.sourcePinId) && !failedSet.has(state.duplicatePlacement.sourcePinId)) clearDuplicatePlacement();
           closeOverlay('delete-overlay');
           clearSelection();
           updateUnplacedBadge();
@@ -3428,6 +3829,9 @@
           delete state.markers[pin.id];
         }
         state.pins = state.pins.filter(item => item.id !== pin.id);
+        if (state.activePinId === pin.id) setActivePinId(null);
+        if (state.copiedPinSourceId === pin.id) state.copiedPinSourceId = null;
+        if (state.duplicatePlacement && state.duplicatePlacement.sourcePinId === pin.id) clearDuplicatePlacement();
         closeOverlay('delete-overlay');
         closeOverlay('pin-detail-overlay');
         renderSidePanel();
@@ -3454,6 +3858,7 @@
 
       marker.on('click', () => {
         if (Date.now() < state.suppressClickUntil) return;
+        setActivePinId(pin.id);
         focusPin(pin);
         highlightLinkedCard(pin.id);
       });
@@ -3471,7 +3876,7 @@
       marker.on('dragstart', () => {
         clearLinkedCardHighlight();
         clearLinkedMarkerHighlight();
-        if (!canEdit()) return;
+        if (!canEdit() || state.duplicatePlacement) return;
         prevLat = pin.lat;
         prevLng = pin.lng;
         showDeleteZone();
@@ -3479,7 +3884,7 @@
       marker.on('dragend', async () => {
         clearLinkedCardHighlight();
         clearLinkedMarkerHighlight();
-        if (!canEdit()) return;
+        if (!canEdit() || state.duplicatePlacement) return;
 
         const panelEl = document.getElementById('side-panel');
         const deleteZoneEl = document.getElementById('dnd-delete-zone');
@@ -3550,11 +3955,10 @@
       entries.forEach(function(entry) {
         const pin = entry.pin;
         if (pin.lat == null || pin.lng == null) return;
-        if (!canEdit() && state.shareMode !== true && !isPinInAnyVisibleRoute(pin.id)) return;
         const routeNumberDisplay = getRouteNumberDisplayForPin(pin.id, entries);
         const marker = L.marker([pin.lat, pin.lng], {
           icon: createPinIconForDisplay(pin, routeNumberDisplay),
-          draggable: canEdit()
+          draggable: canEdit() && !state.duplicatePlacement
         });
         bindMarkerInteractions(marker, pin);
         marker.addTo(map);
@@ -3571,6 +3975,14 @@
 
     function getRouteId(group) {
       return group ? String(group.id || group.routeId || '').trim() : '';
+    }
+
+    function getRouteDisplayVisible(group) {
+      const routeId = getRouteId(group);
+      if (routeId && Object.prototype.hasOwnProperty.call(state.routeVisibilityOverrides, routeId)) {
+        return state.routeVisibilityOverrides[routeId] !== false;
+      }
+      return group && group.visible !== false;
     }
 
     function getRouteGroupIndex(routeId) {
@@ -3952,7 +4364,6 @@
         return list;
       }
 
-      const endpoints = normalizeRouteEndpointSelection(group);
       pinIds.forEach(function(pinId, index) {
         const pin = getPinById(pinId);
         const isFilteredOut = !filteredPinIdSet || !filteredPinIdSet.has(pinId);
@@ -3971,18 +4382,6 @@
         const title = document.createElement('span');
         title.className = 'route-pin-title';
         title.textContent = pin ? (pin.title || '(無題)') : '(削除済みピン)';
-        if (pinId === endpoints.startPinId) {
-          const startNote = document.createElement('span');
-          startNote.className = 'route-pin-hidden-note';
-          startNote.textContent = ' 始';
-          title.appendChild(startNote);
-        }
-        if (pinId === endpoints.endPinId) {
-          const endNote = document.createElement('span');
-          endNote.className = 'route-pin-hidden-note';
-          endNote.textContent = ' 終';
-          title.appendChild(endNote);
-        }
         if (isFilteredOut) {
           const hiddenNote = document.createElement('span');
           hiddenNote.className = 'route-pin-hidden-note';
@@ -4011,37 +4410,6 @@
       attachRoutePinSortable(list, routeId, pinIds);
       attachRoutePinDropTarget(list, routeId);
       return list;
-    }
-
-    function buildRoutePinSelect(labelText, value, group, disabled, onChange) {
-      const wrapper = document.createElement('label');
-      wrapper.className = 'route-setting-control';
-      const label = document.createElement('span');
-      label.className = 'route-setting-label';
-      label.textContent = labelText;
-      wrapper.appendChild(label);
-
-      const select = document.createElement('select');
-      select.className = 'route-setting-select';
-      select.disabled = disabled;
-      const none = document.createElement('option');
-      none.value = '';
-      none.textContent = '指定なし';
-      select.appendChild(none);
-
-      getRoutePinIdsForState(group).forEach(function(pinId, index) {
-        const pin = getPinById(pinId);
-        const option = document.createElement('option');
-        option.value = pinId;
-        option.textContent = (index + 1) + '. ' + (pin ? (pin.title || '(無題)') : '(削除済みピン)');
-        select.appendChild(option);
-      });
-      select.value = value || '';
-      select.addEventListener('change', function() {
-        onChange(select.value || null);
-      });
-      wrapper.appendChild(select);
-      return wrapper;
     }
 
     function buildRouteSettingSwitch(titleText, target, active, disabled, onClick) {
@@ -4113,12 +4481,10 @@
 
       const isBusy = isRouteBusy(routeId);
       const disabled = isBusy || state.shareMode;
-      const isVisible = group.visible !== false;
       const showNumbers = group.showNumbers !== false;
       const showLine = group.showLine !== false;
       const isRoad = group.routeMode === 'road';
       const isClosed = group.closed === true;
-      const endpoints = normalizeRouteEndpointSelection(group);
 
       document.getElementById('route-edit-title').textContent = 'ルート詳細設定';
 
@@ -4141,9 +4507,6 @@
 
       const controls = document.getElementById('route-edit-controls');
       controls.innerHTML = '';
-      controls.appendChild(buildRouteEditToggleControl('表示/非表示', '地図上のルート表示を切り替えます。', 'visible', isVisible, disabled, function() {
-        updateRouteGroupOptimistic(routeId, { visible: !isVisible });
-      }));
       controls.appendChild(buildRouteEditToggleControl('番号を表示', '所属ピンにルート内の番号を表示します。', 'showNumbers', showNumbers, disabled, function() {
         updateRouteGroupOptimistic(routeId, { showNumbers: !showNumbers });
       }));
@@ -4153,7 +4516,7 @@
       controls.appendChild(buildRouteEditToggleControl('道路に沿わせる', 'ON のとき道路に沿わせ、OFF のときは地点同士を直接結びます。', 'routeModeRoad', isRoad, disabled, function() {
         updateRouteGroupOptimistic(routeId, { routeMode: isRoad ? 'straight' : 'road' });
       }));
-      controls.appendChild(buildRouteEditToggleControl('循環ルート', 'ON にすると終点指定を無効にし、終点は保存時に空になります。', 'closed', isClosed, disabled, function() {
+      controls.appendChild(buildRouteEditToggleControl('循環ルート', 'ON にすると最後の地点から最初の地点へ戻ります。', 'closed', isClosed, disabled, function() {
         updateRouteGroupOptimistic(routeId, { closed: !isClosed, endPinId: null });
       }));
 
@@ -4165,15 +4528,6 @@
         if (lineStyle === normalizeRouteLineStyle(group.lineStyle)) return;
         updateRouteGroupOptimistic(routeId, { lineStyle: lineStyle });
       };
-
-      const endpointsEl = document.getElementById('route-edit-endpoints');
-      endpointsEl.innerHTML = '';
-      endpointsEl.appendChild(buildRoutePinSelect('始点', endpoints.startPinId, group, disabled, function(pinId) {
-        updateRouteGroupOptimistic(routeId, { startPinId: pinId });
-      }));
-      endpointsEl.appendChild(buildRoutePinSelect('終点', endpoints.endPinId, group, isClosed || disabled, function(pinId) {
-        updateRouteGroupOptimistic(routeId, { endPinId: pinId });
-      }));
 
       const deleteButton = document.getElementById('route-edit-delete');
       deleteButton.disabled = disabled;
@@ -4199,9 +4553,9 @@
 
     function buildRouteItem(group) {
       const item = document.createElement('div');
-      const routeId = group.id || group.routeId;
+      const routeId = getRouteId(group);
       const isOpen = state.routeUiOpenGroupId === routeId;
-      const isVisible = group.visible !== false;
+      const isVisible = getRouteDisplayVisible(group);
       const hasPendingSave = !!state.routePendingSave[routeId];
       const routePinIds = getRoutePinIdsForState(group);
       const pinCount = routePinIds.length;
@@ -4261,6 +4615,29 @@
       const visibility = document.createElement('span');
       visibility.className = 'route-visibility' + (isVisible ? ' is-visible' : '');
       visibility.textContent = isVisible ? '表示' : '非表示';
+      visibility.setAttribute('role', 'button');
+      visibility.setAttribute('tabindex', '0');
+      visibility.setAttribute('aria-pressed', isVisible ? 'true' : 'false');
+      visibility.title = isVisible ? 'ルートを非表示にする' : 'ルートを表示する';
+      function toggleRouteVisibilityFromCard(event) {
+        event.stopPropagation();
+        if (state.shareMode) return;
+        if (isBusy) return;
+        const nextVisible = !isVisible;
+        if (canEdit()) {
+          updateRouteGroupOptimistic(routeId, { visible: nextVisible });
+          return;
+        }
+        state.routeVisibilityOverrides[routeId] = nextVisible;
+        renderPins();
+        renderSidePanel();
+      }
+      visibility.addEventListener('click', toggleRouteVisibilityFromCard);
+      visibility.addEventListener('keydown', function(event) {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        toggleRouteVisibilityFromCard(event);
+      });
       summary.appendChild(visibility);
       const saving = document.createElement('span');
       saving.className = 'route-saving';
@@ -4346,7 +4723,10 @@
         list.innerHTML = '';
         return;
       }
-      const groups = Array.isArray(state.routeGroups) ? state.routeGroups : [];
+      const selectedRouteIds = getSharePreviewRouteIdSet();
+      const groups = (Array.isArray(state.routeGroups) ? state.routeGroups : []).filter(function(group) {
+        return !selectedRouteIds || selectedRouteIds.has(getRouteId(group));
+      });
       if (state.routeUiOpenGroupId && !groups.some(function(group) {
         return (group.id || group.routeId) === state.routeUiOpenGroupId;
       })) {
@@ -4434,6 +4814,7 @@
     function setEditMode(next) {
       if (state.shareMode) return;   // 共有モードでは編集モード切替を無効化
       state.editMode = next;
+      if (next) state.routeVisibilityOverrides = {};
       document.body.classList.toggle('edit-mode', next);
       document.getElementById('mode-badge').textContent = next ? '編集中' : '閲覧中';
       document.getElementById('edit-toggle').textContent = next ? '閲覧モード' : '編集モード';
@@ -4442,6 +4823,7 @@
       if (!next) {
         if (state.routeEditOpenId) closeRouteEditOverlay();
         clearPlacement();
+        clearDuplicatePlacement();
         state.draggedPinId = null;
         state.routeDraggedGroupId = null;
         state.routeDraggedPinId = null;
@@ -4920,6 +5302,7 @@
     }
 
     function beginPlacement(options) {
+      clearDuplicatePlacement();
       clearPlacement();
       const pin = options.mode === 'existing' ? getPinById(options.pinId) : null;
       const color = pin ? pin.color : options.draft.color;
@@ -4936,6 +5319,7 @@
       clearPlacement();
       if (wasNew) openOverlay('upload-overlay');
     });
+    document.getElementById('duplicate-placement-cancel').addEventListener('click', clearDuplicatePlacement);
 
     async function saveNewPin(draft, coords) {
       const button = document.getElementById('upload-submit');
@@ -5109,7 +5493,7 @@
       // ② 配置済み → 未配置エリアにドロップ
       const unplacedEl = document.getElementById('side-unplaced');
       unplacedEl.addEventListener('dragover', function(e) {
-        if (!canEdit() || state.placement) return;
+        if (!canEdit() || state.placement || state.duplicatePlacement) return;
         if (!state.draggedPinId) return;
         const pin = getPinById(state.draggedPinId);
         if (!pin || pin.lat == null) return; // 配置済みピンのみ受け付ける
@@ -5122,7 +5506,7 @@
       unplacedEl.addEventListener('drop', async function(e) {
         e.preventDefault();
         unplacedEl.classList.remove('dragover');
-        if (!canEdit() || state.placement) return;
+        if (!canEdit() || state.placement || state.duplicatePlacement) return;
         const id = state.draggedPinId;
         state.draggedPinId = null;
         if (!id) return;
@@ -5144,7 +5528,7 @@
       // ④ 未配置 → 配置済みエリアにドロップ（地図中央に配置）
       const placedEl = document.getElementById('side-placed');
       placedEl.addEventListener('dragover', function(e) {
-        if (!canEdit() || state.placement) return;
+        if (!canEdit() || state.placement || state.duplicatePlacement) return;
         if (!state.draggedPinId) return;
         const pin = getPinById(state.draggedPinId);
         if (!pin || pin.lat != null) return; // 未配置ピンのみ受け付ける
@@ -5157,7 +5541,7 @@
       placedEl.addEventListener('drop', async function(e) {
         e.preventDefault();
         placedEl.classList.remove('dragover');
-        if (!canEdit() || state.placement) return;
+        if (!canEdit() || state.placement || state.duplicatePlacement) return;
         const id = state.draggedPinId;
         state.draggedPinId = null;
         if (!id) return;
@@ -5180,7 +5564,7 @@
       // ⑤ 削除ゾーンへのドロップ（パネルアイテム経路）
       const deleteZoneEl = document.getElementById('dnd-delete-zone');
       deleteZoneEl.addEventListener('dragover', function(e) {
-        if (!canEdit() || state.placement) return;
+        if (!canEdit() || state.placement || state.duplicatePlacement) return;
         if (!state.draggedPinId) return;
         e.preventDefault();
         deleteZoneEl.classList.add('dragover');
@@ -5191,7 +5575,7 @@
       deleteZoneEl.addEventListener('drop', function(e) {
         e.preventDefault();
         deleteZoneEl.classList.remove('dragover');
-        if (!canEdit() || state.placement) return;
+        if (!canEdit() || state.placement || state.duplicatePlacement) return;
         const id = state.draggedPinId;
         state.draggedPinId = null;
         if (!id) return;
@@ -5209,7 +5593,7 @@
     function setupMapDropTarget() {
       const mapEl = document.getElementById('map');
       mapEl.addEventListener('dragover', function(e) {
-        if (!canEdit() || state.placement) return;
+        if (!canEdit() || state.placement || state.duplicatePlacement) return;
         if (!state.draggedPinId) return;
         const pin = getPinById(state.draggedPinId);
         if (!pin || pin.lat != null) return; // 未配置ピンのみ受け付ける
@@ -5223,7 +5607,7 @@
       mapEl.addEventListener('drop', async function(e) {
         e.preventDefault();
         mapEl.classList.remove('dragover');
-        if (!canEdit() || state.placement) return;
+        if (!canEdit() || state.placement || state.duplicatePlacement) return;
         const id = state.draggedPinId;
         state.draggedPinId = null;
         if (!id) return;
@@ -5293,12 +5677,55 @@
       return allTags;
     }
 
+    function getShareRouteIdsForState() {
+      if (isShareRouteSelectionNone(state.shareManager.routeIds)) return [];
+      const seen = new Set();
+      const routeIds = [];
+      (Array.isArray(state.shareManager.routeIds) ? state.shareManager.routeIds : []).forEach(function(routeId) {
+        const id = String(routeId || '').trim();
+        if (!id || seen.has(id)) return;
+        seen.add(id);
+        routeIds.push(id);
+      });
+      return routeIds;
+    }
+
+    function toggleShareRoute(routeId) {
+      const id = String(routeId || '').trim();
+      if (!id) return;
+      const routeIds = getShareRouteIdsForState();
+      const idx = routeIds.indexOf(id);
+      if (idx === -1) routeIds.push(id);
+      else routeIds.splice(idx, 1);
+      state.shareManager.routeIds = routeIds;
+      updateShareFilterPreview();
+    }
+
+    function formatShareLinkRouteTargets(routeIds) {
+      if (isShareRouteSelectionNone(routeIds)) return '表示するルート: なし';
+      const ids = (Array.isArray(routeIds) ? routeIds : []).map(function(routeId) {
+        return String(routeId || '').trim();
+      }).filter(Boolean);
+      if (!ids.length) return '表示するルート: すべて';
+      const names = ids.map(function(routeId) {
+        const group = getRouteGroupById(routeId);
+        return group && group.name ? group.name : '削除済みルート';
+      });
+      return '表示するルート: ' + names.join('、');
+    }
+
     function renderShareFilterUi() {
       const chipsContainer = document.getElementById('share-tag-chips');
       const colorContainer = document.getElementById('share-color-filter');
+      const routeContainer = document.getElementById('share-route-options');
+      const routeAllBtn = document.getElementById('share-route-all-btn');
+      const routeClearBtn = document.getElementById('share-route-clear-btn');
       const modeBtn = document.getElementById('share-tag-mode-btn');
       const createBtn = document.getElementById('share-create-btn');
       const labelInput = document.getElementById('share-link-label');
+      const selectedRouteIds = getShareRouteIdsForState();
+      const selectedRouteIdSet = new Set(selectedRouteIds);
+      const routeSelectionNone = isShareRouteSelectionNone(state.shareManager.routeIds);
 
       if (chipsContainer) {
         const allTags = getAllShareTags();
@@ -5343,6 +5770,39 @@
           colorContainer.appendChild(btn);
         });
       }
+      if (routeAllBtn) {
+        routeAllBtn.className = 'ghost-btn' + (!routeSelectionNone && !selectedRouteIds.length ? ' active' : '');
+        routeAllBtn.disabled = state.shareManager.loading;
+      }
+      if (routeClearBtn) {
+        routeClearBtn.className = 'ghost-btn' + (routeSelectionNone ? ' active' : '');
+        routeClearBtn.disabled = state.shareManager.loading || routeSelectionNone;
+      }
+      if (routeContainer) {
+        routeContainer.innerHTML = '';
+        const groups = Array.isArray(state.routeGroups) ? state.routeGroups : [];
+        if (!groups.length) {
+          routeContainer.innerHTML = '<div class="muted">ルートはまだありません</div>';
+        } else {
+          groups.forEach(function(group) {
+            const routeId = getRouteId(group);
+            if (!routeId) return;
+            const isActive = selectedRouteIdSet.has(routeId);
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'share-route-option' + (isActive ? ' active' : '');
+            btn.disabled = state.shareManager.loading;
+            btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+            btn.innerHTML = '<span class="share-route-dot" style="background:' + escHtml(safeColor(group.color)) + '"></span>'
+              + '<span class="share-route-name">' + escHtml(group.name || '名称未設定のルート') + '</span>'
+              + '<span class="share-route-count">' + escHtml(normalizeRoutePinIds(group.pinIds).length) + '地点</span>';
+            btn.addEventListener('click', function() {
+              toggleShareRoute(routeId);
+            });
+            routeContainer.appendChild(btn);
+          });
+        }
+      }
       if (modeBtn) {
         modeBtn.textContent = state.shareManager.tagMode.toUpperCase();
       }
@@ -5365,6 +5825,7 @@
     function clearShareFilters() {
       state.shareManager.tags = [];
       state.shareManager.colors = [];
+      state.shareManager.routeIds = [];
       state.shareManager.tagMode = 'or';
       updateShareFilterPreview();
     }
@@ -5410,6 +5871,7 @@
               '</div>',
             '</div>',
             '<div class="share-link-url">' + escHtml(item.url || '') + '</div>',
+            '<div class="share-link-routes">' + escHtml(formatShareLinkRouteTargets(item.routeIds)) + '</div>',
             '<div class="share-link-tags">' + renderTagChips(item.tags || []) + '</div>',
             renderColorChips(item.colors || []),
           '</div>'
@@ -5435,6 +5897,7 @@
     function openShareDialog(pinId) {
       state.shareManager.tags = state.listTagFilter.slice();
       state.shareManager.colors = state.listColorFilter.slice();
+      state.shareManager.routeIds = [];
       state.shareManager.tagMode = state.listTagMode === 'and' ? 'and' : 'or';
       state.shareManager.links = [];
       state.shareManager.loading = false;
