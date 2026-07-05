@@ -175,6 +175,15 @@
     .shared-control-btn {
       cursor: pointer;
     }
+    .shared-control-btn.is-off {
+      opacity: 0.55;
+    }
+    .shared-inline-help {
+      margin-top: 6px;
+      color: var(--text-sub);
+      font-size: 11px;
+      line-height: 1.5;
+    }
     #shared-search-controls {
       display: flex;
       flex-wrap: wrap;
@@ -263,6 +272,119 @@
     .shared-route-info-row strong {
       flex: 0 0 auto;
     }
+    .shared-section-title {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0;
+      text-transform: uppercase;
+      color: var(--text-sub);
+      margin: 4px 4px 8px;
+    }
+    .shared-route-section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin: 4px 4px 8px;
+    }
+    .shared-route-section-header .shared-section-title {
+      margin: 0;
+    }
+    .shared-route-card {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--surface-strong);
+      color: var(--text);
+      padding: 10px 12px;
+      margin-bottom: 10px;
+      cursor: pointer;
+      transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+    }
+    .shared-route-card:hover {
+      border-color: rgba(185, 95, 45, 0.22);
+      box-shadow: 0 10px 20px rgba(71, 49, 25, 0.08);
+      transform: translateY(-1px);
+    }
+    .shared-route-card-header {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .shared-route-color-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      flex: 0 0 auto;
+    }
+    .shared-route-name {
+      font-weight: 800;
+      font-size: 13px;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .shared-route-display-mode {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--text-sub);
+      padding: 4px 8px;
+      font-size: 11px;
+      line-height: 1.2;
+      cursor: pointer;
+      white-space: nowrap;
+      min-width: 48px;
+      text-align: center;
+    }
+    .shared-route-display-mode:hover {
+      border-color: rgba(185, 95, 45, 0.28);
+      color: var(--accent);
+    }
+    .shared-route-display-mode.is-off {
+      opacity: 0.55;
+    }
+    .shared-route-meta {
+      color: var(--text-sub);
+      font-size: 11px;
+      margin-top: 4px;
+    }
+    .shared-route-pin-list {
+      margin: 8px 0 0;
+      padding: 0;
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .shared-route-pin-item {
+      display: flex;
+      gap: 6px;
+      align-items: baseline;
+      padding: 4px 6px;
+      border-radius: 8px;
+      cursor: pointer;
+      min-width: 0;
+    }
+    .shared-route-pin-item:hover {
+      background: var(--accent-soft);
+    }
+    .shared-route-pin-num {
+      flex: 0 0 auto;
+      font-weight: 800;
+      font-size: 11px;
+      color: var(--accent);
+      min-width: 1.6em;
+    }
+    .shared-route-pin-title {
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
     #shared-title {
       margin-top: 2px;
       font-size: 15px;
@@ -278,6 +400,7 @@
       gap: 6px;
       flex: 0 0 auto;
     }
+    #shared-help-open-btn,
     #shared-theme-toggle,
     #shared-panel-toggle {
       width: 34px;
@@ -397,6 +520,22 @@
       border: 1px solid var(--border);
       background: var(--surface);
       box-shadow: 0 24px 48px rgba(37, 25, 14, 0.25);
+    }
+    .shared-help-content {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .shared-help-content h3 {
+      margin-bottom: 4px;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .shared-help-content p {
+      color: var(--text-sub);
+      font-size: 12px;
+      line-height: 1.55;
     }
     .detail-header {
       display: flex;
@@ -559,6 +698,7 @@
       <div id="shared-title">Drop the Pin!</div>
     </div>
     <div class="shared-topbar-actions">
+      <button id="shared-help-open-btn" class="shared-control-btn" type="button" title="使い方">?</button>
       <button id="shared-theme-toggle" class="shared-control-btn" type="button" title="テーマ切替">🌙</button>
       <button id="shared-panel-toggle" class="shared-control-btn" type="button" title="リストを隠す">🗺️</button>
     </div>
@@ -571,6 +711,7 @@
       <button id="shared-search-toggle" class="shared-control-btn" type="button" title="検索設定">▼</button>
     </div>
     <div id="shared-geocode-results" style="display:none;"></div>
+    <div class="shared-inline-help">ピンは検索・タグ・色で絞り込めます。</div>
     <div id="shared-search-expanded" style="display:none;">
       <div id="shared-search-controls">
         <select id="shared-sort">
@@ -581,6 +722,7 @@
         <button id="shared-filter-color-btn" class="shared-control-btn filter-toggle-btn" type="button">色で検索</button>
         <button id="shared-filter-tag-btn" class="shared-control-btn filter-toggle-btn" type="button">タグで検索</button>
         <button id="shared-clear-filters" class="shared-control-btn" type="button">条件クリア</button>
+        <button id="shared-reset-routes" class="shared-control-btn" type="button" title="ルート表示を初期状態に戻します">ルートも初期化</button>
       </div>
       <div id="shared-filter-color-detail" style="display:none;margin-top:4px;">
         <div id="shared-color-filter-header">
@@ -598,8 +740,47 @@
     </div>
   </div>
   <aside id="shared-list-panel">
-    <div id="shared-list"></div>
+    <section id="shared-route-section">
+      <div class="shared-route-section-header">
+        <h3 class="shared-section-title">ルート</h3>
+      </div>
+      <div class="shared-inline-help">ルートのボタンで 道路 / 直線 / 非表示 を切り替えできます。</div>
+      <div id="shared-route-list"></div>
+    </section>
+    <section id="shared-pin-section">
+      <h3 class="shared-section-title">ピン</h3>
+      <div id="shared-list"></div>
+    </section>
   </aside>
+
+  <div id="shared-help-overlay" class="sheet-overlay" role="dialog" aria-modal="true" aria-labelledby="shared-help-title"><div class="detail-card">
+    <div class="detail-header">
+      <div id="shared-help-title" class="detail-title">使い方</div>
+      <button id="shared-help-close" class="shared-control-btn" type="button">閉じる</button>
+    </div>
+    <div class="shared-help-content" style="margin-top:14px;">
+      <section>
+        <h3>このページは閲覧専用</h3>
+        <p>ピンの追加・編集・削除はできません。</p>
+      </section>
+      <section>
+        <h3>ピン</h3>
+        <p>地図上のピンや一覧のピンを押すと詳細を表示できます。</p>
+      </section>
+      <section>
+        <h3>検索・絞り込み</h3>
+        <p>タイトル・説明・タグで検索できます。タグ・色で絞り込みでき、並び順も変更できます。</p>
+      </section>
+      <section>
+        <h3>ルート</h3>
+        <p>ルートカードの表示ボタンで「道路 / 直線 / 非表示」を切り替えできます。「ルートも初期化」で共有時の初期状態に戻せます。</p>
+      </section>
+      <section>
+        <h3>注意</h3>
+        <p>表示するルートが限定されていても、説明用の未所属ピンが表示されることがあります。ピンの表示は共有作成時のタグ・色条件、および閲覧中の検索・絞り込み条件で変わります。</p>
+      </section>
+    </div>
+  </div></div>
 
   <div id="shared-detail-overlay" class="sheet-overlay" style="display:none;"></div>
 
@@ -691,6 +872,7 @@
 
     const EXEC_URL = <?!= JSON.stringify(execUrl || '') ?>;
     const SHARED_TOKEN = <?!= JSON.stringify(token || '') ?>;
+    const SHARED_ROUTE_NONE_SENTINEL = '__share_no_routes__';
     // 共有ビューは読み取り専用。編集・追加・削除・D&D・ルート編集は持たない。
     // ルート情報は表示制御・ルート線・番号表示のために読むだけ。
     const state = {
@@ -699,9 +881,15 @@
       routeGroups: [],
       allowedTags: [],
       allowedColors: [],
+      allowedRouteIds: [],
       listQuery: '',
       activeTags: [],
       activeColors: [],
+      routeVisibility: {},
+      routeDisplayMode: {},
+      initialRouteVisibility: {},
+      initialRouteDisplayMode: {},
+      roadRouteCache: {},
       tagMode: 'or',
       initialTagMode: 'or',
       shareLabel: '',
@@ -716,6 +904,7 @@
     let sharedMap = null;
     let sharedMarkers = {};
     let sharedRouteLayers = {};
+    let sharedRouteRenderVersion = 0;
     let sharedLinkedCardHighlightPinId = null;
     let sharedLinkedCardHighlightTimer = null;
 
@@ -822,6 +1011,29 @@
       } catch (_error) {
         // Storage may be unavailable in some embedded/public browser contexts.
       }
+    }
+
+    const SHARED_HELP_SEEN_STORAGE_KEY = 'dtp-shared-help-seen-v112';
+
+    function rememberSharedHelpSeen() {
+      try {
+        localStorage.setItem(SHARED_HELP_SEEN_STORAGE_KEY, '1');
+      } catch (_error) {}
+    }
+
+    function openSharedHelpOverlay() {
+      const overlay = document.getElementById('shared-help-overlay');
+      overlay.classList.add('open');
+    }
+
+    function closeSharedHelpPanel() {
+      const overlay = document.getElementById('shared-help-overlay');
+      overlay.classList.remove('open');
+    }
+
+    function openSharedHelpPanel() {
+      openSharedHelpOverlay();
+      rememberSharedHelpSeen();
     }
 
     function getPreferredTheme() {
@@ -1065,36 +1277,92 @@
       return Array.isArray(state.routeGroups) ? state.routeGroups.slice() : [];
     }
 
+    function isSharedRouteVisible(group) {
+      return !!group && state.routeVisibility[group.routeId] !== false;
+    }
+
+    function getSharedRouteDisplayMode(routeId) {
+      const key = String(routeId || '').trim();
+      const mode = key ? state.routeDisplayMode[key] : '';
+      return mode === 'straight' ? 'straight' : 'road';
+    }
+
+    function getSharedRouteDisplayState(routeId) {
+      const key = String(routeId || '').trim();
+      if (!key) return 'road';
+      if (state.routeVisibility[key] === false) return 'hidden';
+      return getSharedRouteDisplayMode(key);
+    }
+
+    function getSharedRouteEffectiveMode(group) {
+      return getSharedRouteDisplayMode(getSharedRouteId(group));
+    }
+
+    function getSharedRouteDisplayModeLabel(routeId) {
+      const stateName = getSharedRouteDisplayState(routeId);
+      if (stateName === 'hidden') return '非表示';
+      return stateName === 'straight' ? '直線' : '道路';
+    }
+
+    function getSharedRouteDisplayModeButtonText(routeId) {
+      return getSharedRouteDisplayModeLabel(routeId);
+    }
+
+    function cycleSharedRouteDisplayMode(routeId) {
+      const key = String(routeId || '').trim();
+      if (!key) return 'road';
+      const currentState = getSharedRouteDisplayState(key);
+      if (currentState === 'road') {
+        state.routeVisibility[key] = true;
+        state.routeDisplayMode[key] = 'straight';
+        return 'straight';
+      }
+      if (currentState === 'straight') {
+        state.routeVisibility[key] = false;
+        return 'hidden';
+      }
+      state.routeVisibility[key] = true;
+      state.routeDisplayMode[key] = 'road';
+      return 'road';
+    }
+
+    function isSharedRouteSelectionNone(routeIds) {
+      return Array.isArray(routeIds)
+        && routeIds.length === 1
+        && String(routeIds[0] || '').trim() === SHARED_ROUTE_NONE_SENTINEL;
+    }
+
+    function normalizeSharedAllowedRouteIds(routeIds) {
+      if (isSharedRouteSelectionNone(routeIds)) return [];
+      if (!Array.isArray(routeIds)) return [];
+      return routeIds.map(function(routeId) {
+        return String(routeId || '').trim();
+      }).filter(function(routeId) {
+        return !!routeId && routeId !== SHARED_ROUTE_NONE_SENTINEL;
+      });
+    }
+
+    function hasSharedRouteRestriction() {
+      if (isSharedRouteSelectionNone(state.allowedRouteIds)) return false;
+      return Array.isArray(state.allowedRouteIds) && state.allowedRouteIds.length > 0;
+    }
+
+    function isPinAllowedByRoutes(pin) {
+      return true;
+    }
+
     function getSharedRoutePinIdsForDisplay(group, filteredPinIdSet) {
       if (!group || !Array.isArray(group.pinIds)) return [];
       const basePinIds = group.pinIds.map(function(pinId) {
         return String(pinId || '').trim();
       }).filter(Boolean);
-      const basePinIdSet = {};
-      basePinIds.forEach(function(pinId) {
-        basePinIdSet[pinId] = true;
-      });
       const seen = {};
-      const pinIds = [];
-      function canUsePinId(pinId) {
-        return !!pinId && !!basePinIdSet[pinId] && (!filteredPinIdSet || filteredPinIdSet.has(pinId));
-      }
-      function addPinId(pinId) {
-        if (!canUsePinId(pinId) || seen[pinId]) return;
+      return basePinIds.filter(function(pinId) {
+        if (seen[pinId]) return false;
+        if (filteredPinIdSet && !filteredPinIdSet.has(pinId)) return false;
         seen[pinId] = true;
-        pinIds.push(pinId);
-      }
-
-      const startPinId = String(group.startPinId || '').trim();
-      const endPinId = String(group.endPinId || '').trim();
-      const shouldAppendEndPin = group.closed !== true && canUsePinId(endPinId);
-      if (canUsePinId(startPinId)) addPinId(startPinId);
-      basePinIds.forEach(function(pinId) {
-        if (pinId === startPinId || (shouldAppendEndPin && pinId === endPinId)) return;
-        addPinId(pinId);
+        return true;
       });
-      if (shouldAppendEndPin) addPinId(endPinId);
-      return pinIds;
     }
 
     function getSharedRouteNumberDisplayForPin(pinId) {
@@ -1102,7 +1370,7 @@
       if (!targetPinId) return null;
       for (let i = 0; i < state.routeGroups.length; i += 1) {
         const group = state.routeGroups[i];
-        if (!group || group.visible === false || group.showNumbers === false) continue;
+        if (!isSharedRouteVisible(group) || group.showNumbers === false) continue;
         const routePinIds = getSharedRoutePinIdsForDisplay(group);
         const index = routePinIds.indexOf(targetPinId);
         if (index !== -1) {
@@ -1133,6 +1401,31 @@
         latLngs.push([latLngs[0][0], latLngs[0][1]]);
       }
       return latLngs;
+    }
+
+    function getSharedRouteVisiblePins(group) {
+      const pinById = {};
+      state.pins.forEach(function(pin) {
+        pinById[String(pin.id || '')] = pin;
+      });
+      return getSharedRoutePinIdsForDisplay(group).map(function(pinId) {
+        return pinById[pinId] || null;
+      }).filter(Boolean);
+    }
+
+    function getSharedRouteDistanceMeters(group) {
+      return sumLatLngDistanceMeters(getSharedRouteLatLngsForDisplay(group));
+    }
+
+    function fitSharedMapToRoute(group) {
+      const latLngs = getSharedRouteLatLngsForDisplay(group);
+      if (!latLngs.length) return;
+      const map = ensureSharedMap();
+      if (latLngs.length === 1) {
+        map.setView(latLngs[0], 14);
+        return;
+      }
+      map.fitBounds(L.latLngBounds(latLngs), { padding: [24, 24] });
     }
 
     function haversineDistanceMeters(a, b) {
@@ -1178,21 +1471,54 @@
       return undefined;
     }
 
-    function buildSharedRouteInfoPopupHtml(group, latLngs) {
+    function normalizeSharedRoadRouteCoords(coords) {
+      const normalized = (Array.isArray(coords) ? coords : []).map(function(coord) {
+        const lat = Array.isArray(coord) ? Number(coord[0]) : Number(coord && coord.lat);
+        const lng = Array.isArray(coord) ? Number(coord[1]) : Number(coord && coord.lng);
+        return Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : null;
+      }).filter(Boolean);
+      return normalized.length >= 2 ? normalized : null;
+    }
+
+    function getSharedCachedRoadRouteCoords(routeId) {
+      const key = String(routeId || '').trim();
+      const cached = key ? state.roadRouteCache[key] : null;
+      return cached ? normalizeSharedRoadRouteCoords(cached.coords) : null;
+    }
+
+    function getSharedRouteDistanceMetersForDisplay(group) {
+      const routeId = getSharedRouteId(group);
+      const latLngs = getSharedRouteLatLngsForDisplay(group);
+      if (getSharedRouteDisplayState(routeId) === 'hidden') return sumLatLngDistanceMeters(latLngs);
+      if (getSharedRouteEffectiveMode(group) === 'road') {
+        const roadLatLngs = getSharedCachedRoadRouteCoords(routeId);
+        if (roadLatLngs) return sumLatLngDistanceMeters(roadLatLngs);
+      }
+      return sumLatLngDistanceMeters(latLngs);
+    }
+
+    function getSharedRouteMetaText(group, routePins) {
+      const hiddenDistanceNote = getSharedRouteDisplayState(getSharedRouteId(group)) === 'hidden' ? '（直線距離）' : '';
+      return routePins.length + '地点・' + formatSharedRouteDistance(getSharedRouteDistanceMetersForDisplay(group)) + hiddenDistanceNote;
+    }
+
+    function buildSharedRouteInfoPopupHtml(group, latLngs, methodLabel) {
+      const routeMethodLabel = String(methodLabel || '直線');
       const routeName = String(group && group.name || '').trim() || '名称未設定のルート';
       const distanceLabel = formatSharedRouteDistance(sumLatLngDistanceMeters(latLngs));
-      const visiblePinCount = Array.isArray(latLngs) && latLngs.length
+      const routePinCount = getSharedRoutePinIdsForDisplay(group).length;
+      const visiblePinCount = routePinCount || (Array.isArray(latLngs) && latLngs.length
         ? Math.max(0, (group && group.closed === true) ? latLngs.length - 1 : latLngs.length)
-        : 0;
+        : 0);
       return '<div class="shared-route-info-popup-body">' +
         '<div class="shared-route-info-title">' + escHtml(routeName) + '</div>' +
         '<div class="shared-route-info-row"><strong>距離</strong><span>' + escHtml(distanceLabel) + '</span></div>' +
         '<div class="shared-route-info-row"><strong>地点</strong><span>' + visiblePinCount + '地点</span></div>' +
-        '<div class="shared-route-info-row"><strong>方式</strong><span>直線</span></div>' +
+        '<div class="shared-route-info-row"><strong>方式</strong><span>' + escHtml(routeMethodLabel) + '</span></div>' +
         '</div>';
     }
 
-    function attachSharedRouteHitPolyline(layerGroup, latLngs, group) {
+    function attachSharedRouteHitPolyline(layerGroup, latLngs, group, methodLabel) {
       if (!layerGroup || !Array.isArray(latLngs) || latLngs.length < 2) return null;
       const hitPolyline = L.polyline(latLngs, {
         color: safeRouteColor(group && group.color),
@@ -1202,7 +1528,7 @@
         bubblingMouseEvents: false,
         className: 'shared-route-hit-polyline'
       });
-      hitPolyline.bindPopup(buildSharedRouteInfoPopupHtml(group, latLngs), {
+      hitPolyline.bindPopup(buildSharedRouteInfoPopupHtml(group, latLngs, methodLabel), {
         className: 'shared-route-info-popup'
       });
       hitPolyline.addTo(layerGroup);
@@ -1216,10 +1542,36 @@
         weight: 3,
         opacity: 0.78,
         dashArray: getSharedRouteLineDashArray(group),
+        lineCap: 'round',
+        lineJoin: 'round',
         interactive: false
       }).addTo(layerGroup);
-      attachSharedRouteHitPolyline(layerGroup, latLngs, group);
+      attachSharedRouteHitPolyline(layerGroup, latLngs, group, '直線');
       return routeLine;
+    }
+
+    function drawSharedRoadRouteLine(layerGroup, latLngs, group) {
+      latLngs = normalizeSharedRoadRouteCoords(latLngs);
+      if (!layerGroup || !latLngs) return null;
+      const routeLine = L.polyline(latLngs, {
+        color: safeRouteColor(group.color),
+        weight: 4,
+        opacity: 0.86,
+        dashArray: getSharedRouteLineDashArray(group),
+        lineCap: 'round',
+        lineJoin: 'round',
+        interactive: false
+      }).addTo(layerGroup);
+      attachSharedRouteHitPolyline(layerGroup, latLngs, group, '道路');
+      return routeLine;
+    }
+
+    function requestSharedRoadRouteCache(routeId) {
+      const cachedCoords = getSharedCachedRoadRouteCoords(routeId);
+      if (cachedCoords) return Promise.resolve(cachedCoords);
+      return withGAS('getSharedRoadRouteCache', { token: state.token, routeId: routeId }).then(function(result) {
+        return result && result.ok ? normalizeSharedRoadRouteCoords(result.coords) : null;
+      });
     }
 
     function getSharedRouteLayerGroup(routeId) {
@@ -1246,6 +1598,8 @@
     }
 
     function renderSharedRouteLayers() {
+      sharedRouteRenderVersion += 1;
+      const version = sharedRouteRenderVersion;
       const routeGroups = getSharedRouteGroups();
       if (!routeGroups.length) {
         clearSharedRouteLayers();
@@ -1259,9 +1613,42 @@
         const layerGroup = getSharedRouteLayerGroup(routeId);
         if (!layerGroup) return;
         layerGroup.clearLayers();
-        if (group.visible === false || group.showLine === false) return;
+        if (!isSharedRouteVisible(group) || group.showLine === false) return;
         const latLngs = getSharedRouteLatLngsForDisplay(group);
         if (latLngs.length < 2) return;
+        const effectiveMode = getSharedRouteEffectiveMode(group);
+        if (effectiveMode === 'straight') {
+          drawSharedStraightRouteLine(layerGroup, latLngs, group);
+          return;
+        }
+        if (effectiveMode === 'road') {
+          const cachedCoords = getSharedCachedRoadRouteCoords(routeId);
+          if (cachedCoords) {
+            drawSharedRoadRouteLine(layerGroup, cachedCoords, group);
+            return;
+          }
+          drawSharedStraightRouteLine(layerGroup, latLngs, group);
+          requestSharedRoadRouteCache(routeId).then(function(coords) {
+            if (version !== sharedRouteRenderVersion) return;
+            if (!coords) return;
+            const currentGroup = getSharedRouteGroups().find(function(candidate) {
+              return getSharedRouteId(candidate) === routeId;
+            });
+            if (!currentGroup || getSharedRouteEffectiveMode(currentGroup) !== 'road' || !isSharedRouteVisible(currentGroup) || currentGroup.showLine === false) return;
+            const currentLatLngs = getSharedRouteLatLngsForDisplay(currentGroup);
+            if (currentLatLngs.length < 2) return;
+            state.roadRouteCache[routeId] = { ok: true, coords: coords };
+            renderSharedRouteList();
+            const currentLayerGroup = getSharedRouteLayerGroup(routeId);
+            if (!currentLayerGroup) return;
+            currentLayerGroup.clearLayers();
+            drawSharedRoadRouteLine(currentLayerGroup, coords, currentGroup);
+          }).catch(function(error) {
+            if (version !== sharedRouteRenderVersion) return;
+            console.warn('[shared] road route cache miss', error && error.message ? error.message : 'gas_error');
+          });
+          return;
+        }
         drawSharedStraightRouteLine(layerGroup, latLngs, group);
       });
       Object.keys(sharedRouteLayers).forEach(function(routeId) {
@@ -1321,6 +1708,15 @@
       renderSharedSearchUi();
       renderSharedPins();
       renderSharedMap();
+    }
+
+    function resetSharedRouteState() {
+      state.routeVisibility = Object.assign({}, state.initialRouteVisibility);
+      state.routeDisplayMode = Object.assign({}, state.initialRouteDisplayMode);
+      renderSharedRouteList();
+      renderSharedPins();
+      renderSharedMap();
+      renderSharedRouteLayers();
     }
 
     function renderSharedTagChips() {
@@ -1441,6 +1837,114 @@
       setSharedStatusNote('');
     }
 
+    function renderSharedRouteList() {
+      const routeSection = document.getElementById('shared-route-section');
+      const routeList = document.getElementById('shared-route-list');
+      const resetRoutesButton = document.getElementById('shared-reset-routes');
+      if (!routeSection || !routeList) return;
+      const routeGroups = getSharedRouteGroups();
+      if (!routeGroups.length) {
+        routeSection.style.display = 'none';
+        routeList.innerHTML = '';
+        if (resetRoutesButton) resetRoutesButton.style.display = 'none';
+        return;
+      }
+      routeSection.style.display = '';
+      if (resetRoutesButton) resetRoutesButton.style.display = '';
+      routeList.innerHTML = '';
+      routeGroups.forEach(function(group) {
+        const routeId = getSharedRouteId(group);
+        if (!routeId) return;
+        const routePins = getSharedRouteVisiblePins(group);
+        const routeName = String(group.name || '').trim() || '名称未設定のルート';
+        const card = document.createElement('div');
+        card.className = 'shared-route-card';
+        card.dataset.routeId = routeId;
+        card.tabIndex = 0;
+        card.setAttribute('role', 'button');
+        card.setAttribute('aria-label', routeName);
+
+        const header = document.createElement('div');
+        header.className = 'shared-route-card-header';
+
+        const dot = document.createElement('span');
+        dot.className = 'shared-route-color-dot';
+        dot.style.backgroundColor = safeRouteColor(group.color);
+        header.appendChild(dot);
+
+        const name = document.createElement('div');
+        name.className = 'shared-route-name';
+        name.textContent = routeName;
+        name.title = routeName;
+        header.appendChild(name);
+
+        const displayModeButton = document.createElement('button');
+        displayModeButton.type = 'button';
+        displayModeButton.className = 'shared-route-display-mode' + (isSharedRouteVisible(group) ? '' : ' is-off');
+        displayModeButton.textContent = getSharedRouteDisplayModeButtonText(routeId);
+        displayModeButton.setAttribute('aria-label', 'ルート表示: ' + getSharedRouteDisplayModeLabel(routeId));
+        displayModeButton.setAttribute('aria-pressed', isSharedRouteVisible(group) ? 'true' : 'false');
+        header.appendChild(displayModeButton);
+
+        const meta = document.createElement('div');
+        meta.className = 'shared-route-meta';
+        meta.textContent = getSharedRouteMetaText(group, routePins);
+
+        const pinList = document.createElement('ul');
+        pinList.className = 'shared-route-pin-list';
+        routePins.forEach(function(pin, index) {
+          const item = document.createElement('li');
+          item.className = 'shared-route-pin-item';
+          item.dataset.pinId = String(pin.id || '');
+
+          const num = document.createElement('span');
+          num.className = 'shared-route-pin-num';
+          num.textContent = String(index + 1);
+          item.appendChild(num);
+
+          const title = document.createElement('span');
+          title.className = 'shared-route-pin-title';
+          title.textContent = pin.title || '(無題)';
+          title.title = pin.title || '(無題)';
+          item.appendChild(title);
+
+          item.addEventListener('click', function(event) {
+            event.stopPropagation();
+            openSharedDetail(pin);
+            highlightLinkedMarker(pin.id);
+          });
+          pinList.appendChild(item);
+        });
+
+        displayModeButton.addEventListener('click', function(event) {
+          event.stopPropagation();
+          cycleSharedRouteDisplayMode(routeId);
+          renderSharedRouteList();
+          renderSharedPins();
+          renderSharedMap();
+          renderSharedRouteLayers();
+        });
+
+        card.addEventListener('click', function(event) {
+          const target = event.target;
+          if (target && target.closest && target.closest('.shared-route-display-mode, .shared-route-pin-item')) return;
+          fitSharedMapToRoute(group);
+        });
+        card.addEventListener('keydown', function(event) {
+          const target = event.target;
+          if (target && target.closest && target.closest('.shared-route-display-mode, .shared-route-pin-item')) return;
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          fitSharedMapToRoute(group);
+        });
+
+        card.appendChild(header);
+        card.appendChild(meta);
+        card.appendChild(pinList);
+        routeList.appendChild(card);
+      });
+    }
+
     function renderSharedPins() {
       const list = document.getElementById('shared-list');
       if (state.status !== 'ready') {
@@ -1500,7 +2004,7 @@
         const marker = L.marker([pin.lat, pin.lng], {
           icon: createSharedPinIconForDisplay(pin)
         }).addTo(map);
-        marker.bindTooltip(pin.title || '(無題)', { direction: 'top' });
+        marker.bindTooltip(pin.title || '(無題)', { direction: 'top', offset: [0, -34] });
         marker.on('click', function() {
           highlightLinkedCard(pin.id);
           openSharedDetail(pin);
@@ -1638,12 +2142,20 @@
       renderSharedPanelUi();
       ensureSharedMap();
       renderSharedSearchUi();
+      renderSharedRouteList();
       if (!state.token) {
         state.status = 'invalid_share_link';
         state.routeGroups = [];
+        state.allowedRouteIds = [];
+        state.routeVisibility = {};
+        state.routeDisplayMode = {};
+        state.initialRouteVisibility = {};
+        state.initialRouteDisplayMode = {};
+        state.roadRouteCache = {};
         renderSharedTagChips();
         renderSharedColorFilter();
         renderSharedSearchUi();
+        renderSharedRouteList();
         renderSharedStatusNote();
         renderSharedMap();
         return;
@@ -1653,15 +2165,32 @@
         if (!result || !result.ok) {
           state.status = result && result.error ? result.error : 'invalid_share_link';
           state.routeGroups = [];
+          state.allowedRouteIds = [];
+          state.routeVisibility = {};
+          state.routeDisplayMode = {};
+          state.initialRouteVisibility = {};
+          state.initialRouteDisplayMode = {};
+          state.roadRouteCache = {};
           renderSharedTagChips();
           renderSharedColorFilter();
           renderSharedSearchUi();
+          renderSharedRouteList();
           renderSharedStatusNote();
           renderSharedMap();
           return;
         }
         state.pins = Array.isArray(result.pins) ? result.pins : [];
         state.routeGroups = Array.isArray(result.routeGroups) ? result.routeGroups.map(normalizeSharedRouteGroup) : [];
+        state.allowedRouteIds = normalizeSharedAllowedRouteIds(result.allowedRouteIds);
+        state.routeVisibility = {};
+        state.routeDisplayMode = {};
+        state.routeGroups.forEach(function(group) {
+          state.routeVisibility[group.routeId] = group.visible !== false;
+          state.routeDisplayMode[group.routeId] = group.routeMode === 'road' ? 'road' : 'straight';
+        });
+        state.initialRouteVisibility = Object.assign({}, state.routeVisibility);
+        state.initialRouteDisplayMode = Object.assign({}, state.routeDisplayMode);
+        state.roadRouteCache = {};
         state.allowedTags = Array.isArray(result.allowedTags) ? result.allowedTags : [];
         state.allowedColors = Array.isArray(result.allowedColors) ? result.allowedColors : [];
         state.activeTags = [];
@@ -1674,14 +2203,22 @@
         renderSharedTagChips();
         renderSharedColorFilter();
         renderSharedSearchUi();
+        renderSharedRouteList();
         renderSharedPins();
         renderSharedMap();
       } catch (_error) {
         state.status = 'invalid_share_link';
         state.routeGroups = [];
+        state.allowedRouteIds = [];
+        state.routeVisibility = {};
+        state.routeDisplayMode = {};
+        state.initialRouteVisibility = {};
+        state.initialRouteDisplayMode = {};
+        state.roadRouteCache = {};
         renderSharedTagChips();
         renderSharedColorFilter();
         renderSharedSearchUi();
+        renderSharedRouteList();
         renderSharedStatusNote();
         renderSharedMap();
       }
@@ -1720,6 +2257,17 @@
       setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
     });
 
+    document.getElementById('shared-help-open-btn').addEventListener('click', openSharedHelpPanel);
+    document.getElementById('shared-help-close').addEventListener('click', closeSharedHelpPanel);
+    document.getElementById('shared-help-overlay').addEventListener('click', function(event) {
+      if (event.target === this) closeSharedHelpPanel();
+    });
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape' && document.getElementById('shared-help-overlay').classList.contains('open')) {
+        closeSharedHelpPanel();
+      }
+    });
+
     document.getElementById('shared-panel-toggle').addEventListener('click', function() {
       state.panelVisible = !state.panelVisible;
       renderSharedPanelUi();
@@ -1733,6 +2281,10 @@
 
     document.getElementById('shared-clear-filters').addEventListener('click', function() {
       clearSharedFilters();
+    });
+
+    document.getElementById('shared-reset-routes').addEventListener('click', function() {
+      resetSharedRouteState();
     });
 
     document.getElementById('shared-filter-color-btn').addEventListener('click', function() {
