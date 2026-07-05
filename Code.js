@@ -201,6 +201,10 @@ const DEFAULT_COLOR = PinData.DEFAULT_COLOR;
 const DEFAULT_SHARE_LINK_LABEL = 'Drop the Pin!';
 const DEFAULT_ROUTE_COLOR = '#1e88e5';
 const MAX_ROUTE_PINS = 100;
+const EDIT_KEY_CONFIG_KEY = 'EDIT_KEY';
+const WEB_APP_URL_CONFIG_KEY = 'WEB_APP_URL';
+const EDIT_TOKEN_TTL_SECONDS = 6 * 60 * 60;
+const EDIT_TOKEN_CACHE_PREFIX = 'EDIT_TOKEN_';
 const SHARE_LINKS_HEADERS = ['createdAt', 'label', 'token', 'tags', 'tagMode', 'enabled', 'revokedAt', 'colors', 'routeIds'];
 const ROUTES_HEADERS = ['routeId', 'name', 'color', 'routeMode', 'closed', 'startPinId', 'endPinId', 'createdAt', 'updatedAt', 'orderIndex', 'visible', 'showNumbers', 'showLine', 'lineStyle'];
 const ROUTE_PINS_HEADERS = ['routeId', 'pinId', 'pinOrder', 'createdAt', 'updatedAt'];
@@ -219,6 +223,9 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('設定')
     .addItem('初期設定', 'setupSheet')
+    .addItem('WebアプリURLを設定', 'promptWebAppUrl')
+    .addItem('編集URLを表示', 'showEditUrlDialog')
+    .addItem('編集キーを再生成', 'regenerateEditKeyFromMenu')
     .addToUi();
 }
 
@@ -276,6 +283,7 @@ function setupSheet() {
     '写真を保存するGoogleドライブフォルダのURL（フォルダを右クリック→共有→リンクをコピー）');
   ensureConfigEntry_(configSheet, 'RENAME_FILE_WITH_TITLE', 'false',
     'true の場合、タイトル編集時に Drive 上の写真名も同じタイトルへ更新');
+  ensureEditUrlConfig_(configSheet);
   ensureShareLinksSheet_(ss);
   ensureHeaderSheet_(ss, ROUTES_SHEET_NAME, ROUTES_HEADERS);
   ensureHeaderSheet_(ss, ROUTE_PINS_SHEET_NAME, ROUTE_PINS_HEADERS);
@@ -297,8 +305,9 @@ function doGet(e) {
   var params = (e && e.parameter) || {};
   var templateName = params.view === 'shared' ? 'shared' : 'index';
   var template = HtmlService.createTemplateFromFile(templateName);
-  template.execUrl = ScriptApp.getService().getUrl();
+  template.execUrl = getConfiguredWebAppUrl_();
   template.token = params.token || '';
+  template.editToken = templateName === 'index' ? issueEditTokenFromRequest_(params) : '';
   return template.evaluate()
     .setTitle('Drop the Pin!')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
@@ -314,17 +323,139 @@ function ensureConfigEntry_(sheet, key, value, description) {
   const keys = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, 1).getValues().flat() : [];
   const index = keys.indexOf(key);
   if (index === -1) {
-    sheet.appendRow([key, value, description]);
+    sheet.appendRow([key, typeof value === 'function' ? value() : value, description]);
     return;
   }
 
   const row = index + 2;
   if (sheet.getRange(row, 2).getValue() === '') {
-    sheet.getRange(row, 2).setValue(value);
+    sheet.getRange(row, 2).setValue(typeof value === 'function' ? value() : value);
   }
   if (sheet.getRange(row, 3).getValue() === '') {
     sheet.getRange(row, 3).setValue(description);
   }
+}
+
+function generateEditKey_() {
+  return 'ed_' + Utilities.getUuid().replace(/[^A-Za-z0-9]/g, '');
+}
+
+function generateEditToken_() {
+  return 'edt_' + Utilities.getUuid().replace(/[^A-Za-z0-9]/g, '');
+}
+
+function getEditTokenCacheKey_(token) {
+  return EDIT_TOKEN_CACHE_PREFIX + String(token || '').trim();
+}
+
+function assertEditToken_(payload) {
+  const token = payload && typeof payload === 'object'
+    ? String(payload.__editToken || '')
+    : '';
+  if (!token) {
+    throw new Error('編集権限が確認できません。編集URLを開き直してください。');
+  }
+
+  const cached = CacheService.getScriptCache().get(getEditTokenCacheKey_(token));
+  if (cached !== '1') {
+    throw new Error('編集権限が確認できません。編集URLを開き直してください。');
+  }
+}
+
+function normalizeWebAppUrl_(url) {
+  var normalized = String(url || '').trim();
+  if (!normalized) return '';
+  normalized = normalized.split('#')[0].split('?')[0].replace(/\/+$/, '');
+  return normalized.replace(
+    /^https:\/\/script\.google\.com\/a\/([^/]+)\/macros\/s\//,
+    'https://script.google.com/a/macros/$1/s/'
+  );
+}
+
+function ensureEditUrlConfig_(configSheet) {
+  const sheet = configSheet || openDataSpreadsheet_().getSheetByName(CONFIG_SHEET_NAME);
+  if (!sheet) throw new Error('config シートが見つかりません');
+  ensureConfigEntry_(sheet, EDIT_KEY_CONFIG_KEY, generateEditKey_, '編集URL用の共有キー');
+  ensureConfigEntry_(sheet, WEB_APP_URL_CONFIG_KEY, '', 'デプロイ済みWebアプリの /exec URL');
+  return sheet;
+}
+
+function getConfiguredWebAppUrl_() {
+  const config = getAppConfig_();
+  return normalizeWebAppUrl_(config[WEB_APP_URL_CONFIG_KEY]) ||
+    normalizeWebAppUrl_(ScriptApp.getService().getUrl());
+}
+
+function buildEditUrl_() {
+  ensureEditUrlConfig_();
+  const config = getAppConfig_();
+  const editKey = String(config[EDIT_KEY_CONFIG_KEY] || '').trim();
+  const webAppUrl = getConfiguredWebAppUrl_();
+  if (!editKey) throw new Error('EDIT_KEY が設定されていません');
+  if (!webAppUrl) throw new Error('WebアプリURLが取得できません');
+  return webAppUrl + '?mode=edit&editKey=' + encodeURIComponent(editKey);
+}
+
+function escapeHtml_(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function promptWebAppUrl() {
+  const ui = SpreadsheetApp.getUi();
+  ensureEditUrlConfig_();
+  const response = ui.prompt(
+    'WebアプリURLを設定',
+    'デプロイ済みWebアプリの /exec URL を入力してください。空欄にすると ScriptApp.getService().getUrl() を使います。',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (response.getSelectedButton() !== ui.Button.OK) return;
+  const normalizedUrl = normalizeWebAppUrl_(response.getResponseText());
+  setConfigValue_(WEB_APP_URL_CONFIG_KEY, normalizedUrl);
+  ui.alert('保存しました', normalizedUrl || 'WEB_APP_URL を空欄にしました。', ui.ButtonSet.OK);
+}
+
+function showEditUrlDialog() {
+  const ui = SpreadsheetApp.getUi();
+  const editUrl = buildEditUrl_();
+  const html = HtmlService.createHtmlOutput(
+    '<div style="font-family:sans-serif;line-height:1.6;padding:12px;">' +
+      '<p>このURLをClassroomなどで共同編集者に共有してください。</p>' +
+      '<p>EDIT_KEYを変更しない限り、同じ編集URLを継続して使えます。</p>' +
+      '<p>開きっぱなしで編集できなくなった場合は、このURLを再読み込みしてください。</p>' +
+      '<input style="box-sizing:border-box;width:100%;font-size:13px;padding:8px;" readonly value="' + escapeHtml_(editUrl) + '">' +
+    '</div>'
+  ).setWidth(640).setHeight(260);
+  ui.showModalDialog(html, '編集URL');
+}
+
+function regenerateEditKeyFromMenu() {
+  const ui = SpreadsheetApp.getUi();
+  ensureEditUrlConfig_();
+  const result = ui.alert(
+    '編集キーを再生成',
+    '編集キーを再生成すると、これまで共有した編集URLは使えなくなります。続行しますか？',
+    ui.ButtonSet.YES_NO
+  );
+  if (result !== ui.Button.YES) return;
+  setConfigValue_(EDIT_KEY_CONFIG_KEY, generateEditKey_());
+  ui.alert('編集キーを再生成しました', '新しい編集URLを表示して共有し直してください。', ui.ButtonSet.OK);
+}
+
+function issueEditTokenFromRequest_(params) {
+  if (String(params && params.mode || '') !== 'edit') return '';
+  const config = getAppConfig_();
+  const expectedEditKey = String(config[EDIT_KEY_CONFIG_KEY] || '').trim();
+  const providedEditKey = String(params && params.editKey || '').trim();
+  if (!expectedEditKey || providedEditKey !== expectedEditKey) return '';
+
+  const editToken = generateEditToken_();
+  CacheService.getScriptCache().put(getEditTokenCacheKey_(editToken), '1', EDIT_TOKEN_TTL_SECONDS);
+  return editToken;
 }
 
 function openDataSpreadsheet_() {
@@ -616,11 +747,14 @@ function getFolderContents_(folderId) {
   }
 }
 
-function navigateToFolder(folderId) {
+function navigateToFolder(payload) {
+  assertEditToken_(payload);
+  const folderId = payload && typeof payload === 'object' ? payload.folderId : payload;
   return getFolderContents_(folderId);
 }
 
-function getRootFolderContents() {
+function getRootFolderContents(payload) {
+  assertEditToken_(payload);
   const folderId = getRootFolderId_();
   if (!folderId) {
     return { items: [], error: 'IMAGE_DRIVE_URL が config シートに設定されていません' };
@@ -805,6 +939,7 @@ function routeGroupToRow_(group) {
 }
 
 function saveRouteGroup(payload) {
+  assertEditToken_(payload);
   const data = payload || {};
   const requestedRouteId = normalizeRouteId_(data.routeId || data.id);
   if (data.routeId !== undefined && data.routeId !== null && !requestedRouteId) {
@@ -902,6 +1037,7 @@ function validateRoutePinIds_(pinIds) {
 }
 
 function setRoutePins(data) {
+  assertEditToken_(data);
   const routeId = normalizeRouteId_(data && data.routeId);
   if (!routeId) return { ok: false, error: 'missing_route_id' };
   if (!findRouteRow_(routeId)) return { ok: false, error: 'route_not_found' };
@@ -1050,6 +1186,7 @@ function getRouteCache(data) {
 }
 
 function putRouteCache(data) {
+  assertEditToken_(data);
   const cacheKey = normalizeRouteCacheKey_(data && data.cacheKey);
   const routeId = normalizeRouteId_(data && data.routeId);
   const provider = normalizeRouteCacheProvider_(data && data.provider);
@@ -1103,12 +1240,14 @@ function invalidateRouteCacheForPins_(pinIds) {
 }
 
 function invalidateRouteCacheForPin(data) {
+  assertEditToken_(data);
   const pinId = normalizeRoutePinId_(data && data.pinId);
   if (!pinId) return { ok: false, error: 'missing_pin_id' };
   return { ok: true, deleted: invalidateRouteCacheForPins_([pinId]) };
 }
 
 function invalidateRouteCacheForRoute(data) {
+  assertEditToken_(data);
   const routeId = normalizeRouteId_(data && data.routeId);
   if (!routeId) return { ok: false, error: 'missing_route_id' };
   return { ok: true, deleted: invalidateRouteCacheForRoutes_([routeId]) };
@@ -1342,8 +1481,9 @@ function getSharedRoadRouteCache(data, routeId) {
   }
 }
 
-function deleteRouteGroup(id) {
-  const routeId = normalizeRouteId_(id);
+function deleteRouteGroup(data) {
+  assertEditToken_(data);
+  const routeId = normalizeRouteId_(data && typeof data === 'object' ? (data.routeId || data.id) : data);
   if (!routeId) return { ok: false, error: 'missing_route_id' };
 
   const sheet = openRoutesSheet_();
@@ -1357,6 +1497,7 @@ function deleteRouteGroup(id) {
 }
 
 function updateRoutesOrder(data) {
+  assertEditToken_(data);
   if (!data || !Array.isArray(data.orderedIds)) {
     return { ok: false, error: 'ordered_ids_required' };
   }
@@ -1398,10 +1539,11 @@ function updateRoutesOrder(data) {
 }
 
 function buildSharedViewUrl_(token) {
-  return ScriptApp.getService().getUrl() + '?view=shared&token=' + encodeURIComponent(token);
+  return getConfiguredWebAppUrl_() + '?view=shared&token=' + encodeURIComponent(token);
 }
 
 function createShareLink(data) {
+  assertEditToken_(data);
   const label = normalizeShareLinkLabel_(data && data.label);
   const tags = PinData.normalizeTags(data && data.tags || []);
   const tagMode = String(data && data.tagMode || 'or') === 'and' ? 'and' : 'or';
@@ -1440,7 +1582,8 @@ function createShareLink(data) {
   };
 }
 
-function listShareLinks() {
+function listShareLinks(data) {
+  assertEditToken_(data);
   const rows = openShareLinksSheet_().getDataRange().getValues();
   const items = rows.slice(1).map(shareRowToLink_).reverse().map(function(item) {
     item.url = buildSharedViewUrl_(item.token);
@@ -1461,6 +1604,7 @@ function getShareLinkByToken_(token) {
 }
 
 function setShareLinkEnabled(data) {
+  assertEditToken_(data);
   var normalizedToken = normalizeShareToken_(typeof data === 'object' && data !== null ? data.token : data);
   var enabled = !!(data && typeof data === 'object' ? data.enabled : false);
   const sheet = openShareLinksSheet_();
@@ -1474,8 +1618,9 @@ function setShareLinkEnabled(data) {
   return { ok: false, error: 'token not found' };
 }
 
-function deleteShareLink(token) {
-  var normalizedToken = normalizeShareToken_(token);
+function deleteShareLink(data) {
+  assertEditToken_(data);
+  var normalizedToken = normalizeShareToken_(data && typeof data === 'object' ? data.token : data);
   const sheet = openShareLinksSheet_();
   const rows = sheet.getDataRange().getValues();
   for (var i = 1; i < rows.length; i += 1) {
@@ -1486,8 +1631,10 @@ function deleteShareLink(token) {
   return { ok: false, error: 'token not found' };
 }
 
-function revokeShareLink(token) {
-  return setShareLinkEnabled({ token: token, enabled: false });
+function revokeShareLink(data) {
+  assertEditToken_(data);
+  var token = data && typeof data === 'object' ? data.token : data;
+  return setShareLinkEnabled({ token: token, enabled: false, __editToken: data && data.__editToken });
 }
 
 function matchesTagFilter_(pin, tags, mode) {
@@ -1627,6 +1774,7 @@ function getSharedViewData(token) {
 
 
 function saveMapData(data) {
+  assertEditToken_(data);
   if (!data || !String(data.title || '').trim()) {
     return { ok: false, error: 'title is required' };
   }
@@ -1731,6 +1879,7 @@ function normalizeDuplicateLocation_(mode, sourcePin, data) {
 }
 
 function duplicatePin(data) {
+  assertEditToken_(data);
   const sourcePinId = String(data && data.sourcePinId || '').trim();
   const mode = String(data && data.mode || 'unplaced').trim();
   const sheet = openMapInfoSheet_();
@@ -1782,6 +1931,7 @@ function duplicatePin(data) {
 }
 
 function updatePinDetails(data) {
+  assertEditToken_(data);
   if (!data || !data.id) return { ok: false, error: 'missing id' };
   if (!String(data.title || '').trim()) return { ok: false, error: 'title is required' };
 
@@ -1824,6 +1974,7 @@ function updatePinDetails(data) {
 }
 
 function movePin(data) {
+  assertEditToken_(data);
   if (!data || !data.id) return { ok: false, error: 'missing id' };
   if (data.lat == null || data.lng == null) return { ok: false, error: 'missing lat/lng' };
 
@@ -1839,6 +1990,7 @@ function movePin(data) {
 }
 
 function unplacePin(data) {
+  assertEditToken_(data);
   if (!data || !data.id) return { ok: false, error: 'missing id' };
 
   const sheet = openMapInfoSheet_();
@@ -1852,6 +2004,7 @@ function unplacePin(data) {
 }
 
 function bulkUpdatePinStatus(data) {
+  assertEditToken_(data);
   if (!data || !Array.isArray(data.ids) || data.ids.length === 0) {
     return { ok: false, error: 'ids must be a non-empty array' };
   }
@@ -1878,6 +2031,7 @@ function bulkUpdatePinStatus(data) {
 }
 
 function deletePin(data) {
+  assertEditToken_(data);
   if (!data || !data.id) return { ok: false, error: 'missing id' };
 
   const sheet = openMapInfoSheet_();
@@ -1902,6 +2056,7 @@ function deletePin(data) {
 }
 
 function bulkDeletePins(data) {
+  assertEditToken_(data);
   if (!data || !Array.isArray(data.ids) || data.ids.length === 0) {
     return { ok: false, error: 'ids must be a non-empty array' };
   }
@@ -1968,6 +2123,7 @@ function getAppSettings() {
 }
 
 function updateAppSettings(data) {
+  assertEditToken_(data);
   if (!data) return { ok: false, error: 'missing data' };
   setConfigValue_('RENAME_FILE_WITH_TITLE', data.renameFileWithTitle ? 'true' : 'false');
   return getAppSettings();
@@ -1975,6 +2131,7 @@ function updateAppSettings(data) {
 
 // 旧フロント互換用
 function updatePin(data) {
+  assertEditToken_(data);
   const detailResult = updatePinDetails(data);
   if (!detailResult.ok) return detailResult;
   if (data.lat == null || data.lng == null) return detailResult;

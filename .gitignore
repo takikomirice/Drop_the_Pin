@@ -18,8 +18,9 @@ docs/superpowers/
 
 # Scratch files and logs
 plan.md
-tests/
 .tests/
+tests/.tmp-*
+tests/*.log
 .tmp-*
 *.log
 

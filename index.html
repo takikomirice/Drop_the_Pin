@@ -8,6 +8,9 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/exif-js@2.3.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+  <script>
+    window.__EDIT_TOKEN__ = <?!= JSON.stringify(editToken || '') ?>;
+  </script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; overflow: hidden; font-family: "Yu Gothic", "Hiragino Sans", sans-serif; }
@@ -414,11 +417,23 @@
     .share-link-title { font-size: 14px; font-weight: 800; word-break: break-word; }
     .share-link-meta { margin-top: 4px; font-size: 11px; color: var(--text-sub); }
     .share-link-url {
-      margin-top: 8px; font-size: 11px; color: var(--text-sub); word-break: break-all;
+      margin-top: 8px; font-size: 11px; color: var(--text-sub); word-break: break-all; max-height: 3.3em; overflow: hidden;
     }
     .share-link-actions { display: flex; flex-wrap: wrap; gap: 6px; flex: 0 0 auto; }
     .share-link-actions .text-btn,
     .share-link-actions .danger-btn { padding: 6px 10px; font-size: 11px; }
+    .share-qr-box {
+      display: flex; align-items: center; justify-content: center;
+      min-height: 220px; padding: 12px; border: 1px solid var(--border);
+      border-radius: 12px; background: #fff; color: #212121; overflow: auto;
+    }
+    .share-qr-box svg { width: min(260px, 72vw); height: auto; display: block; }
+    .share-qr-url {
+      margin-top: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+      background: var(--surface2); color: var(--text-sub); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere;
+      max-height: 4.6em; overflow: auto;
+    }
+    .share-qr-note { margin-top: 10px; color: var(--warn); font-size: 12px; line-height: 1.55; }
     .share-link-tags { margin-top: 8px; }
     .share-link-routes { margin-top: 8px; font-size: 11px; line-height: 1.45; color: var(--text-sub); overflow-wrap: anywhere; }
     .status-badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(255,152,0,0.12); color: var(--warn); border: 1px solid rgba(255,152,0,0.3); white-space: nowrap; margin-top: 4px; }
@@ -538,10 +553,45 @@
     body.share-mode #side-panel { top: calc(52px + 32px); }
     body.share-mode #pin-detail-share { display: none !important; }
     body.share-mode #pin-detail-route-add { display: none !important; }
+    body.share-mode #readonly-banner { display: none !important; }
+    body:not(.has-edit-token) #edit-toggle,
+    body:not(.has-edit-token) #settings-toggle,
+    body:not(.has-edit-token) #share-open-btn,
+    body:not(.has-edit-token) #mode-badge,
+    body:not(.has-edit-token) #fab,
+    body:not(.has-edit-token) #bulk-action-bar,
+    body:not(.has-edit-token) #route-add-btn,
+    body:not(.has-edit-token) #pin-detail-drive,
+    body:not(.has-edit-token) #pin-detail-route-add { display: none !important; }
     body:not(.edit-mode):not(.share-mode) #settings-toggle,
     body:not(.edit-mode):not(.share-mode) #route-add-btn,
     body:not(.edit-mode):not(.share-mode) #pin-detail-drive,
     body:not(.edit-mode):not(.share-mode) #pin-detail-route-add { display: none !important; }
+    #readonly-banner {
+      display: none;
+      position: fixed;
+      top: calc(52px + 8px);
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1120;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(46,125,50,0.28);
+      background: var(--sheet-bg);
+      box-shadow: var(--shadow);
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.35;
+      max-width: min(680px, calc(100vw - 24px));
+      text-align: center;
+    }
+    body.view-only:not(.share-mode) #readonly-banner { display: block; }
+    body.edit-url-denied:not(.share-mode) #readonly-banner {
+      border-color: rgba(255,152,0,0.5);
+      color: var(--warn);
+      border-radius: 12px;
+      font-weight: 700;
+    }
     @media (max-width: 520px) {
       #topbar { gap: 6px; padding: 0 8px; }
       .topbar-title { max-width: 44px; overflow: hidden; text-overflow: ellipsis; }
@@ -641,6 +691,7 @@
     </div>
   </div>
   <div class="share-banner">📤 共有ビュー（閲覧のみ）— 編集・追加はできません</div>
+  <div id="readonly-banner" role="status"></div>
   <div id="share-empty-msg"
     style="display:none;position:fixed;top:calc(52px + 32px + 8px);left:50%;transform:translateX(-50%);
            z-index:1100;padding:12px 20px;border-radius:14px;border:1px solid var(--border);
@@ -745,6 +796,14 @@
       <section>
         <h3>基本</h3>
         <p>地図上のピンを押すと詳細を確認できます。検索欄でタイトル・説明・タグを検索でき、色・アイコン・タグ・状態で絞り込みできます。</p>
+      </section>
+      <section>
+        <h3>位置情報</h3>
+        <p>GPS付き写真は撮影場所をもとに自動でピンを置きます。自宅・通学路・個人が特定される場所の写真は投稿しないでください。必要に応じてピンを移動するか、未配置に戻してください。</p>
+      </section>
+      <section>
+        <h3>編集について</h3>
+        <p>通常URLでは閲覧専用です。編集するには、先生がスプレッドシートメニューから取得した編集URLで開いてください。</p>
       </section>
       <section>
         <h3>編集モード</h3>
@@ -947,6 +1006,21 @@
     </div>
   </div></div>
 
+  <div id="share-qr-overlay" class="sheet-overlay" role="dialog" aria-modal="true" aria-labelledby="share-qr-title"><div class="sheet-body" style="max-width:420px;">
+    <div class="sheet-handle"></div>
+    <div id="share-qr-title" class="sheet-title">共有QR</div>
+    <div id="share-qr-code" class="share-qr-box"></div>
+    <div id="share-qr-url" class="share-qr-url"></div>
+    <div class="share-qr-note">
+      このQRは閲覧専用の共有ビューURLです。編集URLや editKey は含みません。<br>
+      共有前に、写真・説明・地点に個人情報や詳細すぎる位置情報が含まれていないか確認してください。
+    </div>
+    <div class="inline-actions" style="margin-top:14px;">
+      <button id="share-qr-copy" class="ghost-btn" type="button">URLをコピー</button>
+      <button id="share-qr-close" class="ghost-btn" type="button">閉じる</button>
+    </div>
+  </div></div>
+
   <div id="dup-warning-overlay" class="sheet-overlay" role="dialog" aria-modal="true"><div class="sheet-body" style="max-width:460px;">
   <div class="sheet-handle"></div>
   <div class="sheet-title">⚠️ 近接した同名ピンがあります</div>
@@ -978,6 +1052,10 @@
     ];
     const ROUTE_LINE_STYLES = ['solid', 'dashed', 'dotted'];
     const SHARE_ROUTE_NONE_SENTINEL = '__share_no_routes__';
+    const editToken = String(window.__EDIT_TOKEN__ || '');
+    const hasEditToken = !!editToken;
+    document.body.classList.toggle('has-edit-token', hasEditToken);
+    document.body.classList.toggle('view-only', !hasEditToken);
 
     const state = {
       editMode: false,
@@ -1030,7 +1108,34 @@
     };
 
     function canEdit() {
-      return state.editMode === true && state.shareMode !== true;
+      return hasEditToken && state.editMode === true && state.shareMode !== true;
+    }
+
+    function isEditUrlRequested() {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('mode') === 'edit';
+    }
+
+    function updateReadonlyBanner() {
+      const banner = document.getElementById('readonly-banner');
+      if (!banner) return;
+      const deniedEditUrl = isEditUrlRequested() && !hasEditToken;
+      document.body.classList.toggle('edit-url-denied', deniedEditUrl);
+      if (state.shareMode || hasEditToken) {
+        banner.style.display = 'none';
+        return;
+      }
+      banner.textContent = deniedEditUrl
+        ? '編集URLとして開かれていますが、編集キーが確認できません。configシートの EDIT_KEY とURLの editKey を確認してください。'
+        : '閲覧専用　編集するには「編集URLを表示」から取得したURLで開いてください';
+      banner.style.display = '';
+    }
+
+    function showEditAccessNotice() {
+      updateReadonlyBanner();
+      showHint(isEditUrlRequested() && !hasEditToken
+        ? '編集URLとして開かれていますが、編集キーが確認できません。'
+        : '閲覧専用です。編集URLで開いてください。');
     }
 
     function clearLinkedCardHighlight() {
@@ -1571,7 +1676,7 @@
         payload.lng = coords.lng;
       }
       try {
-        const result = await withGAS('duplicatePin', payload);
+        const result = await withGAS('duplicatePin', withEditToken(payload));
         if (!result || !result.ok) throw new Error(result && result.error ? result.error : '複製に失敗しました');
         const duplicated = addDuplicatedPinToState(result.pin);
         const title = duplicateTitleForMessage(duplicated);
@@ -1630,7 +1735,7 @@
 
     function isShortcutOverlayOpen() {
       return ['help-overlay', 'upload-overlay', 'edit-overlay', 'settings-overlay', 'location-choice-overlay',
-        'delete-overlay', 'share-overlay', 'dup-warning-overlay', 'route-edit-overlay'].some(function(id) {
+        'delete-overlay', 'share-overlay', 'share-qr-overlay', 'dup-warning-overlay', 'route-edit-overlay'].some(function(id) {
         const el = document.getElementById(id);
         return el && el.classList.contains('open');
       });
@@ -1768,6 +1873,23 @@
     const OSRM_ROUTE_BASE_URL = 'https://router.project-osrm.org/route/v1/driving/';
     const ROAD_TIMEOUT_MS = 5000;
     const ROAD_WAYPOINT_LIMIT = 25;
+    const QR_CODE_TABLE = [
+      null,
+      { version: 1, totalCodewords: 26, ecCodewords: 7, blocks: [19] },
+      { version: 2, totalCodewords: 44, ecCodewords: 10, blocks: [34] },
+      { version: 3, totalCodewords: 70, ecCodewords: 15, blocks: [55] },
+      { version: 4, totalCodewords: 100, ecCodewords: 20, blocks: [80] },
+      { version: 5, totalCodewords: 134, ecCodewords: 26, blocks: [108] },
+      { version: 6, totalCodewords: 172, ecCodewords: 18, blocks: [68, 68] },
+      { version: 7, totalCodewords: 196, ecCodewords: 20, blocks: [78, 78] },
+      { version: 8, totalCodewords: 242, ecCodewords: 24, blocks: [97, 97] },
+      { version: 9, totalCodewords: 292, ecCodewords: 30, blocks: [116, 116] },
+      { version: 10, totalCodewords: 346, ecCodewords: 18, blocks: [68, 68, 69, 69] }
+    ];
+    const QR_ALIGNMENT_POSITIONS = [
+      null, [], [6, 18], [6, 22], [6, 26], [6, 30], [6, 34],
+      [6, 22, 38], [6, 24, 42], [6, 26, 46], [6, 28, 50]
+    ];
 
     function callGAS(methodName, hasArg, args) {
       return new Promise((resolve, reject) => {
@@ -1799,6 +1921,12 @@
 
     function withGASNoArg(methodName) {
       return callGAS(methodName, false, undefined);
+    }
+
+    function withEditToken(payload) {
+      const next = Object.assign({}, payload || {});
+      next.__editToken = editToken;
+      return next;
     }
 
     function createPinIcon(color, ghost, hasPhoto, icon) {
@@ -2275,12 +2403,12 @@
       };
       state.routeCache[key] = entry;
       try {
-        await withGAS('putRouteCache', {
+        await withGAS('putRouteCache', withEditToken({
           cacheKey: key,
           routeId: routeId,
           coords: normalizedCoords,
           provider: entry.provider
-        });
+        }));
       } catch (error) {
         console.warn('route:cache:put_failed', { cacheKey: key, reason: error && error.message ? error.message : 'gas_error' });
       }
@@ -2714,7 +2842,7 @@
       refreshOpenPinDetailRouteUi();
       try {
         const pinIds = normalizeRoutePinIds(payload && payload.pinIds);
-        const result = await withGAS('setRoutePins', { routeId: routeId, pinIds: pinIds });
+        const result = await withGAS('setRoutePins', withEditToken({ routeId: routeId, pinIds: pinIds }));
         if (!result || result.ok === false) {
           throw new Error(result && result.error ? result.error : 'ルートの所属ピン保存に失敗しました');
         }
@@ -2783,7 +2911,7 @@
       renderRoutePanel();
       refreshOpenPinDetailRouteUi();
       try {
-        const result = await withGAS('updateRoutesOrder', { orderedIds: orderedIds });
+        const result = await withGAS('updateRoutesOrder', withEditToken({ orderedIds: orderedIds }));
         if (!result || result.ok === false) {
           throw new Error(result && result.error ? result.error : 'ルート順の保存に失敗しました');
         }
@@ -3200,7 +3328,7 @@
     ensureUrlInputs('edit-links', []);
 
     ['help-overlay', 'upload-overlay', 'settings-overlay', 'location-choice-overlay', 'pin-detail-overlay',
-     'unplaced-overlay', 'pin-menu-overlay', 'delete-overlay', 'share-overlay', 'dup-warning-overlay']
+     'unplaced-overlay', 'pin-menu-overlay', 'delete-overlay', 'share-overlay', 'share-qr-overlay', 'dup-warning-overlay']
       .forEach(function(id) {
         document.getElementById(id).addEventListener('click', function(event) {
           if (event.target === document.getElementById(id)) {
@@ -3210,6 +3338,10 @@
             }
             if (id === 'share-overlay') {
               closeShareDialog();
+              return;
+            }
+            if (id === 'share-qr-overlay') {
+              closeShareQr();
               return;
             }
             if (id === 'delete-overlay') {
@@ -3328,7 +3460,7 @@
     });
     document.getElementById('settings-save').addEventListener('click', async () => {
       try {
-        const result = await withGAS('updateAppSettings', { renameFileWithTitle: !!state.appSettings.renameFileWithTitle });
+        const result = await withGAS('updateAppSettings', withEditToken({ renameFileWithTitle: !!state.appSettings.renameFileWithTitle }));
         if (!result || !result.ok) throw new Error(result && result.error ? result.error : '設定の保存に失敗しました');
         state.appSettings.renameFileWithTitle = !!result.renameFileWithTitle;
         updateRenameToggle();
@@ -3547,13 +3679,13 @@
       state.shareManager.loading = true;
       renderShareLinks();
       try {
-        const result = await withGAS('createShareLink', {
+        const result = await withGAS('createShareLink', withEditToken({
           label: label || 'Drop the Pin!',
           tags: tags,
           tagMode: state.shareManager.tagMode,
           colors: colors,
           routeIds: routeIds
-        });
+        }));
         if (!result || !result.ok) throw new Error(result && result.error ? result.error : '共有リンクの作成に失敗しました');
         if (labelInput) {
           labelInput.value = '';
@@ -3571,6 +3703,7 @@
     document.getElementById('share-close').addEventListener('click', function() {
       closeShareDialog();
     });
+    document.getElementById('share-qr-close').addEventListener('click', closeShareQr);
     document.getElementById('share-links-list').addEventListener('click', async function(event) {
       const btn = event.target.closest('button[data-action]');
       if (!btn) return;
@@ -3581,13 +3714,17 @@
         copyToClipboard(item.dataset.url || '', btn);
         return;
       }
+      if (action === 'qr') {
+        renderShareQr(item.dataset.label || '', item.dataset.url || '');
+        return;
+      }
       if (action === 'toggle') {
         const currentlyEnabled = btn.classList.contains('on');
         if (currentlyEnabled && !confirm('この共有リンクを無効化しますか？')) return;
         state.shareManager.loading = true;
         renderShareLinks();
         try {
-          const result = await withGAS('setShareLinkEnabled', { token: item.dataset.token || '', enabled: !currentlyEnabled });
+          const result = await withGAS('setShareLinkEnabled', withEditToken({ token: item.dataset.token || '', enabled: !currentlyEnabled }));
           if (!result || !result.ok) throw new Error(result && result.error ? result.error : '共有リンクの更新に失敗しました');
           await loadShareLinks();
         } catch (error) {
@@ -3605,7 +3742,7 @@
         state.shareManager.loading = true;
         renderShareLinks();
         try {
-          const result = await withGAS('deleteShareLink', item.dataset.token || '');
+          const result = await withGAS('deleteShareLink', withEditToken({ token: item.dataset.token || '' }));
           if (!result || !result.ok) throw new Error(result && result.error ? result.error : '共有リンクの削除に失敗しました');
           await loadShareLinks();
         } catch (error) {
@@ -3682,7 +3819,7 @@
       if (!pin) return;
       closePinMenu();
       try {
-        const result = await withGAS('unplacePin', { id: pin.id });
+        const result = await withGAS('unplacePin', withEditToken({ id: pin.id }));
         if (!result || !result.ok) throw new Error(result && result.error ? result.error : '未配置への更新に失敗しました');
         pin.lat = null;
         pin.lng = null;
@@ -3746,7 +3883,7 @@
         };
 
         const doSave = async function() {
-          const result = await withGAS('updatePinDetails', payload);
+          const result = await withGAS('updatePinDetails', withEditToken(payload));
           if (!result || !result.ok) throw new Error(result && result.error ? result.error : '更新に失敗しました');
           pin.title = payload.title;
           pin.description = payload.description;
@@ -3786,7 +3923,7 @@
         const ids = Array.from(state.selectedPinIds);
         state.bulkDeletePending = false;
         try {
-          const result = await withGAS('bulkDeletePins', { ids: ids });
+          const result = await withGAS('bulkDeletePins', withEditToken({ ids: ids }));
           if (!result || !result.ok) throw new Error(result && result.error ? result.error : '一括削除に失敗しました');
           const failedSet = new Set(result.failedIds || []);
           ids.forEach(function(id) {
@@ -3822,7 +3959,7 @@
       const pin = getPinById(state.contextPinId);
       if (!pin) return;
       try {
-        const result = await withGAS('deletePin', { id: pin.id });
+        const result = await withGAS('deletePin', withEditToken({ id: pin.id }));
         if (!result || !result.ok) throw new Error(result && result.error ? result.error : '削除に失敗しました');
         if (state.markers[pin.id]) {
           state.markers[pin.id].remove();
@@ -3907,7 +4044,7 @@
           // ③ マーカー → パネル：未配置に戻す
           marker.setLatLng([prevLat, prevLng]);
           try {
-            const result = await withGAS('unplacePin', { id: pin.id });
+            const result = await withGAS('unplacePin', withEditToken({ id: pin.id }));
             if (!result || !result.ok) throw new Error(result && result.error ? result.error : '未配置への更新に失敗しました');
             pin.lat = null;
             pin.lng = null;
@@ -3921,7 +4058,7 @@
           // 通常の移動（既存動作）
           const nextLatLng = marker.getLatLng();
           try {
-            const result = await withGAS('movePin', { id: pin.id, lat: nextLatLng.lat, lng: nextLatLng.lng });
+            const result = await withGAS('movePin', withEditToken({ id: pin.id, lat: nextLatLng.lat, lng: nextLatLng.lng }));
             if (!result || !result.ok) throw new Error(result && result.error ? result.error : '移動の保存に失敗しました');
             pin.lat = nextLatLng.lat;
             pin.lng = nextLatLng.lng;
@@ -4091,7 +4228,7 @@
       state.routeSaving[routeId] = true;
       renderRoutePanel();
       try {
-        const result = await withGAS('saveRouteGroup', payload);
+        const result = await withGAS('saveRouteGroup', withEditToken(payload));
         if (!result || result.ok === false) {
           throw new Error(result && result.error ? result.error : 'ルートの保存に失敗しました');
         }
@@ -4192,7 +4329,7 @@
       state.routeSaving[routeId] = true;
       renderRoutePanel();
       try {
-        const result = await withGAS('deleteRouteGroup', routeId);
+        const result = await withGAS('deleteRouteGroup', withEditToken({ routeId: routeId }));
         if (!result || result.ok === false) {
           throw new Error(result && result.error ? result.error : 'ルートの削除に失敗しました');
         }
@@ -4813,6 +4950,10 @@
 
     function setEditMode(next) {
       if (state.shareMode) return;   // 共有モードでは編集モード切替を無効化
+      if (next && !hasEditToken) {
+        showEditAccessNotice();
+        return;
+      }
       state.editMode = next;
       if (next) state.routeVisibilityOverrides = {};
       document.body.classList.toggle('edit-mode', next);
@@ -4857,7 +4998,7 @@
       const nextStatus = document.getElementById('bulk-status-select').value;
       const ids = Array.from(state.selectedPinIds);
       try {
-        const result = await withGAS('bulkUpdatePinStatus', { ids: ids, status: nextStatus });
+        const result = await withGAS('bulkUpdatePinStatus', withEditToken({ ids: ids, status: nextStatus }));
         if (!result || !result.ok) throw new Error(result && result.error ? result.error : '一括更新に失敗しました');
         ids.forEach(function(id) {
           const pin = state.pins.find(function(p) { return p.id === id; });
@@ -5079,7 +5220,9 @@
       const list = document.getElementById('folder-list');
       list.innerHTML = '<div class="empty-note">読み込み中...</div>';
       try {
-        const result = isRoot ? await withGASNoArg('getRootFolderContents') : await withGAS('navigateToFolder', folderId);
+        const result = isRoot
+          ? await withGAS('getRootFolderContents', withEditToken({}))
+          : await withGAS('navigateToFolder', withEditToken({ folderId: folderId }));
         const breadcrumb = document.getElementById('folder-breadcrumb');
         const back = document.getElementById('folder-back-btn');
         list.innerHTML = '';
@@ -5326,7 +5469,7 @@
       button.disabled = true;
       try {
         const base64 = draft.file ? await resizeWithOrientation(draft.file, 1920) : null;
-        const result = await withGAS('saveMapData', {
+        const result = await withGAS('saveMapData', withEditToken({
           base64: base64,
           filename: draft.file ? draft.file.name : '',
           title: draft.title,
@@ -5340,7 +5483,7 @@
           targetFolderId: currentFolderIdOrRoot(),
           status: draft.status || '未対応',
           tags: draft.tags || []
-        });
+        }));
         if (!result || !result.ok) throw new Error(result && result.error ? result.error : '保存に失敗しました');
         state.pins.push(clonePin({
           id: result.id,
@@ -5379,7 +5522,7 @@
 
       const doPlacement = async function() {
         if (placement.mode === 'existing') {
-          const result = await withGAS('movePin', { id: placement.pinId, lat: latLng.lat, lng: latLng.lng });
+          const result = await withGAS('movePin', withEditToken({ id: placement.pinId, lat: latLng.lat, lng: latLng.lng }));
           if (!result || !result.ok) throw new Error(result && result.error ? result.error : '配置に失敗しました');
           const pin = getPinById(placement.pinId);
           if (pin) { pin.lat = latLng.lat; pin.lng = latLng.lng; }
@@ -5513,7 +5656,7 @@
         const pin = getPinById(id);
         if (!pin || pin.lat == null) return;
         try {
-          const result = await withGAS('unplacePin', { id });
+          const result = await withGAS('unplacePin', withEditToken({ id: id }));
           if (!result || !result.ok) throw new Error(result && result.error ? result.error : '未配置への更新に失敗しました');
           pin.lat = null;
           pin.lng = null;
@@ -5549,7 +5692,7 @@
         if (!pin || pin.lat != null) return;
         const center = map.getCenter();
         try {
-          const result = await withGAS('movePin', { id, lat: center.lat, lng: center.lng });
+          const result = await withGAS('movePin', withEditToken({ id: id, lat: center.lat, lng: center.lng }));
           if (!result || !result.ok) throw new Error(result && result.error ? result.error : '配置に失敗しました');
           pin.lat = center.lat;
           pin.lng = center.lng;
@@ -5618,7 +5761,7 @@
         const y = e.clientY - rect.top;
         const latlng = map.containerPointToLatLng(L.point(x, y));
         try {
-          const result = await withGAS('movePin', { id, lat: latlng.lat, lng: latlng.lng });
+          const result = await withGAS('movePin', withEditToken({ id: id, lat: latlng.lat, lng: latlng.lng }));
           if (!result || !result.ok) throw new Error(result && result.error ? result.error : '配置に失敗しました');
           pin.lat = latlng.lat;
           pin.lng = latlng.lng;
@@ -5660,6 +5803,404 @@
       } else {
         if (fallbackCopy(text)) { showSuccess(); } else { showFailure(); }
       }
+    }
+
+    function appendQrBits(bits, value, length) {
+      for (let i = length - 1; i >= 0; i -= 1) {
+        bits.push((value >>> i) & 1);
+      }
+    }
+
+    function selectQrVersion(dataBytes) {
+      for (let version = 1; version < QR_CODE_TABLE.length; version += 1) {
+        const info = QR_CODE_TABLE[version];
+        const capacityBits = info.blocks.reduce(function(sum, count) { return sum + count; }, 0) * 8;
+        const countBits = version < 10 ? 8 : 16;
+        if (4 + countBits + dataBytes.length * 8 <= capacityBits) return info;
+      }
+      throw new Error('too_long');
+    }
+
+    function makeQrDataCodewords(text, info) {
+      const dataBytes = Array.from(new TextEncoder().encode(String(text || '')));
+      const capacity = info.blocks.reduce(function(sum, count) { return sum + count; }, 0);
+      const bits = [];
+      appendQrBits(bits, 0x4, 4);
+      appendQrBits(bits, dataBytes.length, info.version < 10 ? 8 : 16);
+      dataBytes.forEach(function(byte) { appendQrBits(bits, byte, 8); });
+      const capacityBits = capacity * 8;
+      const terminator = Math.min(4, capacityBits - bits.length);
+      appendQrBits(bits, 0, terminator);
+      while (bits.length % 8) bits.push(0);
+      const codewords = [];
+      for (let i = 0; i < bits.length; i += 8) {
+        let value = 0;
+        for (let j = 0; j < 8; j += 1) value = (value << 1) | bits[i + j];
+        codewords.push(value);
+      }
+      for (let pad = 0; codewords.length < capacity; pad += 1) {
+        codewords.push(pad % 2 === 0 ? 0xec : 0x11);
+      }
+      return codewords;
+    }
+
+    const QR_GF_EXP = (function() {
+      const exp = new Array(512);
+      let value = 1;
+      for (let i = 0; i < 255; i += 1) {
+        exp[i] = value;
+        value <<= 1;
+        if (value & 0x100) value ^= 0x11d;
+      }
+      for (let i = 255; i < 512; i += 1) exp[i] = exp[i - 255];
+      return exp;
+    })();
+
+    const QR_GF_LOG = (function() {
+      const log = new Array(256).fill(0);
+      for (let i = 0; i < 255; i += 1) log[QR_GF_EXP[i]] = i;
+      return log;
+    })();
+
+    function qrGfMul(a, b) {
+      return a && b ? QR_GF_EXP[QR_GF_LOG[a] + QR_GF_LOG[b]] : 0;
+    }
+
+    function qrReedSolomonGenerator(degree) {
+      const result = [1];
+      for (let i = 0; i < degree; i += 1) {
+        result.push(0);
+        for (let j = result.length - 1; j > 0; j -= 1) {
+          result[j] = result[j - 1] ^ qrGfMul(result[j], QR_GF_EXP[i]);
+        }
+        result[0] = qrGfMul(result[0], QR_GF_EXP[i]);
+      }
+      return result;
+    }
+
+    function qrReedSolomonRemainder(data, degree) {
+      const generator = qrReedSolomonGenerator(degree);
+      const result = new Array(degree).fill(0);
+      data.forEach(function(byte) {
+        const factor = byte ^ result.shift();
+        result.push(0);
+        for (let i = 0; i < degree; i += 1) {
+          result[i] ^= qrGfMul(generator[i], factor);
+        }
+      });
+      return result;
+    }
+
+    function makeQrErrorCorrectedCodewords(dataCodewords, info) {
+      const blocks = [];
+      let offset = 0;
+      info.blocks.forEach(function(blockSize) {
+        const data = dataCodewords.slice(offset, offset + blockSize);
+        blocks.push({ data: data, ecc: qrReedSolomonRemainder(data, info.ecCodewords) });
+        offset += blockSize;
+      });
+      const result = [];
+      const maxDataLength = Math.max.apply(null, blocks.map(function(block) { return block.data.length; }));
+      for (let i = 0; i < maxDataLength; i += 1) {
+        blocks.forEach(function(block) {
+          if (i < block.data.length) result.push(block.data[i]);
+        });
+      }
+      for (let i = 0; i < info.ecCodewords; i += 1) {
+        blocks.forEach(function(block) {
+          result.push(block.ecc[i]);
+        });
+      }
+      return result;
+    }
+
+    function qrBlankMatrix(size, value) {
+      return Array.from({ length: size }, function() {
+        return new Array(size).fill(value);
+      });
+    }
+
+    function setQrModule(matrix, reserved, x, y, dark, isReserved) {
+      if (x < 0 || y < 0 || y >= matrix.length || x >= matrix.length) return;
+      matrix[y][x] = !!dark;
+      if (isReserved) reserved[y][x] = true;
+    }
+
+    function drawQrFinder(matrix, reserved, x, y) {
+      for (let dy = -1; dy <= 7; dy += 1) {
+        for (let dx = -1; dx <= 7; dx += 1) {
+          const xx = x + dx;
+          const yy = y + dy;
+          if (xx < 0 || yy < 0 || yy >= matrix.length || xx >= matrix.length) continue;
+          const inFinder = dx >= 0 && dx <= 6 && dy >= 0 && dy <= 6;
+          const dark = inFinder && (dx === 0 || dx === 6 || dy === 0 || dy === 6 || (dx >= 2 && dx <= 4 && dy >= 2 && dy <= 4));
+          setQrModule(matrix, reserved, xx, yy, dark, true);
+        }
+      }
+    }
+
+    function drawQrAlignment(matrix, reserved, cx, cy) {
+      for (let dy = -2; dy <= 2; dy += 1) {
+        for (let dx = -2; dx <= 2; dx += 1) {
+          const dark = Math.max(Math.abs(dx), Math.abs(dy)) !== 1;
+          setQrModule(matrix, reserved, cx + dx, cy + dy, dark, true);
+        }
+      }
+    }
+
+    function reserveQrFormatAreas(matrix, reserved, version) {
+      const size = matrix.length;
+      for (let i = 0; i <= 5; i += 1) reserved[i][8] = true;
+      reserved[7][8] = true;
+      reserved[8][8] = true;
+      reserved[8][7] = true;
+      for (let i = 0; i <= 5; i += 1) reserved[8][i] = true;
+      for (let i = 0; i < 8; i += 1) reserved[size - 1 - i][8] = true;
+      for (let i = 8; i < 15; i += 1) reserved[8][size - 15 + i] = true;
+      if (version >= 7) {
+        for (let i = 0; i < 18; i += 1) {
+          reserved[Math.floor(i / 3)][size - 11 + (i % 3)] = true;
+          reserved[size - 11 + (i % 3)][Math.floor(i / 3)] = true;
+        }
+      }
+    }
+
+    function buildQrBaseMatrix(info) {
+      const size = info.version * 4 + 17;
+      const matrix = qrBlankMatrix(size, false);
+      const reserved = qrBlankMatrix(size, false);
+      drawQrFinder(matrix, reserved, 0, 0);
+      drawQrFinder(matrix, reserved, size - 7, 0);
+      drawQrFinder(matrix, reserved, 0, size - 7);
+      for (let i = 8; i < size - 8; i += 1) {
+        setQrModule(matrix, reserved, i, 6, i % 2 === 0, true);
+        setQrModule(matrix, reserved, 6, i, i % 2 === 0, true);
+      }
+      (QR_ALIGNMENT_POSITIONS[info.version] || []).forEach(function(cx) {
+        (QR_ALIGNMENT_POSITIONS[info.version] || []).forEach(function(cy) {
+          if ((cx <= 8 && cy <= 8) || (cx >= size - 9 && cy <= 8) || (cx <= 8 && cy >= size - 9)) return;
+          drawQrAlignment(matrix, reserved, cx, cy);
+        });
+      });
+      setQrModule(matrix, reserved, 8, size - 8, true, true);
+      reserveQrFormatAreas(matrix, reserved, info.version);
+      return { matrix: matrix, reserved: reserved };
+    }
+
+    function qrMask(mask, x, y) {
+      if (mask === 0) return (x + y) % 2 === 0;
+      if (mask === 1) return y % 2 === 0;
+      if (mask === 2) return x % 3 === 0;
+      if (mask === 3) return (x + y) % 3 === 0;
+      if (mask === 4) return (Math.floor(y / 2) + Math.floor(x / 3)) % 2 === 0;
+      if (mask === 5) return ((x * y) % 2) + ((x * y) % 3) === 0;
+      if (mask === 6) return (((x * y) % 2) + ((x * y) % 3)) % 2 === 0;
+      return (((x + y) % 2) + ((x * y) % 3)) % 2 === 0;
+    }
+
+    function drawQrData(matrix, reserved, codewords, mask) {
+      const bits = [];
+      codewords.forEach(function(codeword) { appendQrBits(bits, codeword, 8); });
+      const size = matrix.length;
+      let bitIndex = 0;
+      let upward = true;
+      for (let right = size - 1; right >= 1; right -= 2) {
+        if (right === 6) right -= 1;
+        for (let vert = 0; vert < size; vert += 1) {
+          const y = upward ? size - 1 - vert : vert;
+          for (let j = 0; j < 2; j += 1) {
+            const x = right - j;
+            if (reserved[y][x]) continue;
+            const bit = bitIndex < bits.length ? bits[bitIndex] : 0;
+            matrix[y][x] = !!(bit ^ (qrMask(mask, x, y) ? 1 : 0));
+            bitIndex += 1;
+          }
+        }
+        upward = !upward;
+      }
+    }
+
+    function qrFormatBits(mask) {
+      const data = (1 << 3) | mask;
+      let bits = data << 10;
+      for (let i = 14; i >= 10; i -= 1) {
+        if (((bits >>> i) & 1) !== 0) bits ^= 0x537 << (i - 10);
+      }
+      return ((data << 10) | (bits & 0x3ff)) ^ 0x5412;
+    }
+
+    function drawQrFormatBits(matrix, mask) {
+      const size = matrix.length;
+      const bits = qrFormatBits(mask);
+      const set = function(x, y, i) {
+        matrix[y][x] = ((bits >>> i) & 1) !== 0;
+      };
+      for (let i = 0; i <= 5; i += 1) set(8, i, i);
+      set(8, 7, 6);
+      set(8, 8, 7);
+      set(7, 8, 8);
+      for (let i = 9; i < 15; i += 1) set(14 - i, 8, i);
+      for (let i = 0; i < 8; i += 1) set(size - 1 - i, 8, i);
+      for (let i = 8; i < 15; i += 1) set(8, size - 15 + i, i);
+      matrix[size - 8][8] = true;
+    }
+
+    function qrVersionBits(version) {
+      let bits = version << 12;
+      for (let i = 17; i >= 12; i -= 1) {
+        if (((bits >>> i) & 1) !== 0) bits ^= 0x1f25 << (i - 12);
+      }
+      return (version << 12) | (bits & 0xfff);
+    }
+
+    function drawQrVersionBits(matrix, version) {
+      if (version < 7) return;
+      const size = matrix.length;
+      const bits = qrVersionBits(version);
+      for (let i = 0; i < 18; i += 1) {
+        const bit = ((bits >>> i) & 1) !== 0;
+        const a = size - 11 + (i % 3);
+        const b = Math.floor(i / 3);
+        matrix[b][a] = bit;
+        matrix[a][b] = bit;
+      }
+    }
+
+    function qrPenalty(matrix) {
+      const size = matrix.length;
+      let score = 0;
+      const scoreRun = function(get) {
+        for (let outer = 0; outer < size; outer += 1) {
+          let runColor = get(outer, 0);
+          let runLength = 1;
+          for (let inner = 1; inner < size; inner += 1) {
+            const color = get(outer, inner);
+            if (color === runColor) {
+              runLength += 1;
+              if (runLength === 5) score += 3;
+              else if (runLength > 5) score += 1;
+            } else {
+              runColor = color;
+              runLength = 1;
+            }
+          }
+        }
+      };
+      scoreRun(function(y, x) { return matrix[y][x]; });
+      scoreRun(function(x, y) { return matrix[y][x]; });
+      for (let y = 0; y < size - 1; y += 1) {
+        for (let x = 0; x < size - 1; x += 1) {
+          const color = matrix[y][x];
+          if (color === matrix[y][x + 1] && color === matrix[y + 1][x] && color === matrix[y + 1][x + 1]) score += 3;
+        }
+      }
+      const pattern = [true, false, true, true, true, false, true, false, false, false, false];
+      const reversePattern = pattern.slice().reverse();
+      const matchesPattern = function(values) {
+        return pattern.every(function(value, index) { return values[index] === value; }) ||
+          reversePattern.every(function(value, index) { return values[index] === value; });
+      };
+      for (let y = 0; y < size; y += 1) {
+        for (let x = 0; x <= size - 11; x += 1) {
+          if (matchesPattern(matrix[y].slice(x, x + 11))) score += 40;
+        }
+      }
+      for (let x = 0; x < size; x += 1) {
+        for (let y = 0; y <= size - 11; y += 1) {
+          const values = [];
+          for (let i = 0; i < 11; i += 1) values.push(matrix[y + i][x]);
+          if (matchesPattern(values)) score += 40;
+        }
+      }
+      let dark = 0;
+      matrix.forEach(function(row) {
+        row.forEach(function(value) { if (value) dark += 1; });
+      });
+      score += Math.floor(Math.abs(dark * 20 - size * size * 10) / (size * size)) * 10;
+      return score;
+    }
+
+    function createQrMatrix(text) {
+      const dataBytes = Array.from(new TextEncoder().encode(String(text || '')));
+      const info = selectQrVersion(dataBytes);
+      const dataCodewords = makeQrDataCodewords(text, info);
+      const codewords = makeQrErrorCorrectedCodewords(dataCodewords, info);
+      let bestMatrix = null;
+      let bestScore = Infinity;
+      for (let mask = 0; mask < 8; mask += 1) {
+        const base = buildQrBaseMatrix(info);
+        const matrix = base.matrix.map(function(row) { return row.slice(); });
+        drawQrData(matrix, base.reserved, codewords, mask);
+        drawQrFormatBits(matrix, mask);
+        drawQrVersionBits(matrix, info.version);
+        const score = qrPenalty(matrix);
+        if (score < bestScore) {
+          bestScore = score;
+          bestMatrix = matrix;
+        }
+      }
+      return bestMatrix;
+    }
+
+    function renderQrSvg(matrix) {
+      const quiet = 4;
+      const size = matrix.length;
+      let path = '';
+      matrix.forEach(function(row, y) {
+        row.forEach(function(dark, x) {
+          if (dark) path += 'M' + (x + quiet) + ' ' + (y + quiet) + 'h1v1h-1z';
+        });
+      });
+      const viewSize = size + quiet * 2;
+      return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + viewSize + ' ' + viewSize + '" role="img" aria-label="共有ビューURLのQRコード">' +
+        '<rect width="' + viewSize + '" height="' + viewSize + '" fill="#fff"/>' +
+        '<path d="' + path + '" fill="#111"/>' +
+        '</svg>';
+    }
+
+    function getSafeSharedQrUrl(url) {
+      const parsed = new URL(String(url || ''), window.location.href);
+      const params = parsed.searchParams;
+      if (params.get('view') !== 'shared') throw new Error('not_shared_url');
+      if (!params.get('token')) throw new Error('missing_token');
+      if (params.has('editKey') || params.has('mode') || params.has('__editToken') || params.has('EDIT_KEY')) {
+        throw new Error('edit_parameter_detected');
+      }
+      return parsed.href;
+    }
+
+    function closeShareQr() {
+      closeOverlay('share-qr-overlay');
+    }
+
+    function renderShareQr(label, url) {
+      const title = document.getElementById('share-qr-title');
+      const code = document.getElementById('share-qr-code');
+      const urlEl = document.getElementById('share-qr-url');
+      const copyBtn = document.getElementById('share-qr-copy');
+      const name = String(label || '').trim() || '共有QR';
+      title.textContent = name;
+      code.innerHTML = '';
+      urlEl.textContent = '';
+      copyBtn.disabled = true;
+      copyBtn.onclick = null;
+      try {
+        const safeUrl = getSafeSharedQrUrl(url);
+        const matrix = createQrMatrix(safeUrl);
+        code.innerHTML = renderQrSvg(matrix);
+        urlEl.textContent = safeUrl;
+        copyBtn.disabled = false;
+        copyBtn.onclick = function() { copyToClipboard(safeUrl, copyBtn); };
+      } catch (error) {
+        const rawUrl = String(url || '');
+        code.innerHTML = '<div class="empty-note">QRコードを生成できませんでした。URLをコピーして共有してください。</div>';
+        urlEl.textContent = rawUrl;
+        if (rawUrl) {
+          copyBtn.disabled = false;
+          copyBtn.onclick = function() { copyToClipboard(rawUrl, copyBtn); };
+        }
+      }
+      openOverlay('share-qr-overlay');
     }
 
     function getAllShareTags() {
@@ -5858,7 +6399,7 @@
         const modeLabel = item.tagMode === 'and' ? 'AND' : 'OR';
         const statusLabel = item.enabled ? '有効' : '無効';
         return [
-          '<div class="share-link-item" data-token="' + escHtml(item.token || '') + '" data-url="' + escHtml(item.url || '') + '">',
+          '<div class="share-link-item" data-token="' + escHtml(item.token || '') + '" data-url="' + escHtml(item.url || '') + '" data-label="' + escHtml(item.label || 'Drop the Pin!') + '">',
             '<div class="share-link-head">',
               '<div>',
                 '<div class="share-link-title">' + escHtml(item.label || 'Drop the Pin!') + '</div>',
@@ -5866,6 +6407,7 @@
               '</div>',
               '<div class="share-link-actions">',
                 '<button class="text-btn" type="button" data-action="copy">コピー</button>',
+                '<button class="text-btn" type="button" data-action="qr">QR</button>',
                 '<button class="toggle-switch' + (item.enabled ? ' on' : '') + '" type="button" data-action="toggle" aria-label="' + (item.enabled ? '無効化' : '有効化') + '" aria-pressed="' + (item.enabled ? 'true' : 'false') + '"></button>',
                 '<button class="danger-btn" type="button" data-action="delete">削除</button>',
               '</div>',
@@ -5883,7 +6425,7 @@
       state.shareManager.loading = true;
       renderShareLinks();
       try {
-        const result = await withGASNoArg('listShareLinks');
+        const result = await withGAS('listShareLinks', withEditToken({}));
         if (!result || !result.ok) throw new Error(result && result.error ? result.error : '共有リンク一覧の取得に失敗しました');
         state.shareManager.links = Array.isArray(result.items) ? result.items : [];
       } catch (error) {
@@ -5930,6 +6472,7 @@
     function enterShareMode(params) {
       state.shareMode = true;
       document.body.classList.add('share-mode');
+      updateReadonlyBanner();
 
       if (params.pinId) {
         // ピン共有: 対象ピンのみを集合とする
@@ -5970,6 +6513,7 @@
     }
 
     async function initializeApp() {
+      updateReadonlyBanner();
       try {
         await loadAppSettings();
       } catch (error) {
