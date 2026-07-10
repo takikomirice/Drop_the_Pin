@@ -874,10 +874,16 @@ function getPinDriveMeta(payload) {
   if (!pinId) return { ok: false, folderUrl: '', error: 'missing_pin_id' };
 
   const sheet = openMapInfoSheet_();
-  const rowIndex = findPinRowIndex_(sheet, pinId);
-  if (rowIndex < 1) return { ok: false, folderUrl: '', error: 'pin_not_found' };
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return { ok: false, folderUrl: '', error: 'pin_not_found' };
 
-  const fileId = String(sheet.getRange(rowIndex + 1, 7).getValue() || '').trim();
+  const pinDriveRows = sheet.getRange(2, 7, lastRow - 1, 3).getValues();
+  const pinDriveRow = pinDriveRows.find(function(row) {
+    return row[2] === pinId;
+  });
+  if (!pinDriveRow) return { ok: false, folderUrl: '', error: 'pin_not_found' };
+
+  const fileId = String(pinDriveRow[0] || '').trim();
   if (!fileId) return { ok: true, folderUrl: '' };
 
   try {

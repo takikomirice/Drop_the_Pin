@@ -95,11 +95,15 @@ function createRange(sheet, row, column, numRows, numColumns, audit) {
       return (sheet.rows[row - 1] || [])[column - 1] || '';
     },
     getValues() {
-      return Array.from({ length: numRows }, (_, rowOffset) =>
+      const values = Array.from({ length: numRows }, (_, rowOffset) =>
         Array.from({ length: numColumns }, (_, columnOffset) =>
           (sheet.rows[row - 1 + rowOffset] || [])[column - 1 + columnOffset] || ''
         )
       );
+      if (typeof audit.afterGetValues === 'function') {
+        audit.afterGetValues({ sheet: sheet.name, row, column, numRows, numColumns }, sheet);
+      }
+      return values;
     },
     getFormulas() {
       return Array.from({ length: numRows }, () =>
@@ -155,7 +159,8 @@ function createHarness(options = {}) {
     dataRangeReads: [],
     rangeReads: [],
     writes: [],
-    logs: []
+    logs: [],
+    afterGetValues: options.afterGetValues
   };
   const sheets = {};
   const initialSheets = options.sheets || {
@@ -366,6 +371,44 @@ test('getPinDriveMeta ignores client fileId and resolves only the registered fil
     folderUrl: 'https://drive.google.com/drive/folders/registered-parent'
   });
   assert.deepEqual(audit.driveFileIds, ['registered-file']);
+});
+
+test('getPinDriveMeta resolves pinId and fileId from one header-excluded G:I snapshot', () => {
+  let rowsChanged = false;
+  const { api, audit } = createHarness({
+    sheets: {
+      map_info: [
+        MAP_INFO_HEADERS,
+        pinRow({ id: 'pin-first' }),
+        pinRow({ id: 'pin-photo', fileId: 'registered-file' }),
+        pinRow({ id: 'pin-last', fileId: 'different-file' })
+      ]
+    },
+    driveFiles: {
+      'registered-file': { parentId: 'registered-parent' },
+      'different-file': { parentId: 'different-parent' }
+    },
+    afterGetValues(range, sheet) {
+      if (rowsChanged || range.sheet !== 'map_info') return;
+      rowsChanged = true;
+      sheet.rows.splice(1, 1);
+    }
+  });
+
+  const result = sameRealm(api.getPinDriveMeta(withEditToken({
+    pinId: 'pin-photo',
+    fileId: 'different-file'
+  })));
+
+  assert.deepEqual(result, {
+    ok: true,
+    folderUrl: 'https://drive.google.com/drive/folders/registered-parent'
+  });
+  assert.deepEqual(audit.driveFileIds, ['registered-file']);
+  assert.deepEqual(
+    audit.rangeReads,
+    [{ sheet: 'map_info', row: 2, column: 7, numRows: 3, numColumns: 3 }]
+  );
 });
 
 test('getPinDriveMeta returns a generic retryable result when Drive lookup fails', () => {
