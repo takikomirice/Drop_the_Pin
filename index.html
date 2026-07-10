@@ -120,6 +120,12 @@
     }
     .file-drop.has-file { border-color: var(--accent); color: var(--text); }
     #upload-preview, #pin-detail-image { width: 100%; max-height: 220px; object-fit: cover; border-radius: 14px; display: none; margin-top: 10px; }
+    .protected-photo {
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-user-drag: none;
+      -webkit-touch-callout: none;
+    }
     #upload-photo-status { display: none; margin-top: 8px; font-size: 12px; line-height: 1.5; }
     #upload-photo-status.is-info { display: block; color: var(--text-sub); }
     #upload-photo-status.is-success { display: block; color: var(--accent); }
@@ -890,7 +896,7 @@
   </div></div>
 
   <div id="pin-detail-overlay" class="sheet-overlay" role="dialog" aria-modal="true"><div class="sheet-body">
-    <div class="sheet-handle"></div><img id="pin-detail-image" alt="ピン画像">
+    <div class="sheet-handle"></div><img id="pin-detail-image" class="protected-photo" draggable="false" alt="ピン画像">
     <div id="pin-detail-title" class="sheet-title" style="margin-top:10px;"></div>
     <div id="pin-detail-status" style="display:none;margin-bottom:6px;"></div>
     <div id="pin-detail-tags" style="margin-bottom:8px;"></div>
@@ -3198,6 +3204,41 @@
       const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
       setTheme(saved || systemTheme);
     })();
+
+    function isProtectedPhotoTarget(target) {
+      return Boolean(target && typeof target.closest === 'function' && target.closest('.protected-photo'));
+    }
+
+    function selectionIncludesProtectedPhoto() {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return false;
+      const range = selection.getRangeAt(0);
+      return Array.prototype.some.call(document.querySelectorAll('.protected-photo'), function(photo) {
+        try {
+          return range.intersectsNode(photo);
+        } catch (_error) {
+          return false;
+        }
+      });
+    }
+
+    function shouldBlockProtectedPhotoCopy(event) {
+      return isProtectedPhotoTarget(event && event.target) || selectionIncludesProtectedPhoto();
+    }
+
+    function installProtectedPhotoGuards() {
+      document.addEventListener('contextmenu', function(event) {
+        if (isProtectedPhotoTarget(event.target)) event.preventDefault();
+      });
+      document.addEventListener('dragstart', function(event) {
+        if (isProtectedPhotoTarget(event.target)) event.preventDefault();
+      });
+      document.addEventListener('copy', function(event) {
+        if (shouldBlockProtectedPhotoCopy(event)) event.preventDefault();
+      });
+    }
+
+    installProtectedPhotoGuards();
 
     document.getElementById('theme-toggle').addEventListener('click', () => {
       setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');

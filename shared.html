@@ -564,6 +564,12 @@
       margin-top: 16px;
       display: block;
     }
+    .protected-photo {
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-user-drag: none;
+      -webkit-touch-callout: none;
+    }
     .detail-body {
       margin-top: 14px;
       display: grid;
@@ -1051,6 +1057,41 @@
       setTheme(saved || getPreferredTheme());
     })();
 
+    function isProtectedPhotoTarget(target) {
+      return Boolean(target && typeof target.closest === 'function' && target.closest('.protected-photo'));
+    }
+
+    function selectionIncludesProtectedPhoto() {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return false;
+      const range = selection.getRangeAt(0);
+      return Array.prototype.some.call(document.querySelectorAll('.protected-photo'), function(photo) {
+        try {
+          return range.intersectsNode(photo);
+        } catch (_error) {
+          return false;
+        }
+      });
+    }
+
+    function shouldBlockProtectedPhotoCopy(event) {
+      return isProtectedPhotoTarget(event && event.target) || selectionIncludesProtectedPhoto();
+    }
+
+    function installProtectedPhotoGuards() {
+      document.addEventListener('contextmenu', function(event) {
+        if (isProtectedPhotoTarget(event.target)) event.preventDefault();
+      });
+      document.addEventListener('dragstart', function(event) {
+        if (isProtectedPhotoTarget(event.target)) event.preventDefault();
+      });
+      document.addEventListener('copy', function(event) {
+        if (shouldBlockProtectedPhotoCopy(event)) event.preventDefault();
+      });
+    }
+
+    installProtectedPhotoGuards();
+
     function closeSharedDetail() {
       const overlay = document.getElementById('shared-detail-overlay');
       overlay.classList.remove('open');
@@ -1072,7 +1113,7 @@
             '</div>',
             '<button class="detail-close" type="button" data-action="close">閉じる</button>',
           '</div>',
-          pin.imageUrl ? '<img class="detail-image" src="' + escHtml(pin.imageUrl) + '" alt="">' : '',
+          pin.imageUrl ? '<img class="detail-image protected-photo" draggable="false" src="' + escHtml(pin.imageUrl) + '" alt="">' : '',
           '<div class="detail-body">',
             '<div>',
               '<div class="detail-section-title">Description</div>',
