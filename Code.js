@@ -2241,6 +2241,7 @@ function unplacePin(data) {
     const sheetRow = rowIndex + 1;
     sheet.getRange(sheetRow, 4, 1, 2).setValues([['', '']]);
     sheet.getRange(sheetRow, MAP_INFO_UPDATED_AT_COLUMN).setValue(currentUpdatedAt_());
+    invalidateRouteCacheForPins_([data.id]);
     return { ok: true };
   });
 }

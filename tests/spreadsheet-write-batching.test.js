@@ -543,6 +543,33 @@ test('movePin and unplacePin retain two narrow writes under the lock', () => {
   assert.equal(writes.every((write) => write.lockHeld), true);
 });
 
+test('unplacePin clears coordinates and invalidates only routes that contain the pin under one lock', () => {
+  const routePinRows = [
+    ROUTE_PINS_HEADERS,
+    routePinRow('route-target', 'pin-1'),
+    routePinRow('route-other', 'pin-2')
+  ];
+  const routeCacheRows = [
+    ROUTE_CACHE_HEADERS,
+    routeCacheRow('target-cache', 'route-target'),
+    routeCacheRow('other-cache', 'route-other')
+  ];
+  const harness = createHarness({ routePinRows, routeCacheRows });
+  const originalRoutePins = cloneMatrix(harness.sheets.route_pins.rows);
+
+  const result = plain(harness.api.unplacePin(withEditToken({ id: 'pin-1' })));
+
+  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(harness.sheets.map_info.rows[1].slice(3, 5), ['', '']);
+  assert.match(String(harness.sheets.map_info.rows[1][13]), /^\d{4}-\d{2}-\d{2}T/);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_cache).map((row) => row[1]), ['route-other']);
+  assert.deepEqual(harness.sheets.route_pins.rows, originalRoutePins);
+  assert.equal(harness.audit.reads.every((read) => read.lockHeld), true);
+  assert.equal(harness.audit.writes.every((write) => write.lockHeld), true);
+  assert.equal(harness.audit.lock.releaseCalls, 1);
+  assert.equal(harness.audit.lock.held, false);
+});
+
 test('legacy updatePin takes two sequential non-nested locks', () => {
   const harness = createHarness();
 
