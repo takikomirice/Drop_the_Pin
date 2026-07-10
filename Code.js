@@ -513,20 +513,28 @@ function openMapInfoSheet_() {
   return sheet;
 }
 
+function getRequiredSheet_(sheetName) {
+  const sheet = openDataSpreadsheet_().getSheetByName(sheetName);
+  if (!sheet) {
+    throw new Error(sheetName + ' シートが見つかりません。setupSheet() を実行してください。');
+  }
+  return sheet;
+}
+
 function openShareLinksSheet_() {
-  return ensureShareLinksSheet_(openDataSpreadsheet_());
+  return getRequiredSheet_(SHARE_LINKS_SHEET_NAME);
 }
 
 function openRoutesSheet_() {
-  return ensureHeaderSheet_(openDataSpreadsheet_(), ROUTES_SHEET_NAME, ROUTES_HEADERS);
+  return getRequiredSheet_(ROUTES_SHEET_NAME);
 }
 
 function openRoutePinsSheet_() {
-  return ensureHeaderSheet_(openDataSpreadsheet_(), ROUTE_PINS_SHEET_NAME, ROUTE_PINS_HEADERS);
+  return getRequiredSheet_(ROUTE_PINS_SHEET_NAME);
 }
 
 function openRouteCacheSheet_() {
-  return ensureHeaderSheet_(openDataSpreadsheet_(), ROUTE_CACHE_SHEET_NAME, ROUTE_CACHE_HEADERS);
+  return getRequiredSheet_(ROUTE_CACHE_SHEET_NAME);
 }
 
 function ensureShareLinksSheet_(spreadsheet) {
@@ -691,9 +699,11 @@ function shareRowToLink_(row) {
 }
 
 function findPinRowIndex_(sheet, id) {
-  const rows = sheet.getDataRange().getValues();
-  return rows.findIndex(function(row) {
-    return row[8] === id;
+  const lastRow = sheet.getLastRow();
+  if (lastRow === 0) return -1;
+  const ids = sheet.getRange(1, 9, lastRow, 1).getValues();
+  return ids.findIndex(function(row) {
+    return row[0] === id;
   });
 }
 
@@ -774,6 +784,29 @@ function getMapData() {
   return pins.map(function(pin) {
     return enrichPinWithDriveMeta_(pin);
   });
+}
+
+function getPinDriveMeta(payload) {
+  assertEditToken_(payload);
+  const pinId = String(payload && payload.pinId || '').trim();
+  if (!pinId) return { ok: false, folderUrl: '', error: 'missing_pin_id' };
+
+  const sheet = openMapInfoSheet_();
+  const rowIndex = findPinRowIndex_(sheet, pinId);
+  if (rowIndex < 1) return { ok: false, folderUrl: '', error: 'pin_not_found' };
+
+  const fileId = String(sheet.getRange(rowIndex + 1, 7).getValue() || '').trim();
+  if (!fileId) return { ok: true, folderUrl: '' };
+
+  try {
+    return { ok: true, folderUrl: getParentFolderUrlByFileId_(fileId) };
+  } catch (error) {
+    if (typeof Logger !== 'undefined' && Logger.log) {
+      Logger.log('getPinDriveMeta: pinId=' + pinId + ' drive lookup failed: ' +
+        (error && error.message ? error.message : error));
+    }
+    return { ok: false, folderUrl: '', error: 'drive_meta_unavailable' };
+  }
 }
 
 function normalizeRouteId_(value) {
@@ -1254,7 +1287,7 @@ function invalidateRouteCacheForRoute(data) {
 }
 
 function getRouteCacheSheetForRead_() {
-  return openDataSpreadsheet_().getSheetByName(ROUTE_CACHE_SHEET_NAME);
+  return getRequiredSheet_(ROUTE_CACHE_SHEET_NAME);
 }
 
 function parseRouteCacheTimestamp_(value) {
@@ -1937,7 +1970,7 @@ function updatePinDetails(data) {
 
   const sheet = openMapInfoSheet_();
   const rowIndex = findPinRowIndex_(sheet, data.id);
-  if (rowIndex === -1) return { ok: false, error: 'id not found' };
+  if (rowIndex < 1) return { ok: false, error: 'id not found' };
 
   const sheetRow = rowIndex + 1;
   const row = sheet.getRange(sheetRow, 1, 1, MAP_INFO_COLUMN_COUNT).getValues()[0];
@@ -1969,7 +2002,7 @@ function updatePinDetails(data) {
     ok: true,
     updatedAt: updatedAt,
     links: links,
-    folderUrl: row[6] ? getParentFolderUrlByFileId_(row[6]) : ''
+    folderUrl: ''
   };
 }
 
@@ -1980,7 +2013,7 @@ function movePin(data) {
 
   const sheet = openMapInfoSheet_();
   const rowIndex = findPinRowIndex_(sheet, data.id);
-  if (rowIndex === -1) return { ok: false, error: 'id not found' };
+  if (rowIndex < 1) return { ok: false, error: 'id not found' };
 
   const sheetRow = rowIndex + 1;
   sheet.getRange(sheetRow, 4, 1, 2).setValues([[Number(data.lat), Number(data.lng)]]);
@@ -1995,7 +2028,7 @@ function unplacePin(data) {
 
   const sheet = openMapInfoSheet_();
   const rowIndex = findPinRowIndex_(sheet, data.id);
-  if (rowIndex === -1) return { ok: false, error: 'id not found' };
+  if (rowIndex < 1) return { ok: false, error: 'id not found' };
 
   const sheetRow = rowIndex + 1;
   sheet.getRange(sheetRow, 4, 1, 2).setValues([['', '']]);
@@ -2021,7 +2054,7 @@ function bulkUpdatePinStatus(data) {
   let updatedCount = 0;
   const updatedAt = currentUpdatedAt_();
   data.ids.forEach(function(id) {
-    const rowIndex = rows.findIndex(function(row) { return row[8] === id; });
+    const rowIndex = rows.findIndex(function(row, index) { return index > 0 && row[8] === id; });
     if (rowIndex === -1) return;
     sheet.getRange(rowIndex + 1, 11).setValue(status);
     sheet.getRange(rowIndex + 1, MAP_INFO_UPDATED_AT_COLUMN).setValue(updatedAt);
@@ -2036,7 +2069,7 @@ function deletePin(data) {
 
   const sheet = openMapInfoSheet_();
   const rowIndex = findPinRowIndex_(sheet, data.id);
-  if (rowIndex === -1) return { ok: false, error: 'id not found' };
+  if (rowIndex < 1) return { ok: false, error: 'id not found' };
 
   const sheetRow = rowIndex + 1;
   const row = sheet.getRange(sheetRow, 1, 1, 10).getValues()[0];
@@ -2065,11 +2098,11 @@ function bulkDeletePins(data) {
   const rows = sheet.getDataRange().getValues();
 
   // id → rowIndex のマッピングを作成
-  // findPinRowIndex_ は呼び出しごとに getDataRange() を行うため、
+  // findPinRowIndex_ は呼び出しごとに ID 列を読み込むため、
   // バッチ処理ではここで一括取得した rows を使って検索する
   const rowIndexMap = {};
   data.ids.forEach(function(id) {
-    const rowIndex = rows.findIndex(function(row) { return row[8] === id; });
+    const rowIndex = rows.findIndex(function(row, index) { return index > 0 && row[8] === id; });
     if (rowIndex !== -1) {
       rowIndexMap[id] = rowIndex;
     }
@@ -2152,13 +2185,9 @@ function renameDriveFileForTitle_(fileId, title) {
 }
 
 function getParentFolderUrlByFileId_(fileId) {
-  try {
-    const parents = DriveApp.getFileById(fileId).getParents();
-    if (!parents.hasNext()) return '';
-    return getDriveFolderUrl_(parents.next().getId());
-  } catch (_error) {
-    return '';
-  }
+  const parents = DriveApp.getFileById(fileId).getParents();
+  if (!parents.hasNext()) return '';
+  return getDriveFolderUrl_(parents.next().getId());
 }
 
 function enrichPinWithDriveMeta_(pin) {
@@ -2166,7 +2195,7 @@ function enrichPinWithDriveMeta_(pin) {
   Object.keys(pin).forEach(function(key) {
     enriched[key] = pin[key];
   });
-  enriched.folderUrl = pin.fileId ? getParentFolderUrlByFileId_(pin.fileId) : '';
+  enriched.folderUrl = '';
   return enriched;
 }
 

@@ -1060,6 +1060,8 @@
     const state = {
       editMode: false,
       pins: [],
+      pinDriveMetaCache: Object.create(null),
+      pinDriveMetaRequests: Object.create(null),
       markers: {},
       appSettings: { rootFolderId: '', rootFolderUrl: '#', renameFileWithTitle: false },
       upload: { file: null, lat: null, lng: null, color: PIN_COLORS[0].hex, icon: PIN_ICONS[0].id },
@@ -1927,6 +1929,85 @@
       const next = Object.assign({}, payload || {});
       next.__editToken = editToken;
       return next;
+    }
+
+    function cachePinFolderUrl_(pinId, folderUrl) {
+      const id = String(pinId || '').trim();
+      if (!id) return '';
+      const normalizedUrl = String(folderUrl || '');
+      state.pinDriveMetaCache[id] = normalizedUrl;
+      const pin = getPinById(id);
+      if (pin) pin.folderUrl = normalizedUrl;
+      return normalizedUrl;
+    }
+
+    function renderPinDetailDrive_(pin) {
+      const drive = document.getElementById('pin-detail-drive');
+      drive.innerHTML = '';
+      if (!canEdit() || !pin || !pin.folderUrl) return;
+      const anchor = document.createElement('a');
+      anchor.className = 'ghost-btn';
+      anchor.href = pin.folderUrl;
+      anchor.target = '_blank';
+      anchor.rel = 'noopener noreferrer';
+      anchor.textContent = '保存先フォルダを開く';
+      drive.appendChild(anchor);
+    }
+
+    function renderPinEditorDrive_(pin) {
+      const driveArea = document.getElementById('edit-drive-area');
+      if (!canEdit() || !pin || !pin.folderUrl) {
+        driveArea.style.display = 'none';
+        driveArea.innerHTML = '';
+        return;
+      }
+      driveArea.style.display = 'block';
+      driveArea.innerHTML = '<div class="muted" style="margin-bottom:8px;">写真名同期は全体設定で切り替えます。</div><a class="ghost-btn" href="' + escHtml(pin.folderUrl) + '" target="_blank" rel="noopener noreferrer">保存先フォルダを開く</a>';
+    }
+
+    function requestPinDriveMeta_(pin) {
+      if (!canEdit() || !pin || !pin.id) return Promise.resolve('');
+      const pinId = String(pin.id);
+      if (Object.prototype.hasOwnProperty.call(state.pinDriveMetaCache, pinId)) {
+        return Promise.resolve(state.pinDriveMetaCache[pinId]);
+      }
+      if (!pin.fileId) {
+        return Promise.resolve(cachePinFolderUrl_(pinId, ''));
+      }
+      if (state.pinDriveMetaRequests[pinId]) return state.pinDriveMetaRequests[pinId];
+
+      let request;
+      request = withGAS('getPinDriveMeta', withEditToken({ pinId: pinId }))
+        .then(function(result) {
+          if (!result || result.ok !== true) {
+            throw new Error('保存先フォルダの取得に失敗しました');
+          }
+          return cachePinFolderUrl_(pinId, result.folderUrl || '');
+        })
+        .finally(function() {
+          if (state.pinDriveMetaRequests[pinId] === request) {
+            delete state.pinDriveMetaRequests[pinId];
+          }
+        });
+      state.pinDriveMetaRequests[pinId] = request;
+      return request;
+    }
+
+    function loadPinDriveMetaForCurrentViews_(pin) {
+      const pinId = pin && String(pin.id || '');
+      return requestPinDriveMeta_(pin).then(function() {
+        const currentPin = getPinById(pinId);
+        if (!currentPin) return '';
+        if (state.shownPinId === pinId) renderPinDetailDrive_(currentPin);
+        if (state.editingPinId === pinId) renderPinEditorDrive_(currentPin);
+        return currentPin.folderUrl || '';
+      }).catch(function(error) {
+        console.error('getPinDriveMeta failed', error);
+        if (state.shownPinId === pinId || state.editingPinId === pinId) {
+          showHint('保存先フォルダを取得できませんでした。次回表示時に再試行します。');
+        }
+        return '';
+      });
     }
 
     function createPinIcon(color, ghost, hasPhoto, icon) {
@@ -3616,21 +3697,12 @@
         anchor.textContent = link;
         links.appendChild(anchor);
       });
-      const drive = document.getElementById('pin-detail-drive');
-      drive.innerHTML = '';
-      if (canEdit() && pin.folderUrl) {
-        const anchor = document.createElement('a');
-        anchor.className = 'ghost-btn';
-        anchor.href = pin.folderUrl;
-        anchor.target = '_blank';
-        anchor.rel = 'noopener noreferrer';
-        anchor.textContent = '保存先フォルダを開く';
-        drive.appendChild(anchor);
-      }
+      renderPinDetailDrive_(pin);
       const gotoBtn = document.getElementById('pin-detail-goto');
       if (pin.lat != null && pin.lng != null) {
         gotoBtn.style.display = '';
         gotoBtn.onclick = () => {
+          state.shownPinId = null;
           closeOverlay('pin-detail-overlay');
           map.flyTo([pin.lat, pin.lng], Math.max(map.getZoom(), 15));
         };
@@ -3641,6 +3713,7 @@
       state.shownPinId = pin.id;
       renderPinRouteAddControl(pin);
       openOverlay('pin-detail-overlay');
+      loadPinDriveMetaForCurrentViews_(pin);
     }
 
     document.getElementById('pin-detail-close').addEventListener('click', function() {
@@ -3786,16 +3859,10 @@
       ensureUrlInputs('edit-links', pin.links || []);
       setEditColor(pin.color || PIN_COLORS[0].hex);
       setEditIcon(pin.icon || PIN_ICONS[0].id);
-      const driveArea = document.getElementById('edit-drive-area');
-      if (pin.folderUrl) {
-        driveArea.style.display = 'block';
-        driveArea.innerHTML = '<div class="muted" style="margin-bottom:8px;">写真名同期は全体設定で切り替えます。</div><a class="ghost-btn" href="' + escHtml(pin.folderUrl) + '" target="_blank" rel="noopener noreferrer">保存先フォルダを開く</a>';
-      } else {
-        driveArea.style.display = 'none';
-        driveArea.innerHTML = '';
-      }
+      renderPinEditorDrive_(pin);
       refreshRenameNotes();
       openOverlay('edit-overlay');
+      loadPinDriveMetaForCurrentViews_(pin);
     }
 
     document.getElementById('pin-menu-close').addEventListener('click', closePinMenu);
@@ -3862,7 +3929,10 @@
       openOverlay('delete-overlay');
     });
 
-    document.getElementById('edit-cancel').addEventListener('click', () => closeOverlay('edit-overlay'));
+    document.getElementById('edit-cancel').addEventListener('click', () => {
+      state.editingPinId = null;
+      closeOverlay('edit-overlay');
+    });
     document.getElementById('edit-save').addEventListener('click', async () => {
       const pin = getPinById(state.editingPinId);
       if (!pin) return;
@@ -3894,7 +3964,7 @@
           pin.links = payload.links;
           pin.status = payload.status;
           pin.tags = payload.tags;
-          if (result.folderUrl) pin.folderUrl = result.folderUrl;
+          state.editingPinId = null;
           closeOverlay('edit-overlay');
           renderPins();
           renderSidePanel();
@@ -5503,6 +5573,7 @@
           status: draft.status || '未対応',
           tags: draft.tags || []
         }));
+        cachePinFolderUrl_(result.id, result.folderUrl || '');
         closeOverlay('upload-overlay');
         renderPins();
         renderSidePanel();

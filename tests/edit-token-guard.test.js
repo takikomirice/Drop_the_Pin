@@ -11,6 +11,7 @@ const sharedHtml = fs.readFileSync(path.join(root, 'shared.html'), 'utf8');
 const guardedServerFunctions = [
   'navigateToFolder',
   'getRootFolderContents',
+  'getPinDriveMeta',
   'saveRouteGroup',
   'setRoutePins',
   'putRouteCache',
@@ -64,6 +65,7 @@ const clientMutationCalls = [
   'bulkUpdatePinStatus',
   'getRootFolderContents',
   'navigateToFolder',
+  'getPinDriveMeta',
   'saveMapData',
   'listShareLinks'
 ];
