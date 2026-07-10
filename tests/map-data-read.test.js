@@ -101,6 +101,11 @@ function createRange(sheet, row, column, numRows, numColumns, audit) {
         )
       );
     },
+    getFormulas() {
+      return Array.from({ length: numRows }, () =>
+        Array.from({ length: numColumns }, () => '')
+      );
+    },
     setValue(value) {
       audit.writes.push({ sheet: sheet.name, method: 'setValue' });
       ensureCell(row - 1, column - 1);
@@ -192,6 +197,12 @@ function createHarness(options = {}) {
       getScriptCache: () => ({
         get: (key) => (key === `EDIT_TOKEN_${TEST_EDIT_TOKEN}` ? '1' : null),
         put() {}
+      })
+    },
+    LockService: {
+      getScriptLock: () => ({
+        tryLock: () => true,
+        releaseLock() {}
       })
     },
     SpreadsheetApp: {
@@ -300,9 +311,10 @@ test('pin mutations reject the header index while preserving the row-index contr
   ['updatePinDetails', 'movePin', 'unplacePin', 'deletePin'].forEach((name) => {
     assert.match(sourceFunctionBody(codeJs, name), /rowIndex < 1/);
   });
-  ['bulkUpdatePinStatus', 'bulkDeletePins'].forEach((name) => {
-    assert.match(sourceFunctionBody(codeJs, name), /index > 0 && row\[8\] === id/);
-  });
+  const bulkStatusBody = sourceFunctionBody(codeJs, 'bulkUpdatePinStatus');
+  assert.match(bulkStatusBody, /new Set\(data\.ids\)/);
+  assert.match(bulkStatusBody, /for \(var rowIndex = 1;/);
+  assert.match(sourceFunctionBody(codeJs, 'bulkDeletePins'), /index > 0 && row\[8\] === id/);
 });
 
 test('getPinDriveMeta requires edit access and a registered pinId', () => {

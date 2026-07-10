@@ -214,6 +214,10 @@ const SHARE_ROUTE_NONE_SENTINEL = '__share_no_routes__';
 const SAFE_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const ROUTE_LINE_STYLES = { solid: true, dashed: true, dotted: true };
 const PIN_TITLE_MAX_LENGTH = 80;
+const SPREADSHEET_MUTATION_LOCK_TIMEOUT_MS = 5000;
+const SPREADSHEET_MUTATION_BUSY_ERROR = '別の更新処理が実行中です。少し待ってから再試行してください。';
+// RangeList のリクエストサイズを抑え、大量更新時の実行安定性を保つ。
+const RANGE_LIST_CHUNK_SIZE = 500;
 
 // ============================================================
 //  メニュー / 初期設定
@@ -359,6 +363,18 @@ function assertEditToken_(payload) {
   const cached = CacheService.getScriptCache().get(getEditTokenCacheKey_(token));
   if (cached !== '1') {
     throw new Error('編集権限が確認できません。編集URLを開き直してください。');
+  }
+}
+
+function withSpreadsheetMutationLock_(callback) {
+  const lock = LockService.getScriptLock();
+  let acquired = false;
+  try {
+    acquired = lock.tryLock(SPREADSHEET_MUTATION_LOCK_TIMEOUT_MS);
+    if (!acquired) return { ok: false, error: SPREADSHEET_MUTATION_BUSY_ERROR };
+    return callback();
+  } finally {
+    if (acquired) lock.releaseLock();
   }
 }
 
@@ -1545,30 +1561,55 @@ function updateRoutesOrder(data) {
     orderedIds.push(routeId);
   }
 
-  const sheet = openRoutesSheet_();
-  const rows = readRouteRows_();
-  const byId = {};
-  rows.forEach(function(entry) {
-    byId[entry.group.routeId] = entry;
-  });
-  for (var j = 0; j < orderedIds.length; j += 1) {
-    if (!byId[orderedIds[j]]) {
-      return { ok: false, error: 'route_not_found', routeId: orderedIds[j] };
+  return withSpreadsheetMutationLock_(function() {
+    const sheet = openRoutesSheet_();
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) {
+      if (orderedIds.length > 0) {
+        return { ok: false, error: 'route_not_found', routeId: orderedIds[0] };
+      }
+      return { ok: true, routeGroups: getRouteGroups() };
     }
-  }
 
-  let orderIndex = 0;
-  orderedIds.forEach(function(routeId) {
-    sheet.getRange(byId[routeId].rowNumber, 10).setValue(orderIndex);
-    orderIndex += 1;
-  });
-  rows.forEach(function(entry) {
-    if (seen[entry.group.routeId]) return;
-    sheet.getRange(entry.rowNumber, 10).setValue(orderIndex);
-    orderIndex += 1;
-  });
+    const routeValues = sheet.getRange(2, 1, lastRow - 1, ROUTES_HEADERS.length).getValues();
+    const entries = [];
+    const byId = {};
+    routeValues.forEach(function(row, index) {
+      const routeId = normalizeRouteId_(row[0]);
+      if (!routeId) return;
+      const entry = { routeId: routeId, rowOffset: index };
+      entries.push(entry);
+      byId[routeId] = entry;
+    });
+    for (var j = 0; j < orderedIds.length; j += 1) {
+      if (!byId[orderedIds[j]]) {
+        return { ok: false, error: 'route_not_found', routeId: orderedIds[j] };
+      }
+    }
+    if (entries.length === 0) {
+      return { ok: true, routeGroups: getRouteGroups() };
+    }
 
-  return { ok: true, routeGroups: getRouteGroups() };
+    const orderedEntries = orderedIds.map(function(routeId) {
+      return byId[routeId];
+    });
+    entries.forEach(function(entry) {
+      if (!seen[entry.routeId]) orderedEntries.push(entry);
+    });
+
+    const orderRange = sheet.getRange(2, 10, lastRow - 1, 1);
+    const orderValues = orderRange.getValues();
+    const orderFormulas = orderRange.getFormulas();
+    const output = orderValues.map(function(row, index) {
+      return [orderFormulas[index][0] || row[0]];
+    });
+    orderedEntries.forEach(function(entry, index) {
+      output[entry.rowOffset][0] = index;
+    });
+    orderRange.setValues(output);
+
+    return { ok: true, routeGroups: getRouteGroups() };
+  });
 }
 
 function buildSharedViewUrl_(token) {
@@ -1968,42 +2009,65 @@ function updatePinDetails(data) {
   if (!data || !data.id) return { ok: false, error: 'missing id' };
   if (!String(data.title || '').trim()) return { ok: false, error: 'title is required' };
 
-  const sheet = openMapInfoSheet_();
-  const rowIndex = findPinRowIndex_(sheet, data.id);
-  if (rowIndex < 1) return { ok: false, error: 'id not found' };
-
-  const sheetRow = rowIndex + 1;
-  const row = sheet.getRange(sheetRow, 1, 1, MAP_INFO_COLUMN_COUNT).getValues()[0];
   const title = String(data.title).trim();
-  const links = PinData.normalizeLinks(data.links || data.referenceUrls || []);
+  let renameFileId = '';
+  const result = withSpreadsheetMutationLock_(function() {
+    const sheet = openMapInfoSheet_();
+    const rowIndex = findPinRowIndex_(sheet, data.id);
+    if (rowIndex < 1) return { ok: false, error: 'id not found' };
 
-  sheet.getRange(sheetRow, 2, 1, 2).setValues([[title, String(data.description || '')]]);
-  sheet.getRange(sheetRow, 6).setValue(data.color || row[5] || DEFAULT_COLOR);
-  sheet.getRange(sheetRow, 10).setValue(PinData.serializeLinks(links));
-  sheet.getRange(sheetRow, MAP_INFO_ICON_COLUMN).setValue(PinData.normalizeIcon(data.icon != null ? data.icon : row[14]));
-  if (data.eventAt != null) {
-    sheet.getRange(sheetRow, MAP_INFO_EVENT_AT_COLUMN).setValue(PinData.normalizeEventAt(data.eventAt));
-  }
+    const sheetRow = rowIndex + 1;
+    const range = sheet.getRange(sheetRow, 1, 1, MAP_INFO_COLUMN_COUNT);
+    const row = range.getValues()[0];
+    const formulas = range.getFormulas()[0];
+    const output = row.map(function(value, index) {
+      return formulas[index] || value;
+    });
+    let links = PinData.normalizeLinks(row[9] || '');
 
-  if (data.status != null) {
-    sheet.getRange(sheetRow, 11).setValue(PinData.normalizeStatus(String(data.status)));
-  }
-  if (data.tags != null) {
-    sheet.getRange(sheetRow, 12).setValue(PinData.serializeTags(data.tags));
-  }
-  const updatedAt = currentUpdatedAt_();
-  sheet.getRange(sheetRow, MAP_INFO_UPDATED_AT_COLUMN).setValue(updatedAt);
+    output[1] = title;
+    if (Object.prototype.hasOwnProperty.call(data, 'description')) {
+      output[2] = String(data.description || '');
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'color')) {
+      output[5] = data.color || row[5] || DEFAULT_COLOR;
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(data, 'links') ||
+      Object.prototype.hasOwnProperty.call(data, 'referenceUrls')
+    ) {
+      links = PinData.normalizeLinks(data.links || data.referenceUrls || []);
+      output[9] = PinData.serializeLinks(links);
+    }
+    output[14] = PinData.normalizeIcon(data.icon != null ? data.icon : row[14]);
+    if (Object.prototype.hasOwnProperty.call(data, 'eventAt') && data.eventAt != null) {
+      output[12] = PinData.normalizeEventAt(data.eventAt);
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'status') && data.status != null) {
+      output[10] = PinData.normalizeStatus(String(data.status));
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'tags') && data.tags != null) {
+      output[11] = PinData.serializeTags(data.tags);
+    }
+    const updatedAt = currentUpdatedAt_();
+    output[13] = updatedAt;
+    range.setValues([output]);
 
-  if (getRenameFileWithTitle_() && row[6]) {
-    renameDriveFileForTitle_(row[6], title);
-  }
+    if (getRenameFileWithTitle_() && row[6]) {
+      renameFileId = String(row[6]);
+    }
+    return {
+      ok: true,
+      updatedAt: updatedAt,
+      links: links,
+      folderUrl: ''
+    };
+  });
 
-  return {
-    ok: true,
-    updatedAt: updatedAt,
-    links: links,
-    folderUrl: ''
-  };
+  if (result.ok && renameFileId) {
+    renameDriveFileForTitle_(renameFileId, title);
+  }
+  return result;
 }
 
 function movePin(data) {
@@ -2011,29 +2075,33 @@ function movePin(data) {
   if (!data || !data.id) return { ok: false, error: 'missing id' };
   if (data.lat == null || data.lng == null) return { ok: false, error: 'missing lat/lng' };
 
-  const sheet = openMapInfoSheet_();
-  const rowIndex = findPinRowIndex_(sheet, data.id);
-  if (rowIndex < 1) return { ok: false, error: 'id not found' };
+  return withSpreadsheetMutationLock_(function() {
+    const sheet = openMapInfoSheet_();
+    const rowIndex = findPinRowIndex_(sheet, data.id);
+    if (rowIndex < 1) return { ok: false, error: 'id not found' };
 
-  const sheetRow = rowIndex + 1;
-  sheet.getRange(sheetRow, 4, 1, 2).setValues([[Number(data.lat), Number(data.lng)]]);
-  sheet.getRange(sheetRow, MAP_INFO_UPDATED_AT_COLUMN).setValue(currentUpdatedAt_());
-  invalidateRouteCacheForPins_([data.id]);
-  return { ok: true };
+    const sheetRow = rowIndex + 1;
+    sheet.getRange(sheetRow, 4, 1, 2).setValues([[Number(data.lat), Number(data.lng)]]);
+    sheet.getRange(sheetRow, MAP_INFO_UPDATED_AT_COLUMN).setValue(currentUpdatedAt_());
+    invalidateRouteCacheForPins_([data.id]);
+    return { ok: true };
+  });
 }
 
 function unplacePin(data) {
   assertEditToken_(data);
   if (!data || !data.id) return { ok: false, error: 'missing id' };
 
-  const sheet = openMapInfoSheet_();
-  const rowIndex = findPinRowIndex_(sheet, data.id);
-  if (rowIndex < 1) return { ok: false, error: 'id not found' };
+  return withSpreadsheetMutationLock_(function() {
+    const sheet = openMapInfoSheet_();
+    const rowIndex = findPinRowIndex_(sheet, data.id);
+    if (rowIndex < 1) return { ok: false, error: 'id not found' };
 
-  const sheetRow = rowIndex + 1;
-  sheet.getRange(sheetRow, 4, 1, 2).setValues([['', '']]);
-  sheet.getRange(sheetRow, MAP_INFO_UPDATED_AT_COLUMN).setValue(currentUpdatedAt_());
-  return { ok: true };
+    const sheetRow = rowIndex + 1;
+    sheet.getRange(sheetRow, 4, 1, 2).setValues([['', '']]);
+    sheet.getRange(sheetRow, MAP_INFO_UPDATED_AT_COLUMN).setValue(currentUpdatedAt_());
+    return { ok: true };
+  });
 }
 
 function bulkUpdatePinStatus(data) {
@@ -2041,26 +2109,36 @@ function bulkUpdatePinStatus(data) {
   if (!data || !Array.isArray(data.ids) || data.ids.length === 0) {
     return { ok: false, error: 'ids must be a non-empty array' };
   }
+  let status;
   try {
-    PinData.normalizeStatus(String(data.status || ''));
+    status = PinData.normalizeStatus(String(data.status || ''));
   } catch (_e) {
     return { ok: false, error: 'invalid status: ' + data.status };
   }
-  const status = String(data.status).trim();
   if (!status) return { ok: false, error: 'status is required' };
+  const targetIds = new Set(data.ids);
 
-  const sheet = openMapInfoSheet_();
-  const rows = sheet.getDataRange().getValues();
-  let updatedCount = 0;
-  const updatedAt = currentUpdatedAt_();
-  data.ids.forEach(function(id) {
-    const rowIndex = rows.findIndex(function(row, index) { return index > 0 && row[8] === id; });
-    if (rowIndex === -1) return;
-    sheet.getRange(rowIndex + 1, 11).setValue(status);
-    sheet.getRange(rowIndex + 1, MAP_INFO_UPDATED_AT_COLUMN).setValue(updatedAt);
-    updatedCount += 1;
+  return withSpreadsheetMutationLock_(function() {
+    const sheet = openMapInfoSheet_();
+    const rows = sheet.getDataRange().getValues();
+    const statusRanges = [];
+    const updatedAtRanges = [];
+    const updatedAt = currentUpdatedAt_();
+
+    for (var rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
+      if (!targetIds.has(rows[rowIndex][8])) continue;
+      const sheetRow = rowIndex + 1;
+      statusRanges.push('K' + sheetRow);
+      updatedAtRanges.push('N' + sheetRow);
+    }
+    if (statusRanges.length === 0) return { ok: true, updatedCount: 0 };
+
+    for (var offset = 0; offset < statusRanges.length; offset += RANGE_LIST_CHUNK_SIZE) {
+      sheet.getRangeList(statusRanges.slice(offset, offset + RANGE_LIST_CHUNK_SIZE)).setValue(status);
+      sheet.getRangeList(updatedAtRanges.slice(offset, offset + RANGE_LIST_CHUNK_SIZE)).setValue(updatedAt);
+    }
+    return { ok: true, updatedCount: statusRanges.length };
   });
-  return { ok: true, updatedCount: updatedCount };
 }
 
 function deletePin(data) {
