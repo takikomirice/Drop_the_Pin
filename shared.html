@@ -2257,11 +2257,53 @@
       setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
     });
 
+    const SHARED_OVERLAY_BACKDROP_TAP_MAX_MOVEMENT_PX = 9;
+
+    function setupSharedOverlayBackdropDismissal(overlay, onDismiss) {
+      let gesture = null;
+
+      function resetGesture() {
+        gesture = null;
+      }
+
+      overlay.addEventListener('pointerdown', function(event) {
+        if (gesture && gesture.pointerId !== event.pointerId) return;
+        resetGesture();
+        if (event.target !== overlay) return;
+        gesture = {
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          moved: false
+        };
+      });
+
+      overlay.addEventListener('pointermove', function(event) {
+        if (!gesture || gesture.pointerId !== event.pointerId) return;
+        const deltaX = event.clientX - gesture.startX;
+        const deltaY = event.clientY - gesture.startY;
+        if (deltaX * deltaX + deltaY * deltaY > SHARED_OVERLAY_BACKDROP_TAP_MAX_MOVEMENT_PX * SHARED_OVERLAY_BACKDROP_TAP_MAX_MOVEMENT_PX) {
+          gesture.moved = true;
+        }
+      });
+
+      overlay.addEventListener('pointerup', function(event) {
+        if (!gesture || gesture.pointerId !== event.pointerId) return;
+        const shouldDismiss = !gesture.moved && event.target === overlay
+          && document.elementFromPoint(event.clientX, event.clientY) === overlay;
+        resetGesture();
+        if (shouldDismiss) onDismiss();
+      });
+
+      overlay.addEventListener('pointercancel', function(event) {
+        if (!gesture || gesture.pointerId !== event.pointerId) return;
+        resetGesture();
+      });
+    }
+
     document.getElementById('shared-help-open-btn').addEventListener('click', openSharedHelpPanel);
     document.getElementById('shared-help-close').addEventListener('click', closeSharedHelpPanel);
-    document.getElementById('shared-help-overlay').addEventListener('click', function(event) {
-      if (event.target === this) closeSharedHelpPanel();
-    });
+    setupSharedOverlayBackdropDismissal(document.getElementById('shared-help-overlay'), closeSharedHelpPanel);
     document.addEventListener('keydown', function(event) {
       if (event.key === 'Escape' && document.getElementById('shared-help-overlay').classList.contains('open')) {
         closeSharedHelpPanel();

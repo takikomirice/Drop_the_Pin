@@ -3408,31 +3408,91 @@
     ensureUrlInputs('upload-links', []);
     ensureUrlInputs('edit-links', []);
 
-    ['help-overlay', 'upload-overlay', 'settings-overlay', 'location-choice-overlay', 'pin-detail-overlay',
-     'unplaced-overlay', 'pin-menu-overlay', 'delete-overlay', 'share-overlay', 'share-qr-overlay', 'dup-warning-overlay']
-      .forEach(function(id) {
-        document.getElementById(id).addEventListener('click', function(event) {
-          if (event.target === document.getElementById(id)) {
-            if (id === 'help-overlay') {
-              closeHelpPanel();
-              return;
-            }
-            if (id === 'share-overlay') {
-              closeShareDialog();
-              return;
-            }
-            if (id === 'share-qr-overlay') {
-              closeShareQr();
-              return;
-            }
-            if (id === 'delete-overlay') {
-              state.bulkDeletePending = false;
-            }
-            closeOverlay(id);
-            if (id === 'pin-detail-overlay') state.shownPinId = null;
-          }
-        });
+    const OVERLAY_BACKDROP_TAP_MAX_MOVEMENT_PX = 9;
+
+    function isOverlayBackdropStartTarget(overlay, target) {
+      if (!target) return false;
+      if (typeof target.closest === 'function' && target.closest('input, textarea, select, button, a, [contenteditable], .sheet-body')) {
+        return false;
+      }
+      return target === overlay;
+    }
+
+    function isOverlayBackdropEndTarget(overlay, event) {
+      if (event.target !== overlay || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return false;
+      return document.elementFromPoint(event.clientX, event.clientY) === overlay;
+    }
+
+    function setupOverlayBackdropDismissal(overlay, onDismiss) {
+      let gesture = null;
+
+      function resetGesture() {
+        gesture = null;
+      }
+
+      overlay.addEventListener('pointerdown', function(event) {
+        if (gesture && gesture.pointerId !== event.pointerId) return;
+        resetGesture();
+        if (!isOverlayBackdropStartTarget(overlay, event.target)) return;
+        gesture = {
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          moved: false
+        };
       });
+
+      overlay.addEventListener('pointermove', function(event) {
+        if (!gesture || gesture.pointerId !== event.pointerId) return;
+        const deltaX = event.clientX - gesture.startX;
+        const deltaY = event.clientY - gesture.startY;
+        if (deltaX * deltaX + deltaY * deltaY > OVERLAY_BACKDROP_TAP_MAX_MOVEMENT_PX * OVERLAY_BACKDROP_TAP_MAX_MOVEMENT_PX) {
+          gesture.moved = true;
+        }
+      });
+
+      overlay.addEventListener('pointerup', function(event) {
+        if (!gesture || gesture.pointerId !== event.pointerId) return;
+        const shouldDismiss = !gesture.moved && isOverlayBackdropEndTarget(overlay, event);
+        resetGesture();
+        if (shouldDismiss) onDismiss();
+      });
+
+      overlay.addEventListener('pointercancel', function(event) {
+        if (!gesture || gesture.pointerId !== event.pointerId) return;
+        resetGesture();
+      });
+    }
+
+    function closeOverlayFromBackdrop(id) {
+      if (id === 'help-overlay') {
+        closeHelpPanel();
+        return;
+      }
+      if (id === 'share-overlay') {
+        closeShareDialog();
+        return;
+      }
+      if (id === 'share-qr-overlay') {
+        closeShareQr();
+        return;
+      }
+      if (id === 'delete-overlay') {
+        state.bulkDeletePending = false;
+      }
+      closeOverlay(id);
+      if (id === 'pin-detail-overlay') state.shownPinId = null;
+    }
+
+    const BACKDROP_DISMISS_OVERLAY_IDS = [
+      'help-overlay', 'upload-overlay', 'settings-overlay', 'location-choice-overlay', 'pin-detail-overlay',
+      'unplaced-overlay', 'pin-menu-overlay', 'delete-overlay', 'share-overlay', 'share-qr-overlay', 'dup-warning-overlay'
+    ];
+    BACKDROP_DISMISS_OVERLAY_IDS.forEach(function(id) {
+      setupOverlayBackdropDismissal(document.getElementById(id), function() {
+        closeOverlayFromBackdrop(id);
+      });
+    });
 
     function getPinById(id) {
       return state.pins.find(pin => pin.id === id) || null;
