@@ -204,6 +204,7 @@ const DEFAULT_ROUTE_COLOR = '#1e88e5';
 const MAX_ROUTE_PINS = 100;
 const EDIT_KEY_CONFIG_KEY = 'EDIT_KEY';
 const WEB_APP_URL_CONFIG_KEY = 'WEB_APP_URL';
+const EDIT_URL_CONFIG_KEY = 'EDIT_URL';
 const EDIT_TOKEN_TTL_SECONDS = 6 * 60 * 60;
 const EDIT_TOKEN_CACHE_PREFIX = 'EDIT_TOKEN_';
 const SHARE_LINKS_HEADERS = ['createdAt', 'label', 'token', 'tags', 'tagMode', 'enabled', 'revokedAt', 'colors', 'routeIds'];
@@ -230,7 +231,7 @@ function onOpen() {
     .createMenu('設定')
     .addItem('初期設定', 'setupSheet')
     .addItem('WebアプリURLを設定', 'promptWebAppUrl')
-    .addItem('編集URLを表示', 'showEditUrlDialog')
+    .addItem('編集URLを更新・開く', 'refreshAndOpenEditUrl')
     .addItem('編集キーを再生成', 'regenerateEditKeyFromMenu')
     .addToUi();
 }
@@ -289,7 +290,7 @@ function setupSheet() {
     '写真を保存するGoogleドライブフォルダのURL（フォルダを右クリック→共有→リンクをコピー）');
   ensureConfigEntry_(configSheet, 'RENAME_FILE_WITH_TITLE', 'false',
     'true の場合、タイトル編集時に Drive 上の写真名も同じタイトルへ更新');
-  ensureEditUrlConfig_(configSheet);
+  refreshEditUrlConfig_(configSheet);
   ensureShareLinksSheet_(ss);
   ensureHeaderSheet_(ss, ROUTES_SHEET_NAME, ROUTES_HEADERS);
   ensureHeaderSheet_(ss, ROUTE_PINS_SHEET_NAME, ROUTE_PINS_HEADERS);
@@ -395,6 +396,8 @@ function ensureEditUrlConfig_(configSheet) {
   if (!sheet) throw new Error('config シートが見つかりません');
   ensureConfigEntry_(sheet, EDIT_KEY_CONFIG_KEY, generateEditKey_, '編集URL用の共有キー');
   ensureConfigEntry_(sheet, WEB_APP_URL_CONFIG_KEY, '', 'デプロイ済みWebアプリの /exec URL');
+  ensureConfigEntry_(sheet, EDIT_URL_CONFIG_KEY, '',
+    '編集用WebアプリURL。知っている人は編集できるため、共有範囲に注意してください。');
   return sheet;
 }
 
@@ -405,22 +408,43 @@ function getConfiguredWebAppUrl_() {
 }
 
 function buildEditUrl_() {
-  ensureEditUrlConfig_();
-  const config = getAppConfig_();
-  const editKey = String(config[EDIT_KEY_CONFIG_KEY] || '').trim();
-  const webAppUrl = getConfiguredWebAppUrl_();
-  if (!editKey) throw new Error('EDIT_KEY が設定されていません');
-  if (!webAppUrl) throw new Error('WebアプリURLが取得できません');
-  return webAppUrl + '?mode=edit&editKey=' + encodeURIComponent(editKey);
+  const result = refreshEditUrlConfig_();
+  if (!result.url) throw new Error('WebアプリURLが取得できません');
+  return result.url;
 }
 
-function escapeHtml_(value) {
-  return String(value == null ? '' : value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+function refreshEditUrlConfig_(configSheet) {
+  const sheet = ensureEditUrlConfig_(configSheet);
+  const lastRow = sheet.getLastRow();
+  const rows = sheet.getRange(2, 1, lastRow - 1, 3).getValues();
+  const config = {};
+  const rowNumbers = {};
+  rows.forEach(function(row, index) {
+    const key = String(row[0] || '');
+    if (!key || rowNumbers[key]) return;
+    config[key] = String(row[1] || '');
+    rowNumbers[key] = index + 2;
+  });
+
+  const editKey = String(config[EDIT_KEY_CONFIG_KEY] || '').trim();
+  let webAppUrl = normalizeWebAppUrl_(config[WEB_APP_URL_CONFIG_KEY]);
+  if (!webAppUrl) {
+    try {
+      webAppUrl = normalizeWebAppUrl_(ScriptApp.getService().getUrl());
+    } catch (error) {
+      webAppUrl = '';
+    }
+  }
+
+  const editUrl = editKey && webAppUrl
+    ? webAppUrl + '?mode=edit&editKey=' + encodeURIComponent(editKey)
+    : '';
+  const editUrlCell = sheet.getRange(rowNumbers[EDIT_URL_CONFIG_KEY], 2);
+  editUrlCell.setValue(editUrl);
+  if (typeof editUrlCell.setShowHyperlink === 'function') {
+    editUrlCell.setShowHyperlink(true);
+  }
+  return { url: editUrl, row: rowNumbers[EDIT_URL_CONFIG_KEY] };
 }
 
 function promptWebAppUrl() {
@@ -434,21 +458,23 @@ function promptWebAppUrl() {
   if (response.getSelectedButton() !== ui.Button.OK) return;
   const normalizedUrl = normalizeWebAppUrl_(response.getResponseText());
   setConfigValue_(WEB_APP_URL_CONFIG_KEY, normalizedUrl);
+  refreshEditUrlConfig_();
   ui.alert('保存しました', normalizedUrl || 'WEB_APP_URL を空欄にしました。', ui.ButtonSet.OK);
 }
 
-function showEditUrlDialog() {
+function refreshAndOpenEditUrl() {
   const ui = SpreadsheetApp.getUi();
-  const editUrl = buildEditUrl_();
-  const html = HtmlService.createHtmlOutput(
-    '<div style="font-family:sans-serif;line-height:1.6;padding:12px;">' +
-      '<p>このURLをClassroomなどで共同編集者に共有してください。</p>' +
-      '<p>EDIT_KEYを変更しない限り、同じ編集URLを継続して使えます。</p>' +
-      '<p>開きっぱなしで編集できなくなった場合は、このURLを再読み込みしてください。</p>' +
-      '<input style="box-sizing:border-box;width:100%;font-size:13px;padding:8px;" readonly value="' + escapeHtml_(editUrl) + '">' +
-    '</div>'
-  ).setWidth(640).setHeight(260);
-  ui.showModalDialog(html, '編集URL');
+  const result = refreshEditUrlConfig_();
+  const configSheet = openDataSpreadsheet_().getSheetByName(CONFIG_SHEET_NAME);
+  configSheet.activate();
+  configSheet.getRange(result.row, 2).activate();
+  if (!result.url) {
+    ui.alert('編集URLを生成できません', 'WEB_APP_URLを設定するか、Webアプリをデプロイしてください。', ui.ButtonSet.OK);
+  }
+}
+
+function showEditUrlDialog() {
+  refreshAndOpenEditUrl();
 }
 
 function regenerateEditKeyFromMenu() {
@@ -461,7 +487,8 @@ function regenerateEditKeyFromMenu() {
   );
   if (result !== ui.Button.YES) return;
   setConfigValue_(EDIT_KEY_CONFIG_KEY, generateEditKey_());
-  ui.alert('編集キーを再生成しました', '新しい編集URLを表示して共有し直してください。', ui.ButtonSet.OK);
+  refreshEditUrlConfig_();
+  ui.alert('編集キーを再生成しました', 'configシートの EDIT_URL を共有し直してください。', ui.ButtonSet.OK);
 }
 
 function issueEditTokenFromRequest_(params) {

@@ -36,14 +36,16 @@ test('index help includes concise location privacy guidance', () => {
 test('README documents edit URL operation and shared-view safety', () => {
   assertIncludes(readme, '通常URLでは閲覧専用');
   assertIncludes(readme, 'mode=edit&editKey=');
-  assertIncludes(readme, 'スプレッドシートメニューの「編集URLを表示」');
+  assertIncludes(readme, 'config シートの `EDIT_URL` から開きます');
+  assertIncludes(readme, '編集URLを更新・開く');
+  assertIncludes(readme, 'EDIT_URL を知っている人は共同編集できる');
   assertIncludes(readme, 'EDIT_KEY は config シート');
   assertIncludes(readme, 'WEB_APP_URL は config シート');
   assertIncludes(readme, 'EDIT_KEY は個人認証ではなく共有鍵');
   assertIncludes(readme, '編集URLを知っている人は共同編集できます');
   assertIncludes(readme, '6時間で切れるのは EDIT_KEY ではなく一時編集トークン');
   assertIncludes(readme, '開きっぱなしで編集できなくなった場合は、同じ編集URLを再読み込み');
-  assertIncludes(readme, '編集キーを再生成すると、古い編集URLは無効');
+  assertIncludes(readme, '編集キーを再生成すると EDIT_URL も更新され、古い編集URLは無効');
   assertIncludes(readme, '共有ビューは閲覧専用');
   assertIncludes(readme, '写真・説明・タグ・リンク・地点');
 });
@@ -51,7 +53,7 @@ test('README documents edit URL operation and shared-view safety', () => {
 test('index help briefly explains edit URL usage', () => {
   assertIncludes(indexHtml, '<h3>編集について</h3>');
   assertIncludes(indexHtml, '通常URLでは閲覧専用です。');
-  assertIncludes(indexHtml, '先生がスプレッドシートメニューから取得した編集URLで開いてください。');
+  assertIncludes(indexHtml, 'configシートの EDIT_URL から開いてください。');
 });
 
 test('README marks legacy Apps Script mutation test helpers as non-recommended after edit tokens', () => {
