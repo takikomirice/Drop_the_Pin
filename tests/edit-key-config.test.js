@@ -11,10 +11,32 @@ const indexHtml = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 function createSheet(rows = []) {
   return {
     rows: rows.map((row) => row.slice()),
+    activated: false,
+    activatedRanges: [],
+    hyperlinkRows: [],
     getLastRow() {
       return this.rows.length;
     },
     getRange(row, column, numRows = 1, numColumns = 1) {
+      if (typeof row === 'string') {
+        const match = row.match(/^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/);
+        if (!match) {
+          return {
+            setNumberFormat() { return this; },
+            setBackground() { return this; },
+            setFontColor() { return this; },
+            setFontWeight() { return this; }
+          };
+        }
+        const columnNumber = (letters) => letters.split('').reduce(
+          (total, letter) => total * 26 + letter.charCodeAt(0) - 64,
+          0
+        );
+        row = Number(match[2]);
+        column = columnNumber(match[1]);
+        numRows = match[4] ? Number(match[4]) - row + 1 : 1;
+        numColumns = match[3] ? columnNumber(match[3]) - column + 1 : 1;
+      }
       const range = {
         getValues: () => {
           const values = [];
@@ -42,7 +64,16 @@ function createSheet(rows = []) {
         },
         setBackground: () => range,
         setFontColor: () => range,
-        setFontWeight: () => range
+        setFontWeight: () => range,
+        setNumberFormat: () => range,
+        setShowHyperlink: () => {
+          this.hyperlinkRows.push([row, column]);
+          return range;
+        },
+        activate: () => {
+          this.activatedRanges.push([row, column]);
+          return range;
+        }
       };
       return range;
     },
@@ -50,11 +81,18 @@ function createSheet(rows = []) {
       this.rows.push(row.slice());
     },
     setFrozenRows() {},
-    setColumnWidth() {}
+    setColumnWidth() {},
+    insertRowBefore(row) {
+      this.rows.splice(row - 1, 0, []);
+    },
+    activate() {
+      this.activated = true;
+      return this;
+    }
   };
 }
 
-function loadApi(configRows = [['設定項目', '値', '説明']]) {
+function loadApi(configRows = [['設定項目', '値', '説明']], options = {}) {
   const sheets = {
     config: createSheet(configRows)
   };
@@ -74,12 +112,27 @@ function loadApi(configRows = [['設定項目', '値', '説明']]) {
         return this;
       }
     }),
-    alert: () => 'OK'
+    alerts: [],
+    alert(...args) {
+      this.alerts.push(args);
+      return options.alertResult || 'OK';
+    },
+    prompt: () => ({
+      getSelectedButton: () => options.promptButton || 'CANCEL',
+      getResponseText: () => options.promptText || ''
+    })
   };
   const context = {
     Logger: { log() {} },
     Utilities: { getUuid: () => '11111111-2222-4333-8444-555555555555' },
-    ScriptApp: { getService: () => ({ getUrl: () => 'https://script.google.com/macros/s/deploy/exec' }) },
+    ScriptApp: { getService: () => ({
+      getUrl: () => {
+        if (options.serviceUrlError) throw new Error('not deployed');
+        return options.serviceUrl === undefined
+          ? 'https://script.google.com/macros/s/deploy/exec'
+          : options.serviceUrl;
+      }
+    }) },
     SpreadsheetApp: {
       getUi: () => ui,
       getActiveSpreadsheet: () => ({
@@ -130,20 +183,31 @@ function loadApi(configRows = [['設定項目', '値', '説明']]) {
 globalThis.__editKeyApi = {
   EDIT_KEY_CONFIG_KEY: EDIT_KEY_CONFIG_KEY,
   WEB_APP_URL_CONFIG_KEY: WEB_APP_URL_CONFIG_KEY,
+  EDIT_URL_CONFIG_KEY: EDIT_URL_CONFIG_KEY,
   EDIT_TOKEN_TTL_SECONDS: EDIT_TOKEN_TTL_SECONDS,
   generateEditKey_: generateEditKey_,
   normalizeWebAppUrl_: normalizeWebAppUrl_,
   ensureEditUrlConfig_: ensureEditUrlConfig_,
+  refreshEditUrlConfig_: refreshEditUrlConfig_,
   buildEditUrl_: buildEditUrl_,
   buildSharedViewUrl_: buildSharedViewUrl_,
   onOpen: onOpen,
-  doGet: doGet
+  doGet: doGet,
+  setupSheet: setupSheet,
+  promptWebAppUrl: promptWebAppUrl,
+  regenerateEditKeyFromMenu: regenerateEditKeyFromMenu,
+  refreshAndOpenEditUrl: refreshAndOpenEditUrl,
+  showEditUrlDialog: showEditUrlDialog
 };`, context);
-  return { api: context.__editKeyApi, sheets, menuItems, cache, templates };
+  return { api: context.__editKeyApi, sheets, menuItems, cache, templates, ui };
 }
 
 function rowByKey(sheet, key) {
   return sheet.rows.find((row) => row[0] === key);
+}
+
+function rowsByKey(sheet, key) {
+  return sheet.rows.filter((row) => row[0] === key);
 }
 
 test('edit key config constants and URL normalizer are present', () => {
@@ -151,6 +215,7 @@ test('edit key config constants and URL normalizer are present', () => {
 
   assert.equal(api.EDIT_KEY_CONFIG_KEY, 'EDIT_KEY');
   assert.equal(api.WEB_APP_URL_CONFIG_KEY, 'WEB_APP_URL');
+  assert.equal(api.EDIT_URL_CONFIG_KEY, 'EDIT_URL');
   assert.match(api.generateEditKey_(), /^ed_[A-Za-z0-9]+$/);
   assert.equal(
     api.normalizeWebAppUrl_(' https://script.google.com/macros/s/xxxxx/exec?x=1#hash/ '),
@@ -163,20 +228,25 @@ test('edit key config constants and URL normalizer are present', () => {
   assert.ok(codeJs.includes('function getConfiguredWebAppUrl_()'));
 });
 
-test('edit config rows are created while preserving an existing edit key', () => {
+test('setupSheet creates one EDIT_URL row while preserving an existing edit key', () => {
   let loaded = loadApi();
 
-  loaded.api.ensureEditUrlConfig_();
+  loaded.api.setupSheet();
   assert.match(rowByKey(loaded.sheets.config, 'EDIT_KEY')[1], /^ed_[A-Za-z0-9]+$/);
   assert.equal(rowByKey(loaded.sheets.config, 'WEB_APP_URL')[1], '');
+  assert.equal(rowsByKey(loaded.sheets.config, 'EDIT_URL').length, 1);
+  assert.equal(rowByKey(loaded.sheets.config, 'EDIT_URL')[2], '編集用WebアプリURL。知っている人は編集できるため、共有範囲に注意してください。');
 
   loaded = loadApi([
     ['設定項目', '値', '説明'],
     ['EDIT_KEY', 'existing-key', '既存説明']
   ]);
-  loaded.api.ensureEditUrlConfig_();
+  loaded.api.setupSheet();
   assert.equal(rowByKey(loaded.sheets.config, 'EDIT_KEY')[1], 'existing-key');
   assert.equal(rowByKey(loaded.sheets.config, 'WEB_APP_URL')[1], '');
+  assert.equal(rowsByKey(loaded.sheets.config, 'EDIT_URL').length, 1);
+  loaded.api.setupSheet();
+  assert.equal(rowsByKey(loaded.sheets.config, 'EDIT_URL').length, 1);
 });
 
 test('app URLs use configured WEB_APP_URL and fall back to ScriptApp URL', () => {
@@ -218,6 +288,40 @@ test('app URLs use configured WEB_APP_URL and fall back to ScriptApp URL', () =>
   assert.equal(loaded.templates[0].execUrl, 'https://script.google.com/macros/s/deploy/exec');
 });
 
+test('refreshEditUrlConfig writes a normalized, encoded EDIT_URL and replaces a stale value', () => {
+  const loaded = loadApi([
+    ['設定項目', '値', '説明'],
+    ['EDIT_KEY', 'class edit/key?', ''],
+    ['WEB_APP_URL', 'https://script.google.com/a/e.osakamanabi.jp/macros/s/xxxxx/exec?ignored=1#hash', ''],
+    ['EDIT_URL', 'stale-url', '']
+  ]);
+
+  const first = loaded.api.refreshEditUrlConfig_();
+  assert.equal(first.url,
+    'https://script.google.com/a/macros/e.osakamanabi.jp/s/xxxxx/exec?mode=edit&editKey=class%20edit%2Fkey%3F'
+  );
+  assert.equal(rowByKey(loaded.sheets.config, 'EDIT_URL')[1], first.url);
+  assert.deepEqual(loaded.sheets.config.hyperlinkRows.at(-1), [4, 2]);
+
+  rowByKey(loaded.sheets.config, 'WEB_APP_URL')[1] = 'https://script.google.com/macros/s/next/exec///?old=1';
+  const second = loaded.api.refreshEditUrlConfig_();
+  assert.equal(second.url,
+    'https://script.google.com/macros/s/next/exec?mode=edit&editKey=class%20edit%2Fkey%3F'
+  );
+});
+
+test('setupSheet clears EDIT_URL without failing when the service URL is unavailable', () => {
+  const loaded = loadApi([
+    ['設定項目', '値', '説明'],
+    ['EDIT_KEY', 'class-edit-key', ''],
+    ['WEB_APP_URL', '', ''],
+    ['EDIT_URL', 'old-url', '']
+  ], { serviceUrlError: true });
+
+  assert.doesNotThrow(() => loaded.api.setupSheet());
+  assert.equal(rowByKey(loaded.sheets.config, 'EDIT_URL')[1], '');
+});
+
 test('spreadsheet menu exposes edit URL operations', () => {
   const { api, menuItems } = loadApi();
 
@@ -226,16 +330,56 @@ test('spreadsheet menu exposes edit URL operations', () => {
   assert.deepEqual(menuItems.map((item) => item.label), [
     '初期設定',
     'WebアプリURLを設定',
-    '編集URLを表示',
+    '編集URLを更新・開く',
     '編集キーを再生成'
   ]);
+});
+
+test('menu edit URL operation and its compatibility wrapper select EDIT_URL without a modal', () => {
+  const loaded = loadApi([
+    ['設定項目', '値', '説明'],
+    ['EDIT_KEY', 'class-edit-key', ''],
+    ['WEB_APP_URL', 'https://script.google.com/macros/s/deploy/exec', '']
+  ]);
+
+  loaded.api.refreshAndOpenEditUrl();
+  const editUrlRow = loaded.sheets.config.rows.findIndex((row) => row[0] === 'EDIT_URL') + 1;
+  assert.equal(loaded.sheets.config.activated, true);
+  assert.deepEqual(loaded.sheets.config.activatedRanges.at(-1), [editUrlRow, 2]);
+  assert.equal(loaded.ui.alerts.length, 0);
+
+  loaded.api.showEditUrlDialog();
+  assert.deepEqual(loaded.sheets.config.activatedRanges.at(-1), [editUrlRow, 2]);
+  assert.equal(codeJs.includes('showModalDialog'), false);
+});
+
+test('prompting for WEB_APP_URL and regenerating EDIT_KEY refresh EDIT_URL without retaining an old URL', () => {
+  let loaded = loadApi([
+    ['設定項目', '値', '説明'],
+    ['EDIT_KEY', 'old-key', ''],
+    ['WEB_APP_URL', 'https://script.google.com/macros/s/old/exec', '']
+  ], { promptButton: 'OK', promptText: 'https://script.google.com/macros/s/new/exec?ignored=1' });
+  loaded.api.refreshEditUrlConfig_();
+  loaded.api.promptWebAppUrl();
+  assert.equal(rowByKey(loaded.sheets.config, 'EDIT_URL')[1], 'https://script.google.com/macros/s/new/exec?mode=edit&editKey=old-key');
+
+  loaded = loadApi([
+    ['設定項目', '値', '説明'],
+    ['EDIT_KEY', 'old-key', ''],
+    ['WEB_APP_URL', 'https://script.google.com/macros/s/deploy/exec', '']
+  ], { alertResult: 'YES' });
+  const oldUrl = loaded.api.refreshEditUrlConfig_().url;
+  loaded.api.regenerateEditKeyFromMenu();
+  assert.notEqual(rowByKey(loaded.sheets.config, 'EDIT_URL')[1], oldUrl);
+  assert.match(rowByKey(loaded.sheets.config, 'EDIT_URL')[1], /editKey=ed_/);
 });
 
 test('doGet issues edit tokens only for matching edit mode and key', () => {
   let loaded = loadApi([
     ['設定項目', '値', '説明'],
     ['EDIT_KEY', 'class-edit-key', ''],
-    ['WEB_APP_URL', '', '']
+    ['WEB_APP_URL', '', ''],
+    ['EDIT_URL', 'https://example.invalid/?mode=edit&editKey=wrong-key', '']
   ]);
   loaded.api.doGet({ parameter: { mode: 'edit', editKey: 'class-edit-key' } });
   assert.match(loaded.templates[0].editToken, /^edt_[A-Za-z0-9]+$/);
@@ -255,6 +399,15 @@ test('doGet issues edit tokens only for matching edit mode and key', () => {
     loaded.api.doGet({ parameter });
     assert.equal(loaded.templates[0].editToken, '');
   });
+});
+
+test('EDIT_URL is not used for authorization or logged by the refresh helper', () => {
+  const issueStart = codeJs.indexOf('function issueEditTokenFromRequest_');
+  const issueEnd = codeJs.indexOf('function openDataSpreadsheet_', issueStart);
+  const refreshStart = codeJs.indexOf('function refreshEditUrlConfig_');
+  const refreshEnd = codeJs.indexOf('function promptWebAppUrl', refreshStart);
+  assert.equal(codeJs.slice(issueStart, issueEnd).includes('EDIT_URL_CONFIG_KEY'), false);
+  assert.equal(codeJs.slice(refreshStart, refreshEnd).includes('Logger.'), false);
 });
 
 test('index receives the edit token template value', () => {

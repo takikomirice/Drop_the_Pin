@@ -50,7 +50,7 @@ test('canEdit and edit mode entry require an edit token', () => {
 
 test('readonly and invalid edit URL guidance exists without exposing editKey', () => {
   assertIncludes(indexHtml, 'id="readonly-banner"');
-  assertIncludes(indexHtml, '閲覧専用　編集するには「編集URLを表示」から取得したURLで開いてください');
+  assertIncludes(indexHtml, '閲覧専用　編集するにはconfigシートの EDIT_URL から開いてください');
   assertIncludes(indexHtml, '編集URLとして開かれていますが、編集キーが確認できません。configシートの EDIT_KEY とURLの editKey を確認してください。');
   assertIncludes(indexHtml, 'function isEditUrlRequested()');
   assert.equal(indexHtml.includes('editKey='), false);

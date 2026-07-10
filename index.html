@@ -7,6 +7,8 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/exif-js@2.3.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/exifreader@4.41.0/dist/exif-reader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/heic-to@1.5.2/dist/iife/heic-to.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
   <script>
     window.__EDIT_TOKEN__ = <?!= JSON.stringify(editToken || '') ?>;
@@ -118,6 +120,17 @@
     }
     .file-drop.has-file { border-color: var(--accent); color: var(--text); }
     #upload-preview, #pin-detail-image { width: 100%; max-height: 220px; object-fit: cover; border-radius: 14px; display: none; margin-top: 10px; }
+    .protected-photo {
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-user-drag: none;
+      -webkit-touch-callout: none;
+    }
+    #upload-photo-status { display: none; margin-top: 8px; font-size: 12px; line-height: 1.5; }
+    #upload-photo-status.is-info { display: block; color: var(--text-sub); }
+    #upload-photo-status.is-success { display: block; color: var(--accent); }
+    #upload-photo-status.is-warning { display: block; color: var(--warn); }
+    #upload-photo-status.is-error { display: block; color: var(--danger); }
     .folder-picker { margin-top: 8px; padding: 10px; border-radius: 14px; border: 1px solid var(--border); background: var(--surface); }
     .folder-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
     .folder-item, .list-item {
@@ -803,7 +816,7 @@
       </section>
       <section>
         <h3>編集について</h3>
-        <p>通常URLでは閲覧専用です。編集するには、先生がスプレッドシートメニューから取得した編集URLで開いてください。</p>
+        <p>通常URLでは閲覧専用です。編集するには、configシートの EDIT_URL から開いてください。必要に応じて、先生はスプレッドシートメニューの「編集URLを更新・開く」で再生成できます。EDIT_URLを知っている人は編集できるため、共有範囲に注意してください。編集キーを再生成するとEDIT_URLも変わり、古いURLは無効になります。</p>
       </section>
       <section>
         <h3>編集モード</h3>
@@ -833,8 +846,9 @@
     <div class="section-card">
       <label class="form-label">写真（任意）</label>
       <div id="file-drop" class="file-drop">📷 写真をタップして選択</div>
-      <input type="file" id="file-input" accept="image/*" style="display:none">
+      <input type="file" id="file-input" accept="image/jpeg,image/png,image/gif,image/webp,image/heic,image/heif,.heic,.heif" style="display:none">
       <img id="upload-preview" alt="プレビュー">
+      <div id="upload-photo-status" role="status" aria-live="polite"></div>
       <div class="inline-actions" style="margin-top:10px;"><button id="clear-photo-btn" class="ghost-btn" type="button">写真を外す</button></div>
     </div>
     <div class="form-group"><label class="form-label" for="upload-title">タイトル</label><input id="upload-title" class="form-input" type="text" maxlength="80"><div id="upload-rename-note" class="muted" style="display:none;margin-top:6px;"></div></div>
@@ -882,7 +896,7 @@
   </div></div>
 
   <div id="pin-detail-overlay" class="sheet-overlay" role="dialog" aria-modal="true"><div class="sheet-body">
-    <div class="sheet-handle"></div><img id="pin-detail-image" alt="ピン画像">
+    <div class="sheet-handle"></div><img id="pin-detail-image" class="protected-photo" draggable="false" alt="ピン画像">
     <div id="pin-detail-title" class="sheet-title" style="margin-top:10px;"></div>
     <div id="pin-detail-status" style="display:none;margin-bottom:6px;"></div>
     <div id="pin-detail-tags" style="margin-bottom:8px;"></div>
@@ -1060,9 +1074,15 @@
     const state = {
       editMode: false,
       pins: [],
+      pinDriveMetaCache: Object.create(null),
+      pinDriveMetaRequests: Object.create(null),
       markers: {},
       appSettings: { rootFolderId: '', rootFolderUrl: '#', renameFileWithTitle: false },
-      upload: { file: null, lat: null, lng: null, color: PIN_COLORS[0].hex, icon: PIN_ICONS[0].id },
+      upload: {
+        originalFile: null, uploadFile: null, previewUrl: '', lat: null, lng: null,
+        capturedAt: '', metadataStatus: 'idle', converting: false, conversionError: '',
+        selectionToken: 0, color: PIN_COLORS[0].hex, icon: PIN_ICONS[0].id
+      },
       editColor: PIN_COLORS[0].hex,
       editIcon: PIN_ICONS[0].id,
       routeGroups: [],
@@ -1127,7 +1147,7 @@
       }
       banner.textContent = deniedEditUrl
         ? '編集URLとして開かれていますが、編集キーが確認できません。configシートの EDIT_KEY とURLの editKey を確認してください。'
-        : '閲覧専用　編集するには「編集URLを表示」から取得したURLで開いてください';
+        : '閲覧専用　編集するにはconfigシートの EDIT_URL から開いてください';
       banner.style.display = '';
     }
 
@@ -1927,6 +1947,85 @@
       const next = Object.assign({}, payload || {});
       next.__editToken = editToken;
       return next;
+    }
+
+    function cachePinFolderUrl_(pinId, folderUrl) {
+      const id = String(pinId || '').trim();
+      if (!id) return '';
+      const normalizedUrl = String(folderUrl || '');
+      state.pinDriveMetaCache[id] = normalizedUrl;
+      const pin = getPinById(id);
+      if (pin) pin.folderUrl = normalizedUrl;
+      return normalizedUrl;
+    }
+
+    function renderPinDetailDrive_(pin) {
+      const drive = document.getElementById('pin-detail-drive');
+      drive.innerHTML = '';
+      if (!canEdit() || !pin || !pin.folderUrl) return;
+      const anchor = document.createElement('a');
+      anchor.className = 'ghost-btn';
+      anchor.href = pin.folderUrl;
+      anchor.target = '_blank';
+      anchor.rel = 'noopener noreferrer';
+      anchor.textContent = '保存先フォルダを開く';
+      drive.appendChild(anchor);
+    }
+
+    function renderPinEditorDrive_(pin) {
+      const driveArea = document.getElementById('edit-drive-area');
+      if (!canEdit() || !pin || !pin.folderUrl) {
+        driveArea.style.display = 'none';
+        driveArea.innerHTML = '';
+        return;
+      }
+      driveArea.style.display = 'block';
+      driveArea.innerHTML = '<div class="muted" style="margin-bottom:8px;">写真名同期は全体設定で切り替えます。</div><a class="ghost-btn" href="' + escHtml(pin.folderUrl) + '" target="_blank" rel="noopener noreferrer">保存先フォルダを開く</a>';
+    }
+
+    function requestPinDriveMeta_(pin) {
+      if (!canEdit() || !pin || !pin.id) return Promise.resolve('');
+      const pinId = String(pin.id);
+      if (Object.prototype.hasOwnProperty.call(state.pinDriveMetaCache, pinId)) {
+        return Promise.resolve(state.pinDriveMetaCache[pinId]);
+      }
+      if (!pin.fileId) {
+        return Promise.resolve(cachePinFolderUrl_(pinId, ''));
+      }
+      if (state.pinDriveMetaRequests[pinId]) return state.pinDriveMetaRequests[pinId];
+
+      let request;
+      request = withGAS('getPinDriveMeta', withEditToken({ pinId: pinId }))
+        .then(function(result) {
+          if (!result || result.ok !== true) {
+            throw new Error('保存先フォルダの取得に失敗しました');
+          }
+          return cachePinFolderUrl_(pinId, result.folderUrl || '');
+        })
+        .finally(function() {
+          if (state.pinDriveMetaRequests[pinId] === request) {
+            delete state.pinDriveMetaRequests[pinId];
+          }
+        });
+      state.pinDriveMetaRequests[pinId] = request;
+      return request;
+    }
+
+    function loadPinDriveMetaForCurrentViews_(pin) {
+      const pinId = pin && String(pin.id || '');
+      return requestPinDriveMeta_(pin).then(function() {
+        const currentPin = getPinById(pinId);
+        if (!currentPin) return '';
+        if (state.shownPinId === pinId) renderPinDetailDrive_(currentPin);
+        if (state.editingPinId === pinId) renderPinEditorDrive_(currentPin);
+        return currentPin.folderUrl || '';
+      }).catch(function(error) {
+        console.error('getPinDriveMeta failed', error);
+        if (state.shownPinId === pinId || state.editingPinId === pinId) {
+          showHint('保存先フォルダを取得できませんでした。次回表示時に再試行します。');
+        }
+        return '';
+      });
     }
 
     function createPinIcon(color, ghost, hasPhoto, icon) {
@@ -3106,6 +3205,41 @@
       setTheme(saved || systemTheme);
     })();
 
+    function isProtectedPhotoTarget(target) {
+      return Boolean(target && typeof target.closest === 'function' && target.closest('.protected-photo'));
+    }
+
+    function selectionIncludesProtectedPhoto() {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return false;
+      const range = selection.getRangeAt(0);
+      return Array.prototype.some.call(document.querySelectorAll('.protected-photo'), function(photo) {
+        try {
+          return range.intersectsNode(photo);
+        } catch (_error) {
+          return false;
+        }
+      });
+    }
+
+    function shouldBlockProtectedPhotoCopy(event) {
+      return isProtectedPhotoTarget(event && event.target) || selectionIncludesProtectedPhoto();
+    }
+
+    function installProtectedPhotoGuards() {
+      document.addEventListener('contextmenu', function(event) {
+        if (isProtectedPhotoTarget(event.target)) event.preventDefault();
+      });
+      document.addEventListener('dragstart', function(event) {
+        if (isProtectedPhotoTarget(event.target)) event.preventDefault();
+      });
+      document.addEventListener('copy', function(event) {
+        if (shouldBlockProtectedPhotoCopy(event)) event.preventDefault();
+      });
+    }
+
+    installProtectedPhotoGuards();
+
     document.getElementById('theme-toggle').addEventListener('click', () => {
       setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
     });
@@ -3327,31 +3461,92 @@
     ensureUrlInputs('upload-links', []);
     ensureUrlInputs('edit-links', []);
 
-    ['help-overlay', 'upload-overlay', 'settings-overlay', 'location-choice-overlay', 'pin-detail-overlay',
-     'unplaced-overlay', 'pin-menu-overlay', 'delete-overlay', 'share-overlay', 'share-qr-overlay', 'dup-warning-overlay']
-      .forEach(function(id) {
-        document.getElementById(id).addEventListener('click', function(event) {
-          if (event.target === document.getElementById(id)) {
-            if (id === 'help-overlay') {
-              closeHelpPanel();
-              return;
-            }
-            if (id === 'share-overlay') {
-              closeShareDialog();
-              return;
-            }
-            if (id === 'share-qr-overlay') {
-              closeShareQr();
-              return;
-            }
-            if (id === 'delete-overlay') {
-              state.bulkDeletePending = false;
-            }
-            closeOverlay(id);
-            if (id === 'pin-detail-overlay') state.shownPinId = null;
-          }
-        });
+    const OVERLAY_BACKDROP_TAP_MAX_MOVEMENT_PX = 9;
+
+    function isOverlayBackdropStartTarget(overlay, target) {
+      if (!target) return false;
+      if (typeof target.closest === 'function' && target.closest('input, textarea, select, button, a, [contenteditable], .sheet-body')) {
+        return false;
+      }
+      return target === overlay;
+    }
+
+    function isOverlayBackdropEndTarget(overlay, event) {
+      if (event.target !== overlay || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return false;
+      return document.elementFromPoint(event.clientX, event.clientY) === overlay;
+    }
+
+    function setupOverlayBackdropDismissal(overlay, onDismiss) {
+      let gesture = null;
+
+      function resetGesture() {
+        gesture = null;
+      }
+
+      overlay.addEventListener('pointerdown', function(event) {
+        if (gesture && gesture.pointerId !== event.pointerId) return;
+        resetGesture();
+        if (!isOverlayBackdropStartTarget(overlay, event.target)) return;
+        gesture = {
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          moved: false
+        };
       });
+
+      overlay.addEventListener('pointermove', function(event) {
+        if (!gesture || gesture.pointerId !== event.pointerId) return;
+        const deltaX = event.clientX - gesture.startX;
+        const deltaY = event.clientY - gesture.startY;
+        if (deltaX * deltaX + deltaY * deltaY > OVERLAY_BACKDROP_TAP_MAX_MOVEMENT_PX * OVERLAY_BACKDROP_TAP_MAX_MOVEMENT_PX) {
+          gesture.moved = true;
+        }
+      });
+
+      overlay.addEventListener('pointerup', function(event) {
+        if (!gesture || gesture.pointerId !== event.pointerId) return;
+        const shouldDismiss = !gesture.moved && isOverlayBackdropEndTarget(overlay, event);
+        resetGesture();
+        if (shouldDismiss) onDismiss();
+      });
+
+      overlay.addEventListener('pointercancel', function(event) {
+        if (!gesture || gesture.pointerId !== event.pointerId) return;
+        resetGesture();
+      });
+    }
+
+    function closeOverlayFromBackdrop(id) {
+      if (id === 'help-overlay') {
+        closeHelpPanel();
+        return;
+      }
+      if (id === 'share-overlay') {
+        closeShareDialog();
+        return;
+      }
+      if (id === 'share-qr-overlay') {
+        closeShareQr();
+        return;
+      }
+      if (id === 'delete-overlay') {
+        state.bulkDeletePending = false;
+      }
+      if (id === 'upload-overlay') clearUploadPhotoState();
+      closeOverlay(id);
+      if (id === 'pin-detail-overlay') state.shownPinId = null;
+    }
+
+    const BACKDROP_DISMISS_OVERLAY_IDS = [
+      'help-overlay', 'upload-overlay', 'settings-overlay', 'location-choice-overlay', 'pin-detail-overlay',
+      'unplaced-overlay', 'pin-menu-overlay', 'delete-overlay', 'share-overlay', 'share-qr-overlay', 'dup-warning-overlay'
+    ];
+    BACKDROP_DISMISS_OVERLAY_IDS.forEach(function(id) {
+      setupOverlayBackdropDismissal(document.getElementById(id), function() {
+        closeOverlayFromBackdrop(id);
+      });
+    });
 
     function getPinById(id) {
       return state.pins.find(pin => pin.id === id) || null;
@@ -3413,7 +3608,7 @@
     }
 
     function refreshRenameNotes() {
-      setRenameNote('upload-rename-note', !!state.upload.file, '保存時');
+      setRenameNote('upload-rename-note', !!state.upload.uploadFile, '保存時');
       const editingPin = getPinById(state.editingPinId);
       setRenameNote('edit-rename-note', !!(editingPin && editingPin.fileId), '更新時');
     }
@@ -3616,21 +3811,12 @@
         anchor.textContent = link;
         links.appendChild(anchor);
       });
-      const drive = document.getElementById('pin-detail-drive');
-      drive.innerHTML = '';
-      if (canEdit() && pin.folderUrl) {
-        const anchor = document.createElement('a');
-        anchor.className = 'ghost-btn';
-        anchor.href = pin.folderUrl;
-        anchor.target = '_blank';
-        anchor.rel = 'noopener noreferrer';
-        anchor.textContent = '保存先フォルダを開く';
-        drive.appendChild(anchor);
-      }
+      renderPinDetailDrive_(pin);
       const gotoBtn = document.getElementById('pin-detail-goto');
       if (pin.lat != null && pin.lng != null) {
         gotoBtn.style.display = '';
         gotoBtn.onclick = () => {
+          state.shownPinId = null;
           closeOverlay('pin-detail-overlay');
           map.flyTo([pin.lat, pin.lng], Math.max(map.getZoom(), 15));
         };
@@ -3641,6 +3827,7 @@
       state.shownPinId = pin.id;
       renderPinRouteAddControl(pin);
       openOverlay('pin-detail-overlay');
+      loadPinDriveMetaForCurrentViews_(pin);
     }
 
     document.getElementById('pin-detail-close').addEventListener('click', function() {
@@ -3786,16 +3973,10 @@
       ensureUrlInputs('edit-links', pin.links || []);
       setEditColor(pin.color || PIN_COLORS[0].hex);
       setEditIcon(pin.icon || PIN_ICONS[0].id);
-      const driveArea = document.getElementById('edit-drive-area');
-      if (pin.folderUrl) {
-        driveArea.style.display = 'block';
-        driveArea.innerHTML = '<div class="muted" style="margin-bottom:8px;">写真名同期は全体設定で切り替えます。</div><a class="ghost-btn" href="' + escHtml(pin.folderUrl) + '" target="_blank" rel="noopener noreferrer">保存先フォルダを開く</a>';
-      } else {
-        driveArea.style.display = 'none';
-        driveArea.innerHTML = '';
-      }
+      renderPinEditorDrive_(pin);
       refreshRenameNotes();
       openOverlay('edit-overlay');
+      loadPinDriveMetaForCurrentViews_(pin);
     }
 
     document.getElementById('pin-menu-close').addEventListener('click', closePinMenu);
@@ -3862,7 +4043,10 @@
       openOverlay('delete-overlay');
     });
 
-    document.getElementById('edit-cancel').addEventListener('click', () => closeOverlay('edit-overlay'));
+    document.getElementById('edit-cancel').addEventListener('click', () => {
+      state.editingPinId = null;
+      closeOverlay('edit-overlay');
+    });
     document.getElementById('edit-save').addEventListener('click', async () => {
       const pin = getPinById(state.editingPinId);
       if (!pin) return;
@@ -3894,7 +4078,7 @@
           pin.links = payload.links;
           pin.status = payload.status;
           pin.tags = payload.tags;
-          if (result.folderUrl) pin.folderUrl = result.folderUrl;
+          state.editingPinId = null;
           closeOverlay('edit-overlay');
           renderPins();
           renderSidePanel();
@@ -5267,17 +5451,13 @@
     });
 
     function resetUploadState() {
-      state.upload = { file: null, lat: null, lng: null, color: PIN_COLORS[0].hex, icon: PIN_ICONS[0].id };
-      document.getElementById('file-input').value = '';
+      clearUploadPhotoState();
+      state.upload.color = PIN_COLORS[0].hex;
+      state.upload.icon = PIN_ICONS[0].id;
       document.getElementById('upload-title').value = '';
       document.getElementById('upload-desc').value = '';
-      document.getElementById('upload-event-at').value = '';
       document.getElementById('upload-status').value = '未対応';
       document.getElementById('upload-tags').value = '';
-      document.getElementById('upload-preview').style.display = 'none';
-      document.getElementById('upload-preview').src = '';
-      document.getElementById('file-drop').textContent = '📷 写真をタップして選択';
-      document.getElementById('file-drop').classList.remove('has-file');
       ensureUrlInputs('upload-links', []);
       setUploadColor(PIN_COLORS[0].hex);
       setUploadIcon(PIN_ICONS[0].id);
@@ -5296,37 +5476,225 @@
     }
 
     document.getElementById('fab').addEventListener('click', openUploadModal);
-    document.getElementById('upload-cancel').addEventListener('click', () => closeOverlay('upload-overlay'));
+    document.getElementById('upload-cancel').addEventListener('click', () => {
+      clearUploadPhotoState();
+      closeOverlay('upload-overlay');
+    });
     document.getElementById('file-drop').addEventListener('click', () => document.getElementById('file-input').click());
-    document.getElementById('clear-photo-btn').addEventListener('click', () => {
-      state.upload.file = null;
+    document.getElementById('clear-photo-btn').addEventListener('click', clearUploadPhotoState);
+
+    function clearUploadPhotoState() {
+      if (state.upload.previewUrl) URL.revokeObjectURL(state.upload.previewUrl);
+      state.upload.originalFile = null;
+      state.upload.uploadFile = null;
+      state.upload.previewUrl = '';
       state.upload.lat = null;
       state.upload.lng = null;
+      state.upload.capturedAt = '';
+      state.upload.metadataStatus = 'idle';
+      state.upload.converting = false;
+      state.upload.conversionError = '';
+      state.upload.selectionToken = Number(state.upload.selectionToken || 0) + 1;
       document.getElementById('file-input').value = '';
+      document.getElementById('upload-event-at').value = '';
       document.getElementById('upload-preview').style.display = 'none';
       document.getElementById('upload-preview').src = '';
       document.getElementById('file-drop').textContent = '📷 写真をタップして選択';
       document.getElementById('file-drop').classList.remove('has-file');
+      refreshUploadPhotoStatus();
+      refreshUploadSubmitState();
       refreshRenameNotes();
-    });
+    }
 
-    function dmsToDecimal(dms, ref) {
-      if (!dms || dms.length < 3) return null;
-      if (dms.some(part => !part || part.denominator === 0)) return null;
-      const deg = dms[0].numerator / dms[0].denominator;
-      const min = dms[1].numerator / dms[1].denominator;
-      const sec = dms[2].numerator / dms[2].denominator;
-      let decimal = deg + min / 60 + sec / 3600;
-      if (ref === 'S' || ref === 'W') decimal = -decimal;
+    function isHeicFile(file) {
+      if (!file) return false;
+      const type = String(file.type || '').toLowerCase();
+      const name = String(file.name || '');
+      return type === 'image/heic' || type === 'image/heif' || /\.(?:heic|heif)$/i.test(name);
+    }
+
+    function normalizeJpegFileName(name) {
+      const base = String(name || '').replace(/\.(?:heic|heif)$/i, '').trim();
+      return (base && base !== '.' ? base : 'image') + '.jpg';
+    }
+
+    function rationalToNumber(value) {
+      if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+      if (typeof value === 'string' && value.trim() !== '') {
+        const numberValue = Number(value);
+        return Number.isFinite(numberValue) ? numberValue : null;
+      }
+      if (Array.isArray(value) && value.length === 2 && !Array.isArray(value[0])) {
+        const numerator = Number(value[0]);
+        const denominator = Number(value[1]);
+        return Number.isFinite(numerator) && Number.isFinite(denominator) && denominator !== 0
+          ? numerator / denominator
+          : null;
+      }
+      if (value && typeof value === 'object') {
+        const numerator = Number(value.numerator != null ? value.numerator : value[0]);
+        const denominator = Number(value.denominator != null ? value.denominator : value[1]);
+        return Number.isFinite(numerator) && Number.isFinite(denominator) && denominator !== 0
+          ? numerator / denominator
+          : null;
+      }
+      return null;
+    }
+
+    function gpsValueToDecimal(value, ref) {
+      let decimal = null;
+      if (Array.isArray(value) && value.length >= 3) {
+        const parts = value.slice(0, 3).map(rationalToNumber);
+        if (parts.every(part => part != null) && parts[1] >= 0 && parts[1] < 60 && parts[2] >= 0 && parts[2] < 60) {
+          decimal = Math.abs(parts[0]) + parts[1] / 60 + parts[2] / 3600;
+          if (parts[0] < 0) decimal = -decimal;
+        }
+      } else {
+        decimal = rationalToNumber(value);
+      }
+      if (decimal == null || !Number.isFinite(decimal)) return null;
+      const normalizedRef = String(Array.isArray(ref) ? ref[0] : (ref || '')).trim().toUpperCase();
+      if (normalizedRef === 'S' || normalizedRef === 'W') return -Math.abs(decimal);
+      if (normalizedRef === 'N' || normalizedRef === 'E') return Math.abs(decimal);
       return decimal;
+    }
+
+    function tagValue(tag) {
+      if (tag == null) return null;
+      if (typeof tag !== 'object' || Array.isArray(tag)) return tag;
+      if (Object.prototype.hasOwnProperty.call(tag, 'value')) return tag.value;
+      if (Object.prototype.hasOwnProperty.call(tag, 'description')) return tag.description;
+      return tag;
+    }
+
+    function normalizeGpsResult(tags) {
+      const source = tags || {};
+      const gps = source.gps || {};
+      const latTag = gps.Latitude != null ? gps.Latitude : source.GPSLatitude;
+      const lngTag = gps.Longitude != null ? gps.Longitude : source.GPSLongitude;
+      if (latTag == null && lngTag == null) {
+        return { status: 'no-gps', lat: null, lng: null };
+      }
+      const lat = gpsValueToDecimal(tagValue(latTag), tagValue(source.GPSLatitudeRef));
+      const lng = gpsValueToDecimal(tagValue(lngTag), tagValue(source.GPSLongitudeRef));
+      if (lat == null || lng == null || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+        return { status: 'invalid-gps', lat: null, lng: null };
+      }
+      return { status: 'success', lat: lat, lng: lng };
+    }
+
+    function isUnsupportedMetadataError(error) {
+      const message = String(error && error.message ? error.message : error || '');
+      return /invalid image format|unsupported (?:image |file )?format|format (?:is )?not supported|unknown image format/i.test(message);
+    }
+
+    async function readHeicMetadata(file, reader) {
+      if (!reader || typeof reader.load !== 'function') {
+        return { status: 'unsupported', lat: null, lng: null, capturedAt: '' };
+      }
+      try {
+        const tags = await reader.load(file, { expanded: true });
+        const gps = normalizeGpsResult(tags);
+        const dateTag = tags && tags.exif && tags.exif.DateTimeOriginal != null
+          ? tags.exif.DateTimeOriginal
+          : tags && tags.DateTimeOriginal;
+        return {
+          status: gps.status,
+          lat: gps.lat,
+          lng: gps.lng,
+          capturedAt: parseExifDateTimeOriginal(tagValue(dateTag))
+        };
+      } catch (error) {
+        return {
+          status: isUnsupportedMetadataError(error) ? 'unsupported' : 'read-failed',
+          lat: null,
+          lng: null,
+          capturedAt: ''
+        };
+      }
+    }
+
+    async function convertHeicToJpeg(file, converter, FileCtor) {
+      if (typeof converter !== 'function' || typeof FileCtor !== 'function') {
+        throw new Error('このブラウザではHEIC変換を利用できません。');
+      }
+      const converted = await converter({ blob: file, type: 'image/jpeg', quality: 0.9 });
+      const firstFrame = Array.isArray(converted) ? converted[0] : converted;
+      if (!(firstFrame instanceof Blob)) throw new Error('HEICからJPEG画像を生成できませんでした。');
+      return new FileCtor([firstFrame], normalizeJpegFileName(file.name), {
+        type: 'image/jpeg',
+        lastModified: Number(file.lastModified || Date.now())
+      });
+    }
+
+    async function prepareUploadPhoto(file, deps) {
+      const options = deps || {};
+      if (!isHeicFile(file)) {
+        try {
+          const rawGps = options.readStandardGps ? await options.readStandardGps(file) : null;
+          const gps = rawGps && rawGps.status
+            ? rawGps
+            : normalizeGpsResult(rawGps ? { gps: { Latitude: rawGps.lat, Longitude: rawGps.lng } } : {});
+          const capturedAt = options.readStandardDate ? await options.readStandardDate(file) : '';
+          return {
+            originalFile: file,
+            uploadFile: file,
+            metadataStatus: gps.status,
+            lat: gps.lat,
+            lng: gps.lng,
+            capturedAt: capturedAt || '',
+            conversionError: ''
+          };
+        } catch (_error) {
+          return {
+            originalFile: file, uploadFile: file, metadataStatus: 'read-failed',
+            lat: null, lng: null, capturedAt: '', conversionError: ''
+          };
+        }
+      }
+
+      const metadata = await readHeicMetadata(file, options.metadataReader);
+      try {
+        const uploadFile = await convertHeicToJpeg(file, options.converter, options.FileCtor);
+        return {
+          originalFile: file,
+          uploadFile: uploadFile,
+          metadataStatus: metadata.status,
+          lat: metadata.lat,
+          lng: metadata.lng,
+          capturedAt: metadata.capturedAt,
+          conversionError: ''
+        };
+      } catch (error) {
+        return {
+          originalFile: file,
+          uploadFile: null,
+          metadataStatus: 'conversion-failed',
+          lat: metadata.lat,
+          lng: metadata.lng,
+          capturedAt: metadata.capturedAt,
+          conversionError: error && error.message ? error.message : String(error)
+        };
+      }
+    }
+
+    function locationMessageForMetadataStatus(status) {
+      const suffix = '今すぐ配置するか、未配置で保存してください。';
+      if (status === 'unsupported') return 'この写真形式の位置メタデータ解析に対応していません。' + suffix;
+      if (status === 'invalid-gps') return '写真のGPS値が不正なため位置情報を使用できません。' + suffix;
+      if (status === 'read-failed') return '写真の位置情報を読み取れませんでした。' + suffix;
+      return '写真に GPS 情報がありません。' + suffix;
     }
 
     function readExifGps(file) {
       return new Promise(resolve => {
         EXIF.getData(file, function() {
-          const lat = dmsToDecimal(EXIF.getTag(this, 'GPSLatitude'), EXIF.getTag(this, 'GPSLatitudeRef'));
-          const lng = dmsToDecimal(EXIF.getTag(this, 'GPSLongitude'), EXIF.getTag(this, 'GPSLongitudeRef'));
-          resolve(lat != null && lng != null ? { lat, lng } : null);
+          resolve(normalizeGpsResult({
+            GPSLatitude: EXIF.getTag(this, 'GPSLatitude'),
+            GPSLatitudeRef: EXIF.getTag(this, 'GPSLatitudeRef'),
+            GPSLongitude: EXIF.getTag(this, 'GPSLongitude'),
+            GPSLongitudeRef: EXIF.getTag(this, 'GPSLongitudeRef')
+          }));
         });
       });
     }
@@ -5350,12 +5718,51 @@
     }
 
     async function fillUploadEventAtFromExif(showMessage) {
-      const value = await readExifDateTimeOriginal(state.upload.file);
+      const selectionToken = state.upload.selectionToken;
+      const originalFile = state.upload.originalFile;
+      const value = state.upload.capturedAt || await readExifDateTimeOriginal(originalFile);
+      if (selectionToken !== state.upload.selectionToken || originalFile !== state.upload.originalFile) return;
       if (value) {
         document.getElementById('upload-event-at').value = value;
       } else if (showMessage) {
         alert('EXIFから撮影日時を取得できませんでした。');
       }
+    }
+
+    function refreshUploadPhotoStatus() {
+      const element = document.getElementById('upload-photo-status');
+      let message = '';
+      let className = '';
+      if (state.upload.converting) {
+        message = 'HEIC写真を変換しています';
+        className = 'is-info';
+      } else if (state.upload.metadataStatus === 'conversion-failed') {
+        message = 'HEIC写真の変換に失敗しました。別の写真を選択してください。';
+        className = 'is-error';
+      } else if (state.upload.metadataStatus === 'success') {
+        message = '写真から位置情報を取得しました。';
+        className = 'is-success';
+      } else if (state.upload.metadataStatus === 'no-gps') {
+        message = '写真にGPS情報がありません。保存時に位置を選択できます。';
+        className = 'is-info';
+      } else if (state.upload.metadataStatus === 'unsupported') {
+        message = 'この写真形式の位置メタデータ解析に対応していません。';
+        className = 'is-warning';
+      } else if (state.upload.metadataStatus === 'invalid-gps') {
+        message = '写真のGPS値が不正なため位置情報を使用できません。';
+        className = 'is-warning';
+      } else if (state.upload.metadataStatus === 'read-failed') {
+        message = '写真の位置情報を読み取れませんでした。';
+        className = 'is-warning';
+      }
+      element.textContent = message;
+      element.className = className;
+    }
+
+    function refreshUploadSubmitState() {
+      const disabled = !!state.upload.converting || !!state.upload.conversionError;
+      document.getElementById('upload-submit').disabled = disabled;
+      document.getElementById('upload-save-unplaced').disabled = disabled;
     }
 
     function resizeWithOrientation(file, maxSize) {
@@ -5398,25 +5805,50 @@
     document.getElementById('file-input').addEventListener('change', async event => {
       const file = event.target.files[0];
       if (!file) return;
-      state.upload.file = file;
+      clearUploadPhotoState();
+      const selectionToken = state.upload.selectionToken;
+      state.upload.originalFile = file;
+      state.upload.converting = isHeicFile(file);
+      state.upload.metadataStatus = 'idle';
+      state.upload.conversionError = '';
       if (!document.getElementById('upload-title').value.trim()) {
         document.getElementById('upload-title').value = file.name.replace(/\.[^.]+$/, '');
       }
-      const previewReader = new FileReader();
-      previewReader.onload = readerEvent => {
-        const preview = document.getElementById('upload-preview');
-        preview.src = readerEvent.target.result;
-        preview.style.display = 'block';
-      };
-      previewReader.readAsDataURL(file);
       document.getElementById('file-drop').textContent = '📎 ' + file.name;
       document.getElementById('file-drop').classList.add('has-file');
-      const gps = await readExifGps(file);
-      state.upload.lat = gps ? gps.lat : null;
-      state.upload.lng = gps ? gps.lng : null;
-      if (!document.getElementById('upload-event-at').value) {
-        await fillUploadEventAtFromExif(false);
+      refreshUploadPhotoStatus();
+      refreshUploadSubmitState();
+
+      const prepared = await prepareUploadPhoto(file, {
+        metadataReader: typeof ExifReader !== 'undefined' ? ExifReader : null,
+        converter: typeof HeicTo === 'function' ? HeicTo : null,
+        FileCtor: typeof File === 'function' ? File : null,
+        readStandardGps: readExifGps,
+        readStandardDate: readExifDateTimeOriginal
+      });
+      if (selectionToken !== state.upload.selectionToken) return;
+
+      state.upload.originalFile = prepared.originalFile;
+      state.upload.uploadFile = prepared.uploadFile;
+      state.upload.lat = prepared.lat;
+      state.upload.lng = prepared.lng;
+      state.upload.capturedAt = prepared.capturedAt;
+      state.upload.metadataStatus = prepared.metadataStatus;
+      state.upload.conversionError = prepared.conversionError;
+      state.upload.converting = false;
+
+      if (prepared.uploadFile) {
+        state.upload.previewUrl = URL.createObjectURL(prepared.uploadFile);
+        const preview = document.getElementById('upload-preview');
+        preview.src = state.upload.previewUrl;
+        preview.style.display = 'block';
+        document.getElementById('file-drop').textContent = '📎 ' + prepared.uploadFile.name;
       }
+      if (!document.getElementById('upload-event-at').value && prepared.capturedAt) {
+        document.getElementById('upload-event-at').value = prepared.capturedAt;
+      }
+      refreshUploadPhotoStatus();
+      refreshUploadSubmitState();
       refreshRenameNotes();
     });
 
@@ -5471,7 +5903,7 @@
         const base64 = draft.file ? await resizeWithOrientation(draft.file, 1920) : null;
         const result = await withGAS('saveMapData', withEditToken({
           base64: base64,
-          filename: draft.file ? draft.file.name : '',
+          filename: draft.filename,
           title: draft.title,
           description: draft.description,
           eventAt: draft.eventAt,
@@ -5503,6 +5935,8 @@
           status: draft.status || '未対応',
           tags: draft.tags || []
         }));
+        cachePinFolderUrl_(result.id, result.folderUrl || '');
+        clearUploadPhotoState();
         closeOverlay('upload-overlay');
         renderPins();
         renderSidePanel();
@@ -5550,9 +5984,13 @@
     function getUploadDraft() {
       const title = document.getElementById('upload-title').value.trim();
       if (!title) throw new Error('タイトルは必須です');
+      if (state.upload.converting) throw new Error('HEIC写真の変換が完了するまでお待ちください。');
+      if (state.upload.conversionError) throw new Error('HEIC写真の変換に失敗したため保存できません。写真を選び直してください。');
+      if (state.upload.originalFile && !state.upload.uploadFile) throw new Error('写真の準備が完了していません。');
       const tags = normalizeTags(document.getElementById('upload-tags').value);
       return {
-        file: state.upload.file,
+        file: state.upload.uploadFile,
+        filename: state.upload.uploadFile ? state.upload.uploadFile.name : '',
         title: title,
         description: document.getElementById('upload-desc').value.trim(),
         eventAt: document.getElementById('upload-event-at').value,
@@ -5576,7 +6014,7 @@
           return;
         }
         if (draft.file && (state.upload.lat == null || state.upload.lng == null)) {
-          openLocationChoice('写真に GPS 情報がありません。今すぐ配置するか、未配置で保存してください。', () => beginPlacement({ mode: 'new', draft: draft }), () => saveNewPin(draft, null).catch(showAsyncError_));
+          openLocationChoice(locationMessageForMetadataStatus(state.upload.metadataStatus), () => beginPlacement({ mode: 'new', draft: draft }), () => saveNewPin(draft, null).catch(showAsyncError_));
           return;
         }
         const lat = state.upload.lat;

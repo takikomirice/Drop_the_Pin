@@ -294,7 +294,7 @@ test('Code.js validates route_cache rows against the shared route cache key', ()
   assertIncludes(codeJs, "const ROUTE_CACHE_HEADERS = ['cacheKey', 'routeId', 'coordsJson', 'provider', 'createdAt', 'expiresAt'];");
   assertIncludes(codeJs, "const SHARED_ROAD_ROUTE_CACHE_PROVIDER = 'osrm';");
   assertIncludes(codeJs, 'function getRouteCacheSheetForRead_()');
-  assertIncludes(codeJs, 'return openDataSpreadsheet_().getSheetByName(ROUTE_CACHE_SHEET_NAME);');
+  assertIncludes(codeJs, 'return getRequiredSheet_(ROUTE_CACHE_SHEET_NAME);');
   assertIncludes(codeJs, 'function readLatestRouteCacheEntryByCacheKey_(cacheKey)');
   assertIncludes(codeJs, 'function buildSharedRoadRouteCacheKey_(group, pinById, provider)');
   assertIncludes(codeJs, 'roundSharedRouteCacheCoord_(entry.latLng[0])');

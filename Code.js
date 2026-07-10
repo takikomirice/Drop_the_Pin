@@ -112,12 +112,13 @@ const PinData = (function() {
   }
 
   function buildFileNameForSave(title, originalName, shouldSync) {
-    const baseName = shouldSync && String(title || '').trim()
-      ? String(title).trim()
-      : String(originalName || 'image');
-    const extensionMatch = String(originalName || '').match(/(\.[^.]+)$/);
-    const extension = extensionMatch ? extensionMatch[1] : '';
-    return extension && !/\.[^.]+$/.test(baseName) ? baseName + extension : baseName;
+    const original = String(originalName || 'image');
+    const normalizedTitle = String(title || '').trim();
+    if (!shouldSync || !normalizedTitle) return original;
+    const extensionMatch = original.match(/(\.[^.]+)$/);
+    if (!extensionMatch) return normalizedTitle;
+    const titleWithoutExtension = normalizedTitle.replace(/\.(?:jpe?g|png|gif|webp|heic|heif)$/i, '') || 'image';
+    return titleWithoutExtension + extensionMatch[1];
   }
 
   function toNumberOrNull(value) {
@@ -203,6 +204,7 @@ const DEFAULT_ROUTE_COLOR = '#1e88e5';
 const MAX_ROUTE_PINS = 100;
 const EDIT_KEY_CONFIG_KEY = 'EDIT_KEY';
 const WEB_APP_URL_CONFIG_KEY = 'WEB_APP_URL';
+const EDIT_URL_CONFIG_KEY = 'EDIT_URL';
 const EDIT_TOKEN_TTL_SECONDS = 6 * 60 * 60;
 const EDIT_TOKEN_CACHE_PREFIX = 'EDIT_TOKEN_';
 const SHARE_LINKS_HEADERS = ['createdAt', 'label', 'token', 'tags', 'tagMode', 'enabled', 'revokedAt', 'colors', 'routeIds'];
@@ -214,6 +216,11 @@ const SHARE_ROUTE_NONE_SENTINEL = '__share_no_routes__';
 const SAFE_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const ROUTE_LINE_STYLES = { solid: true, dashed: true, dotted: true };
 const PIN_TITLE_MAX_LENGTH = 80;
+const SPREADSHEET_MUTATION_LOCK_TIMEOUT_MS = 5000;
+const SPREADSHEET_MUTATION_BUSY_ERROR = '別の更新処理が実行中です。少し待ってから再試行してください。';
+const PIN_DELETE_CONFLICT_ERROR = '削除対象のピンが更新されています。画面を再読み込みしてから再試行してください。';
+// RangeList のリクエストサイズを抑え、大量更新時の実行安定性を保つ。
+const RANGE_LIST_CHUNK_SIZE = 500;
 
 // ============================================================
 //  メニュー / 初期設定
@@ -224,7 +231,7 @@ function onOpen() {
     .createMenu('設定')
     .addItem('初期設定', 'setupSheet')
     .addItem('WebアプリURLを設定', 'promptWebAppUrl')
-    .addItem('編集URLを表示', 'showEditUrlDialog')
+    .addItem('編集URLを更新・開く', 'refreshAndOpenEditUrl')
     .addItem('編集キーを再生成', 'regenerateEditKeyFromMenu')
     .addToUi();
 }
@@ -283,7 +290,7 @@ function setupSheet() {
     '写真を保存するGoogleドライブフォルダのURL（フォルダを右クリック→共有→リンクをコピー）');
   ensureConfigEntry_(configSheet, 'RENAME_FILE_WITH_TITLE', 'false',
     'true の場合、タイトル編集時に Drive 上の写真名も同じタイトルへ更新');
-  ensureEditUrlConfig_(configSheet);
+  refreshEditUrlConfig_(configSheet);
   ensureShareLinksSheet_(ss);
   ensureHeaderSheet_(ss, ROUTES_SHEET_NAME, ROUTES_HEADERS);
   ensureHeaderSheet_(ss, ROUTE_PINS_SHEET_NAME, ROUTE_PINS_HEADERS);
@@ -362,6 +369,18 @@ function assertEditToken_(payload) {
   }
 }
 
+function withSpreadsheetMutationLock_(callback) {
+  const lock = LockService.getScriptLock();
+  let acquired = false;
+  try {
+    acquired = lock.tryLock(SPREADSHEET_MUTATION_LOCK_TIMEOUT_MS);
+    if (!acquired) return { ok: false, error: SPREADSHEET_MUTATION_BUSY_ERROR };
+    return callback();
+  } finally {
+    if (acquired) lock.releaseLock();
+  }
+}
+
 function normalizeWebAppUrl_(url) {
   var normalized = String(url || '').trim();
   if (!normalized) return '';
@@ -377,6 +396,8 @@ function ensureEditUrlConfig_(configSheet) {
   if (!sheet) throw new Error('config シートが見つかりません');
   ensureConfigEntry_(sheet, EDIT_KEY_CONFIG_KEY, generateEditKey_, '編集URL用の共有キー');
   ensureConfigEntry_(sheet, WEB_APP_URL_CONFIG_KEY, '', 'デプロイ済みWebアプリの /exec URL');
+  ensureConfigEntry_(sheet, EDIT_URL_CONFIG_KEY, '',
+    '編集用WebアプリURL。知っている人は編集できるため、共有範囲に注意してください。');
   return sheet;
 }
 
@@ -387,22 +408,43 @@ function getConfiguredWebAppUrl_() {
 }
 
 function buildEditUrl_() {
-  ensureEditUrlConfig_();
-  const config = getAppConfig_();
-  const editKey = String(config[EDIT_KEY_CONFIG_KEY] || '').trim();
-  const webAppUrl = getConfiguredWebAppUrl_();
-  if (!editKey) throw new Error('EDIT_KEY が設定されていません');
-  if (!webAppUrl) throw new Error('WebアプリURLが取得できません');
-  return webAppUrl + '?mode=edit&editKey=' + encodeURIComponent(editKey);
+  const result = refreshEditUrlConfig_();
+  if (!result.url) throw new Error('WebアプリURLが取得できません');
+  return result.url;
 }
 
-function escapeHtml_(value) {
-  return String(value == null ? '' : value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+function refreshEditUrlConfig_(configSheet) {
+  const sheet = ensureEditUrlConfig_(configSheet);
+  const lastRow = sheet.getLastRow();
+  const rows = sheet.getRange(2, 1, lastRow - 1, 3).getValues();
+  const config = {};
+  const rowNumbers = {};
+  rows.forEach(function(row, index) {
+    const key = String(row[0] || '');
+    if (!key || rowNumbers[key]) return;
+    config[key] = String(row[1] || '');
+    rowNumbers[key] = index + 2;
+  });
+
+  const editKey = String(config[EDIT_KEY_CONFIG_KEY] || '').trim();
+  let webAppUrl = normalizeWebAppUrl_(config[WEB_APP_URL_CONFIG_KEY]);
+  if (!webAppUrl) {
+    try {
+      webAppUrl = normalizeWebAppUrl_(ScriptApp.getService().getUrl());
+    } catch (error) {
+      webAppUrl = '';
+    }
+  }
+
+  const editUrl = editKey && webAppUrl
+    ? webAppUrl + '?mode=edit&editKey=' + encodeURIComponent(editKey)
+    : '';
+  const editUrlCell = sheet.getRange(rowNumbers[EDIT_URL_CONFIG_KEY], 2);
+  editUrlCell.setValue(editUrl);
+  if (typeof editUrlCell.setShowHyperlink === 'function') {
+    editUrlCell.setShowHyperlink(true);
+  }
+  return { url: editUrl, row: rowNumbers[EDIT_URL_CONFIG_KEY] };
 }
 
 function promptWebAppUrl() {
@@ -416,21 +458,23 @@ function promptWebAppUrl() {
   if (response.getSelectedButton() !== ui.Button.OK) return;
   const normalizedUrl = normalizeWebAppUrl_(response.getResponseText());
   setConfigValue_(WEB_APP_URL_CONFIG_KEY, normalizedUrl);
+  refreshEditUrlConfig_();
   ui.alert('保存しました', normalizedUrl || 'WEB_APP_URL を空欄にしました。', ui.ButtonSet.OK);
 }
 
-function showEditUrlDialog() {
+function refreshAndOpenEditUrl() {
   const ui = SpreadsheetApp.getUi();
-  const editUrl = buildEditUrl_();
-  const html = HtmlService.createHtmlOutput(
-    '<div style="font-family:sans-serif;line-height:1.6;padding:12px;">' +
-      '<p>このURLをClassroomなどで共同編集者に共有してください。</p>' +
-      '<p>EDIT_KEYを変更しない限り、同じ編集URLを継続して使えます。</p>' +
-      '<p>開きっぱなしで編集できなくなった場合は、このURLを再読み込みしてください。</p>' +
-      '<input style="box-sizing:border-box;width:100%;font-size:13px;padding:8px;" readonly value="' + escapeHtml_(editUrl) + '">' +
-    '</div>'
-  ).setWidth(640).setHeight(260);
-  ui.showModalDialog(html, '編集URL');
+  const result = refreshEditUrlConfig_();
+  const configSheet = openDataSpreadsheet_().getSheetByName(CONFIG_SHEET_NAME);
+  configSheet.activate();
+  configSheet.getRange(result.row, 2).activate();
+  if (!result.url) {
+    ui.alert('編集URLを生成できません', 'WEB_APP_URLを設定するか、Webアプリをデプロイしてください。', ui.ButtonSet.OK);
+  }
+}
+
+function showEditUrlDialog() {
+  refreshAndOpenEditUrl();
 }
 
 function regenerateEditKeyFromMenu() {
@@ -443,7 +487,8 @@ function regenerateEditKeyFromMenu() {
   );
   if (result !== ui.Button.YES) return;
   setConfigValue_(EDIT_KEY_CONFIG_KEY, generateEditKey_());
-  ui.alert('編集キーを再生成しました', '新しい編集URLを表示して共有し直してください。', ui.ButtonSet.OK);
+  refreshEditUrlConfig_();
+  ui.alert('編集キーを再生成しました', 'configシートの EDIT_URL を共有し直してください。', ui.ButtonSet.OK);
 }
 
 function issueEditTokenFromRequest_(params) {
@@ -513,20 +558,93 @@ function openMapInfoSheet_() {
   return sheet;
 }
 
+function getRequiredSheet_(sheetName) {
+  const sheet = openDataSpreadsheet_().getSheetByName(sheetName);
+  if (!sheet) {
+    throw new Error(sheetName + ' シートが見つかりません。setupSheet() を実行してください。');
+  }
+  return sheet;
+}
+
 function openShareLinksSheet_() {
-  return ensureShareLinksSheet_(openDataSpreadsheet_());
+  return getRequiredSheet_(SHARE_LINKS_SHEET_NAME);
 }
 
 function openRoutesSheet_() {
-  return ensureHeaderSheet_(openDataSpreadsheet_(), ROUTES_SHEET_NAME, ROUTES_HEADERS);
+  return getRequiredSheet_(ROUTES_SHEET_NAME);
 }
 
 function openRoutePinsSheet_() {
-  return ensureHeaderSheet_(openDataSpreadsheet_(), ROUTE_PINS_SHEET_NAME, ROUTE_PINS_HEADERS);
+  return getRequiredSheet_(ROUTE_PINS_SHEET_NAME);
 }
 
 function openRouteCacheSheet_() {
-  return ensureHeaderSheet_(openDataSpreadsheet_(), ROUTE_CACHE_SHEET_NAME, ROUTE_CACHE_HEADERS);
+  return getRequiredSheet_(ROUTE_CACHE_SHEET_NAME);
+}
+
+function readFixedWidthDataRows_(sheet, columnCount) {
+  const dataRowCount = Math.max(0, sheet.getLastRow() - 1);
+  if (dataRowCount === 0) return [];
+
+  const actualColumnCount = Math.max(columnCount, sheet.getLastColumn());
+  return sheet.getRange(2, 1, dataRowCount, actualColumnCount).getValues();
+}
+
+function readFormulaPreservingDataRows_(sheet, columnCount) {
+  const dataRowCount = Math.max(0, sheet.getLastRow() - 1);
+  if (dataRowCount === 0) return { values: [], outputRows: [] };
+
+  const actualColumnCount = Math.max(columnCount, sheet.getLastColumn());
+  const range = sheet.getRange(2, 1, dataRowCount, actualColumnCount);
+  const values = range.getValues();
+  const formulas = range.getFormulas();
+  const outputRows = values.map(function(row, rowIndex) {
+    return row.map(function(value, columnIndex) {
+      return formulas[rowIndex][columnIndex] || value;
+    });
+  });
+  return { values: values, outputRows: outputRows };
+}
+
+function rewriteFixedWidthDataRows_(sheet, columnCount, previousRowCount, nextRows) {
+  const writeRowCount = Math.max(previousRowCount, nextRows.length);
+  if (writeRowCount === 0) return;
+
+  const actualColumnCount = Math.max(columnCount, sheet.getLastColumn());
+  const output = nextRows.map(function(row) {
+    const copied = new Array(actualColumnCount).fill('');
+    for (var i = 0; i < Math.min(row.length, actualColumnCount); i += 1) {
+      copied[i] = row[i];
+    }
+    return copied;
+  });
+  while (output.length < writeRowCount) {
+    output.push(new Array(actualColumnCount).fill(''));
+  }
+
+  const requiredRows = writeRowCount + 1;
+  if (requiredRows > sheet.getMaxRows()) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), requiredRows - sheet.getMaxRows());
+  }
+  // row 1 はヘッダー。旧件数まで空行を含めた1回の書込みで末尾残留も消す。
+  sheet.getRange(2, 1, writeRowCount, actualColumnCount).setValues(output);
+}
+
+function filterAndRewriteFixedWidthDataRows_(sheet, columnCount, shouldRemove) {
+  const snapshot = readFormulaPreservingDataRows_(sheet, columnCount);
+  const keptRows = [];
+  const removedRows = [];
+  snapshot.values.forEach(function(row, index) {
+    if (shouldRemove(row, index)) {
+      removedRows.push(row);
+    } else {
+      keptRows.push(snapshot.outputRows[index]);
+    }
+  });
+  if (removedRows.length > 0) {
+    rewriteFixedWidthDataRows_(sheet, columnCount, snapshot.values.length, keptRows);
+  }
+  return { keptRows: keptRows, removedRows: removedRows };
 }
 
 function ensureShareLinksSheet_(spreadsheet) {
@@ -691,9 +809,11 @@ function shareRowToLink_(row) {
 }
 
 function findPinRowIndex_(sheet, id) {
-  const rows = sheet.getDataRange().getValues();
-  return rows.findIndex(function(row) {
-    return row[8] === id;
+  const lastRow = sheet.getLastRow();
+  if (lastRow === 0) return -1;
+  const ids = sheet.getRange(1, 9, lastRow, 1).getValues();
+  return ids.findIndex(function(row) {
+    return row[0] === id;
   });
 }
 
@@ -774,6 +894,35 @@ function getMapData() {
   return pins.map(function(pin) {
     return enrichPinWithDriveMeta_(pin);
   });
+}
+
+function getPinDriveMeta(payload) {
+  assertEditToken_(payload);
+  const pinId = String(payload && payload.pinId || '').trim();
+  if (!pinId) return { ok: false, folderUrl: '', error: 'missing_pin_id' };
+
+  const sheet = openMapInfoSheet_();
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return { ok: false, folderUrl: '', error: 'pin_not_found' };
+
+  const pinDriveRows = sheet.getRange(2, 7, lastRow - 1, 3).getValues();
+  const pinDriveRow = pinDriveRows.find(function(row) {
+    return row[2] === pinId;
+  });
+  if (!pinDriveRow) return { ok: false, folderUrl: '', error: 'pin_not_found' };
+
+  const fileId = String(pinDriveRow[0] || '').trim();
+  if (!fileId) return { ok: true, folderUrl: '' };
+
+  try {
+    return { ok: true, folderUrl: getParentFolderUrlByFileId_(fileId) };
+  } catch (error) {
+    if (typeof Logger !== 'undefined' && Logger.log) {
+      Logger.log('getPinDriveMeta: pinId=' + pinId + ' drive lookup failed: ' +
+        (error && error.message ? error.message : error));
+    }
+    return { ok: false, folderUrl: '', error: 'drive_meta_unavailable' };
+  }
 }
 
 function normalizeRouteId_(value) {
@@ -909,6 +1058,19 @@ function findRouteRow_(routeId) {
   return null;
 }
 
+function findRouteSheetRow_(routeId) {
+  const normalizedRouteId = normalizeRouteId_(routeId);
+  if (!normalizedRouteId) return null;
+  const sheet = openRoutesSheet_();
+  const rows = readFixedWidthDataRows_(sheet, ROUTES_HEADERS.length);
+  for (var i = 0; i < rows.length; i += 1) {
+    if (normalizeRouteId_(rows[i][0]) === normalizedRouteId) {
+      return { rowNumber: i + 2, row: rows[i] };
+    }
+  }
+  return null;
+}
+
 function getRouteGroups() {
   return readRouteRows_().map(function(entry, index) {
     const group = entry.group;
@@ -947,11 +1109,8 @@ function saveRouteGroup(payload) {
   }
 
   const routeId = requestedRouteId || Utilities.getUuid();
-  const existing = requestedRouteId ? findRouteRow_(routeId) : null;
-
   const nameResult = normalizeRouteName_(data.name, routeId);
   if (!nameResult.ok) return { ok: false, error: nameResult.error };
-
   const closed = normalizeRouteClosed_(data.closed);
   const rawStartPinId = normalizeRoutePinId_(data.startPinId);
   const rawEndPinId = normalizeRoutePinId_(data.endPinId);
@@ -959,48 +1118,52 @@ function saveRouteGroup(payload) {
     logRouteNormalize_('closed route endPinId cleared', routeId);
   }
   const endPinId = closed ? null : rawEndPinId;
-
-  const existingPinIds = existing ? existing.group.pinIds : [];
-  const pinIdSet = {};
-  existingPinIds.forEach(function(pinId) { pinIdSet[pinId] = true; });
-  if (rawStartPinId && !pinIdSet[rawStartPinId]) {
-    return { ok: false, error: 'invalid_start_pin', pinId: rawStartPinId };
-  }
-  if (endPinId && !pinIdSet[endPinId]) {
-    return { ok: false, error: 'invalid_end_pin', pinId: endPinId };
-  }
-
-  const sheet = openRoutesSheet_();
-  const now = currentUpdatedAt_();
   const orderIndex = Number(data.orderIndex);
-  const existingOrderIndex = existing ? Number(existing.row[9]) : NaN;
-  const group = {
-    routeId: routeId,
-    name: nameResult.value,
-    color: normalizeRouteColor_(data.color, routeId),
-    routeMode: normalizeRouteMode_(data.routeMode, routeId),
-    closed: closed,
-    startPinId: rawStartPinId,
-    endPinId: endPinId,
-    createdAt: existing ? String(existing.row[7] || now) : now,
-    updatedAt: now,
-    orderIndex: Number.isFinite(orderIndex)
-      ? orderIndex
-      : (Number.isFinite(existingOrderIndex) ? existingOrderIndex : readRouteRows_().length),
-    visible: normalizeRouteDisplayEnabled_(data.visible),
-    showNumbers: normalizeRouteDisplayEnabled_(data.showNumbers),
-    showLine: normalizeRouteDisplayEnabled_(data.showLine),
-    lineStyle: normalizeRouteLineStyle_(data.lineStyle, routeId)
-  };
 
-  if (existing) {
-    sheet.getRange(existing.rowNumber, 1, 1, ROUTES_HEADERS.length).setValues([routeGroupToRow_(group)]);
-  } else {
-    sheet.appendRow(routeGroupToRow_(group));
-  }
+  return withSpreadsheetMutationLock_(function() {
+    const existing = requestedRouteId ? findRouteRow_(routeId) : null;
 
-  const saved = routeRowToGroup_(routeGroupToRow_(group), existingPinIds);
-  return { ok: true, routeGroup: saved };
+    const existingPinIds = existing ? existing.group.pinIds : [];
+    const pinIdSet = {};
+    existingPinIds.forEach(function(pinId) { pinIdSet[pinId] = true; });
+    if (rawStartPinId && !pinIdSet[rawStartPinId]) {
+      return { ok: false, error: 'invalid_start_pin', pinId: rawStartPinId };
+    }
+    if (endPinId && !pinIdSet[endPinId]) {
+      return { ok: false, error: 'invalid_end_pin', pinId: endPinId };
+    }
+
+    const sheet = openRoutesSheet_();
+    const now = currentUpdatedAt_();
+    const existingOrderIndex = existing ? Number(existing.row[9]) : NaN;
+    const group = {
+      routeId: routeId,
+      name: nameResult.value,
+      color: normalizeRouteColor_(data.color, routeId),
+      routeMode: normalizeRouteMode_(data.routeMode, routeId),
+      closed: closed,
+      startPinId: rawStartPinId,
+      endPinId: endPinId,
+      createdAt: existing ? String(existing.row[7] || now) : now,
+      updatedAt: now,
+      orderIndex: Number.isFinite(orderIndex)
+        ? orderIndex
+        : (Number.isFinite(existingOrderIndex) ? existingOrderIndex : readRouteRows_().length),
+      visible: normalizeRouteDisplayEnabled_(data.visible),
+      showNumbers: normalizeRouteDisplayEnabled_(data.showNumbers),
+      showLine: normalizeRouteDisplayEnabled_(data.showLine),
+      lineStyle: normalizeRouteLineStyle_(data.lineStyle, routeId)
+    };
+
+    if (existing) {
+      sheet.getRange(existing.rowNumber, 1, 1, ROUTES_HEADERS.length).setValues([routeGroupToRow_(group)]);
+    } else {
+      sheet.appendRow(routeGroupToRow_(group));
+    }
+
+    const saved = routeRowToGroup_(routeGroupToRow_(group), existingPinIds);
+    return { ok: true, routeGroup: saved };
+  });
 }
 
 function getExistingPinIdSet_() {
@@ -1040,24 +1203,30 @@ function setRoutePins(data) {
   assertEditToken_(data);
   const routeId = normalizeRouteId_(data && data.routeId);
   if (!routeId) return { ok: false, error: 'missing_route_id' };
-  if (!findRouteRow_(routeId)) return { ok: false, error: 'route_not_found' };
+  return withSpreadsheetMutationLock_(function() {
+    if (!findRouteSheetRow_(routeId)) return { ok: false, error: 'route_not_found' };
 
-  const validation = validateRoutePinIds_(data && data.pinIds);
-  if (!validation.ok) return validation;
+    const validation = validateRoutePinIds_(data && data.pinIds);
+    if (!validation.ok) return validation;
 
-  const sheet = openRoutePinsSheet_();
-  const rows = sheet.getLastRow() > 0 ? sheet.getDataRange().getValues() : [];
-  for (var i = rows.length - 1; i >= 1; i -= 1) {
-    if (normalizeRouteId_(rows[i][0]) === routeId) {
-      sheet.deleteRow(i + 1);
-    }
-  }
-
-  const now = currentUpdatedAt_();
-  validation.pinIds.forEach(function(pinId, index) {
-    sheet.appendRow([routeId, pinId, index, now, now]);
+    const sheet = openRoutePinsSheet_();
+    const snapshot = readFormulaPreservingDataRows_(sheet, ROUTE_PINS_HEADERS.length);
+    const keptRows = snapshot.outputRows.filter(function(_row, index) {
+      const row = snapshot.values[index];
+      return normalizeRouteId_(row[0]) !== routeId;
+    });
+    const now = currentUpdatedAt_();
+    const replacementRows = validation.pinIds.map(function(pinId, index) {
+      return [routeId, pinId, index, now, now];
+    });
+    rewriteFixedWidthDataRows_(
+      sheet,
+      ROUTE_PINS_HEADERS.length,
+      snapshot.values.length,
+      keptRows.concat(replacementRows)
+    );
+    return { ok: true, routeId: routeId, pinIds: validation.pinIds };
   });
-  return { ok: true, routeId: routeId, pinIds: validation.pinIds };
 }
 
 function deleteRoutePinsForRoute_(routeId) {
@@ -1065,15 +1234,12 @@ function deleteRoutePinsForRoute_(routeId) {
   if (!normalizedRouteId) return [];
 
   const sheet = openRoutePinsSheet_();
-  const rows = sheet.getLastRow() > 0 ? sheet.getDataRange().getValues() : [];
-  const removedRouteIds = {};
-  for (var i = rows.length - 1; i >= 1; i -= 1) {
-    if (normalizeRouteId_(rows[i][0]) === normalizedRouteId) {
-      removedRouteIds[normalizedRouteId] = true;
-      sheet.deleteRow(i + 1);
-    }
-  }
-  return Object.keys(removedRouteIds);
+  const result = filterAndRewriteFixedWidthDataRows_(
+    sheet,
+    ROUTE_PINS_HEADERS.length,
+    function(row) { return normalizeRouteId_(row[0]) === normalizedRouteId; }
+  );
+  return result.removedRows.length > 0 ? [normalizedRouteId] : [];
 }
 
 function deleteRoutePinsForPinIds_(pinIds) {
@@ -1086,18 +1252,60 @@ function deleteRoutePinsForPinIds_(pinIds) {
   });
   if (Object.keys(pinIdSet).length === 0) return [];
 
-  const sheet = openRoutePinsSheet_();
-  const rows = sheet.getLastRow() > 0 ? sheet.getDataRange().getValues() : [];
+  const prepared = prepareRoutePinDeletionForPinIdSet_(pinIdSet);
+  commitPreparedRoutePinDeletion_(prepared);
+  return prepared.affectedRouteIds;
+}
+
+function prepareRoutePinDeletionForPinIdSet_(pinIdSet) {
   const affectedRouteIds = {};
-  for (var i = rows.length - 1; i >= 1; i -= 1) {
-    const routeId = normalizeRouteId_(rows[i][0]);
-    const pinId = normalizeRoutePinId_(rows[i][1]);
+  const sheet = openRoutePinsSheet_();
+  const snapshot = readFormulaPreservingDataRows_(sheet, ROUTE_PINS_HEADERS.length);
+  const keptRows = [];
+  let removedCount = 0;
+  snapshot.values.forEach(function(row, index) {
+    const routeId = normalizeRouteId_(row[0]);
+    const pinId = normalizeRoutePinId_(row[1]);
     if (pinId && pinIdSet[pinId]) {
+      removedCount += 1;
       if (routeId) affectedRouteIds[routeId] = true;
-      sheet.deleteRow(i + 1);
+    } else {
+      keptRows.push(snapshot.outputRows[index]);
     }
-  }
-  return Object.keys(affectedRouteIds);
+  });
+  return {
+    sheet: sheet,
+    previousRowCount: snapshot.values.length,
+    keptRows: keptRows,
+    removedCount: removedCount,
+    affectedRouteIds: Object.keys(affectedRouteIds)
+  };
+}
+
+function commitPreparedRoutePinDeletion_(prepared) {
+  if (!prepared || prepared.removedCount === 0) return;
+  rewriteFixedWidthDataRows_(
+    prepared.sheet,
+    ROUTE_PINS_HEADERS.length,
+    prepared.previousRowCount,
+    prepared.keptRows
+  );
+}
+
+function deletePinRelationsAndCaches_(pinIds) {
+  if (!Array.isArray(pinIds) || pinIds.length === 0) return [];
+  const pinIdSet = {};
+  pinIds.forEach(function(pinId) {
+    const normalizedPinId = normalizeRoutePinId_(pinId);
+    if (normalizedPinId) pinIdSet[normalizedPinId] = true;
+  });
+  if (Object.keys(pinIdSet).length === 0) return [];
+
+  const prepared = prepareRoutePinDeletionForPinIdSet_(pinIdSet);
+  // cacheを先に消し、後段失敗時もroute_pinsから再試行対象routeを再構築できるようにする。
+  invalidateRouteCacheForRoutes_(prepared.affectedRouteIds);
+  commitPreparedRoutePinDeletion_(prepared);
+  return prepared.affectedRouteIds;
 }
 
 function findRouteIdsByPinIds_(pinIds) {
@@ -1195,18 +1403,20 @@ function putRouteCache(data) {
   if (!routeId) return { ok: false, error: 'missing_route_id' };
   if (coords.length < 2) return { ok: false, error: 'invalid_coords' };
 
-  const sheet = openRouteCacheSheet_();
-  const createdAt = currentUpdatedAt_();
-  const row = [cacheKey, routeId, JSON.stringify(coords), provider, createdAt, ''];
-  const rows = sheet.getLastRow() > 0 ? sheet.getDataRange().getValues() : [];
-  for (var i = 1; i < rows.length; i += 1) {
-    if (normalizeRouteCacheKey_(rows[i][0]) === cacheKey) {
-      sheet.getRange(i + 1, 1, 1, ROUTE_CACHE_HEADERS.length).setValues([row]);
-      return { ok: true, cacheKey: cacheKey, routeId: routeId, provider: provider, createdAt: createdAt };
+  return withSpreadsheetMutationLock_(function() {
+    const sheet = openRouteCacheSheet_();
+    const createdAt = currentUpdatedAt_();
+    const row = [cacheKey, routeId, JSON.stringify(coords), provider, createdAt, ''];
+    const rows = sheet.getLastRow() > 0 ? sheet.getDataRange().getValues() : [];
+    for (var i = 1; i < rows.length; i += 1) {
+      if (normalizeRouteCacheKey_(rows[i][0]) === cacheKey) {
+        sheet.getRange(i + 1, 1, 1, ROUTE_CACHE_HEADERS.length).setValues([row]);
+        return { ok: true, cacheKey: cacheKey, routeId: routeId, provider: provider, createdAt: createdAt };
+      }
     }
-  }
-  sheet.appendRow(row);
-  return { ok: true, cacheKey: cacheKey, routeId: routeId, provider: provider, createdAt: createdAt };
+    sheet.appendRow(row);
+    return { ok: true, cacheKey: cacheKey, routeId: routeId, provider: provider, createdAt: createdAt };
+  });
 }
 
 function deleteRouteCacheRowsForRouteIds_(routeIds) {
@@ -1220,15 +1430,12 @@ function deleteRouteCacheRowsForRouteIds_(routeIds) {
   if (Object.keys(routeIdSet).length === 0) return 0;
 
   const sheet = openRouteCacheSheet_();
-  const rows = sheet.getLastRow() > 0 ? sheet.getDataRange().getValues() : [];
-  let deletedCount = 0;
-  for (var i = rows.length - 1; i >= 1; i -= 1) {
-    if (routeIdSet[normalizeRouteId_(rows[i][1])]) {
-      sheet.deleteRow(i + 1);
-      deletedCount += 1;
-    }
-  }
-  return deletedCount;
+  const result = filterAndRewriteFixedWidthDataRows_(
+    sheet,
+    ROUTE_CACHE_HEADERS.length,
+    function(row) { return Boolean(routeIdSet[normalizeRouteId_(row[1])]); }
+  );
+  return result.removedRows.length;
 }
 
 function invalidateRouteCacheForRoutes_(routeIds) {
@@ -1243,18 +1450,22 @@ function invalidateRouteCacheForPin(data) {
   assertEditToken_(data);
   const pinId = normalizeRoutePinId_(data && data.pinId);
   if (!pinId) return { ok: false, error: 'missing_pin_id' };
-  return { ok: true, deleted: invalidateRouteCacheForPins_([pinId]) };
+  return withSpreadsheetMutationLock_(function() {
+    return { ok: true, deleted: invalidateRouteCacheForPins_([pinId]) };
+  });
 }
 
 function invalidateRouteCacheForRoute(data) {
   assertEditToken_(data);
   const routeId = normalizeRouteId_(data && data.routeId);
   if (!routeId) return { ok: false, error: 'missing_route_id' };
-  return { ok: true, deleted: invalidateRouteCacheForRoutes_([routeId]) };
+  return withSpreadsheetMutationLock_(function() {
+    return { ok: true, deleted: invalidateRouteCacheForRoutes_([routeId]) };
+  });
 }
 
 function getRouteCacheSheetForRead_() {
-  return openDataSpreadsheet_().getSheetByName(ROUTE_CACHE_SHEET_NAME);
+  return getRequiredSheet_(ROUTE_CACHE_SHEET_NAME);
 }
 
 function parseRouteCacheTimestamp_(value) {
@@ -1486,14 +1697,20 @@ function deleteRouteGroup(data) {
   const routeId = normalizeRouteId_(data && typeof data === 'object' ? (data.routeId || data.id) : data);
   if (!routeId) return { ok: false, error: 'missing_route_id' };
 
-  const sheet = openRoutesSheet_();
-  const existing = findRouteRow_(routeId);
-  if (!existing) return { ok: false, error: 'route_not_found' };
+  return withSpreadsheetMutationLock_(function() {
+    const sheet = openRoutesSheet_();
+    const existing = findRouteSheetRow_(routeId);
+    if (!existing) {
+      invalidateRouteCacheForRoutes_([routeId]);
+      deleteRoutePinsForRoute_(routeId);
+      return { ok: false, error: 'route_not_found' };
+    }
 
-  sheet.deleteRow(existing.rowNumber);
-  deleteRoutePinsForRoute_(routeId);
-  invalidateRouteCacheForRoutes_([routeId]);
-  return { ok: true };
+    sheet.deleteRow(existing.rowNumber);
+    invalidateRouteCacheForRoutes_([routeId]);
+    deleteRoutePinsForRoute_(routeId);
+    return { ok: true };
+  });
 }
 
 function updateRoutesOrder(data) {
@@ -1512,30 +1729,55 @@ function updateRoutesOrder(data) {
     orderedIds.push(routeId);
   }
 
-  const sheet = openRoutesSheet_();
-  const rows = readRouteRows_();
-  const byId = {};
-  rows.forEach(function(entry) {
-    byId[entry.group.routeId] = entry;
-  });
-  for (var j = 0; j < orderedIds.length; j += 1) {
-    if (!byId[orderedIds[j]]) {
-      return { ok: false, error: 'route_not_found', routeId: orderedIds[j] };
+  return withSpreadsheetMutationLock_(function() {
+    const sheet = openRoutesSheet_();
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) {
+      if (orderedIds.length > 0) {
+        return { ok: false, error: 'route_not_found', routeId: orderedIds[0] };
+      }
+      return { ok: true, routeGroups: getRouteGroups() };
     }
-  }
 
-  let orderIndex = 0;
-  orderedIds.forEach(function(routeId) {
-    sheet.getRange(byId[routeId].rowNumber, 10).setValue(orderIndex);
-    orderIndex += 1;
-  });
-  rows.forEach(function(entry) {
-    if (seen[entry.group.routeId]) return;
-    sheet.getRange(entry.rowNumber, 10).setValue(orderIndex);
-    orderIndex += 1;
-  });
+    const routeValues = sheet.getRange(2, 1, lastRow - 1, ROUTES_HEADERS.length).getValues();
+    const entries = [];
+    const byId = {};
+    routeValues.forEach(function(row, index) {
+      const routeId = normalizeRouteId_(row[0]);
+      if (!routeId) return;
+      const entry = { routeId: routeId, rowOffset: index };
+      entries.push(entry);
+      byId[routeId] = entry;
+    });
+    for (var j = 0; j < orderedIds.length; j += 1) {
+      if (!byId[orderedIds[j]]) {
+        return { ok: false, error: 'route_not_found', routeId: orderedIds[j] };
+      }
+    }
+    if (entries.length === 0) {
+      return { ok: true, routeGroups: getRouteGroups() };
+    }
 
-  return { ok: true, routeGroups: getRouteGroups() };
+    const orderedEntries = orderedIds.map(function(routeId) {
+      return byId[routeId];
+    });
+    entries.forEach(function(entry) {
+      if (!seen[entry.routeId]) orderedEntries.push(entry);
+    });
+
+    const orderRange = sheet.getRange(2, 10, lastRow - 1, 1);
+    const orderValues = orderRange.getValues();
+    const orderFormulas = orderRange.getFormulas();
+    const output = orderValues.map(function(row, index) {
+      return [orderFormulas[index][0] || row[0]];
+    });
+    orderedEntries.forEach(function(entry, index) {
+      output[entry.rowOffset][0] = index;
+    });
+    orderRange.setValues(output);
+
+    return { ok: true, routeGroups: getRouteGroups() };
+  });
 }
 
 function buildSharedViewUrl_(token) {
@@ -1935,42 +2177,65 @@ function updatePinDetails(data) {
   if (!data || !data.id) return { ok: false, error: 'missing id' };
   if (!String(data.title || '').trim()) return { ok: false, error: 'title is required' };
 
-  const sheet = openMapInfoSheet_();
-  const rowIndex = findPinRowIndex_(sheet, data.id);
-  if (rowIndex === -1) return { ok: false, error: 'id not found' };
-
-  const sheetRow = rowIndex + 1;
-  const row = sheet.getRange(sheetRow, 1, 1, MAP_INFO_COLUMN_COUNT).getValues()[0];
   const title = String(data.title).trim();
-  const links = PinData.normalizeLinks(data.links || data.referenceUrls || []);
+  let renameFileId = '';
+  const result = withSpreadsheetMutationLock_(function() {
+    const sheet = openMapInfoSheet_();
+    const rowIndex = findPinRowIndex_(sheet, data.id);
+    if (rowIndex < 1) return { ok: false, error: 'id not found' };
 
-  sheet.getRange(sheetRow, 2, 1, 2).setValues([[title, String(data.description || '')]]);
-  sheet.getRange(sheetRow, 6).setValue(data.color || row[5] || DEFAULT_COLOR);
-  sheet.getRange(sheetRow, 10).setValue(PinData.serializeLinks(links));
-  sheet.getRange(sheetRow, MAP_INFO_ICON_COLUMN).setValue(PinData.normalizeIcon(data.icon != null ? data.icon : row[14]));
-  if (data.eventAt != null) {
-    sheet.getRange(sheetRow, MAP_INFO_EVENT_AT_COLUMN).setValue(PinData.normalizeEventAt(data.eventAt));
-  }
+    const sheetRow = rowIndex + 1;
+    const range = sheet.getRange(sheetRow, 1, 1, MAP_INFO_COLUMN_COUNT);
+    const row = range.getValues()[0];
+    const formulas = range.getFormulas()[0];
+    const output = row.map(function(value, index) {
+      return formulas[index] || value;
+    });
+    let links = PinData.normalizeLinks(row[9] || '');
 
-  if (data.status != null) {
-    sheet.getRange(sheetRow, 11).setValue(PinData.normalizeStatus(String(data.status)));
-  }
-  if (data.tags != null) {
-    sheet.getRange(sheetRow, 12).setValue(PinData.serializeTags(data.tags));
-  }
-  const updatedAt = currentUpdatedAt_();
-  sheet.getRange(sheetRow, MAP_INFO_UPDATED_AT_COLUMN).setValue(updatedAt);
+    output[1] = title;
+    if (Object.prototype.hasOwnProperty.call(data, 'description')) {
+      output[2] = String(data.description || '');
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'color')) {
+      output[5] = data.color || row[5] || DEFAULT_COLOR;
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(data, 'links') ||
+      Object.prototype.hasOwnProperty.call(data, 'referenceUrls')
+    ) {
+      links = PinData.normalizeLinks(data.links || data.referenceUrls || []);
+      output[9] = PinData.serializeLinks(links);
+    }
+    output[14] = PinData.normalizeIcon(data.icon != null ? data.icon : row[14]);
+    if (Object.prototype.hasOwnProperty.call(data, 'eventAt') && data.eventAt != null) {
+      output[12] = PinData.normalizeEventAt(data.eventAt);
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'status') && data.status != null) {
+      output[10] = PinData.normalizeStatus(String(data.status));
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'tags') && data.tags != null) {
+      output[11] = PinData.serializeTags(data.tags);
+    }
+    const updatedAt = currentUpdatedAt_();
+    output[13] = updatedAt;
+    range.setValues([output]);
 
-  if (getRenameFileWithTitle_() && row[6]) {
-    renameDriveFileForTitle_(row[6], title);
-  }
+    if (getRenameFileWithTitle_() && row[6]) {
+      renameFileId = String(row[6]);
+    }
+    return {
+      ok: true,
+      updatedAt: updatedAt,
+      links: links,
+      folderUrl: ''
+    };
+  });
 
-  return {
-    ok: true,
-    updatedAt: updatedAt,
-    links: links,
-    folderUrl: row[6] ? getParentFolderUrlByFileId_(row[6]) : ''
-  };
+  if (result.ok && renameFileId) {
+    renameDriveFileForTitle_(renameFileId, title);
+  }
+  return result;
 }
 
 function movePin(data) {
@@ -1978,29 +2243,34 @@ function movePin(data) {
   if (!data || !data.id) return { ok: false, error: 'missing id' };
   if (data.lat == null || data.lng == null) return { ok: false, error: 'missing lat/lng' };
 
-  const sheet = openMapInfoSheet_();
-  const rowIndex = findPinRowIndex_(sheet, data.id);
-  if (rowIndex === -1) return { ok: false, error: 'id not found' };
+  return withSpreadsheetMutationLock_(function() {
+    const sheet = openMapInfoSheet_();
+    const rowIndex = findPinRowIndex_(sheet, data.id);
+    if (rowIndex < 1) return { ok: false, error: 'id not found' };
 
-  const sheetRow = rowIndex + 1;
-  sheet.getRange(sheetRow, 4, 1, 2).setValues([[Number(data.lat), Number(data.lng)]]);
-  sheet.getRange(sheetRow, MAP_INFO_UPDATED_AT_COLUMN).setValue(currentUpdatedAt_());
-  invalidateRouteCacheForPins_([data.id]);
-  return { ok: true };
+    const sheetRow = rowIndex + 1;
+    sheet.getRange(sheetRow, 4, 1, 2).setValues([[Number(data.lat), Number(data.lng)]]);
+    sheet.getRange(sheetRow, MAP_INFO_UPDATED_AT_COLUMN).setValue(currentUpdatedAt_());
+    invalidateRouteCacheForPins_([data.id]);
+    return { ok: true };
+  });
 }
 
 function unplacePin(data) {
   assertEditToken_(data);
   if (!data || !data.id) return { ok: false, error: 'missing id' };
 
-  const sheet = openMapInfoSheet_();
-  const rowIndex = findPinRowIndex_(sheet, data.id);
-  if (rowIndex === -1) return { ok: false, error: 'id not found' };
+  return withSpreadsheetMutationLock_(function() {
+    const sheet = openMapInfoSheet_();
+    const rowIndex = findPinRowIndex_(sheet, data.id);
+    if (rowIndex < 1) return { ok: false, error: 'id not found' };
 
-  const sheetRow = rowIndex + 1;
-  sheet.getRange(sheetRow, 4, 1, 2).setValues([['', '']]);
-  sheet.getRange(sheetRow, MAP_INFO_UPDATED_AT_COLUMN).setValue(currentUpdatedAt_());
-  return { ok: true };
+    const sheetRow = rowIndex + 1;
+    sheet.getRange(sheetRow, 4, 1, 2).setValues([['', '']]);
+    sheet.getRange(sheetRow, MAP_INFO_UPDATED_AT_COLUMN).setValue(currentUpdatedAt_());
+    invalidateRouteCacheForPins_([data.id]);
+    return { ok: true };
+  });
 }
 
 function bulkUpdatePinStatus(data) {
@@ -2008,26 +2278,113 @@ function bulkUpdatePinStatus(data) {
   if (!data || !Array.isArray(data.ids) || data.ids.length === 0) {
     return { ok: false, error: 'ids must be a non-empty array' };
   }
+  let status;
   try {
-    PinData.normalizeStatus(String(data.status || ''));
+    status = PinData.normalizeStatus(String(data.status || ''));
   } catch (_e) {
     return { ok: false, error: 'invalid status: ' + data.status };
   }
-  const status = String(data.status).trim();
   if (!status) return { ok: false, error: 'status is required' };
+  const targetIds = new Set(data.ids);
 
-  const sheet = openMapInfoSheet_();
-  const rows = sheet.getDataRange().getValues();
-  let updatedCount = 0;
-  const updatedAt = currentUpdatedAt_();
-  data.ids.forEach(function(id) {
-    const rowIndex = rows.findIndex(function(row) { return row[8] === id; });
-    if (rowIndex === -1) return;
-    sheet.getRange(rowIndex + 1, 11).setValue(status);
-    sheet.getRange(rowIndex + 1, MAP_INFO_UPDATED_AT_COLUMN).setValue(updatedAt);
-    updatedCount += 1;
+  return withSpreadsheetMutationLock_(function() {
+    const sheet = openMapInfoSheet_();
+    const rows = sheet.getDataRange().getValues();
+    const statusRanges = [];
+    const updatedAtRanges = [];
+    const updatedAt = currentUpdatedAt_();
+
+    for (var rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
+      if (!targetIds.has(rows[rowIndex][8])) continue;
+      const sheetRow = rowIndex + 1;
+      statusRanges.push('K' + sheetRow);
+      updatedAtRanges.push('N' + sheetRow);
+    }
+    if (statusRanges.length === 0) return { ok: true, updatedCount: 0 };
+
+    for (var offset = 0; offset < statusRanges.length; offset += RANGE_LIST_CHUNK_SIZE) {
+      sheet.getRangeList(statusRanges.slice(offset, offset + RANGE_LIST_CHUNK_SIZE)).setValue(status);
+      sheet.getRangeList(updatedAtRanges.slice(offset, offset + RANGE_LIST_CHUNK_SIZE)).setValue(updatedAt);
+    }
+    return { ok: true, updatedCount: statusRanges.length };
   });
-  return { ok: true, updatedCount: updatedCount };
+}
+
+function logPinDeleteStage_(pinId, stage) {
+  if (typeof Logger === 'undefined' || !Logger.log) return;
+  const safePinId = String(pinId || '').replace(/[\r\n]/g, ' ');
+  Logger.log('pin_delete: stage=' + String(stage || '') + ' pinId=' + safePinId);
+}
+
+function normalizePinDeleteRequestIds_(requestedIds) {
+  const seen = {};
+  const result = [];
+  (Array.isArray(requestedIds) ? requestedIds : []).forEach(function(id) {
+    const pinId = String(id == null ? '' : id);
+    if (!pinId || seen[pinId]) return;
+    seen[pinId] = true;
+    result.push(pinId);
+  });
+  return result;
+}
+
+function buildPinDeleteSnapshots_(rows, requestedIds) {
+  const targetIds = new Set(normalizePinDeleteRequestIds_(requestedIds));
+  const seen = {};
+  const snapshots = [];
+  for (var rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex] || [];
+    const pinId = String(row[8] == null ? '' : row[8]);
+    if (!targetIds.has(pinId) || seen[pinId]) continue;
+    seen[pinId] = true;
+    snapshots.push({
+      pinId: pinId,
+      fileId: String(row[6] || ''),
+      originalRowNumber: rowIndex + 1
+    });
+  }
+  return snapshots.sort(function(a, b) {
+    return b.originalRowNumber - a.originalRowNumber;
+  });
+}
+
+function indexCurrentPinDeleteRows_(rows) {
+  const byId = {};
+  for (var rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex] || [];
+    const pinId = String(row[8] == null ? '' : row[8]);
+    if (!pinId || byId[pinId]) continue;
+    byId[pinId] = {
+      pinId: pinId,
+      fileId: String(row[6] || ''),
+      rowNumber: rowIndex + 1
+    };
+  }
+  return byId;
+}
+
+function groupContiguousPinDeleteRows_(entries) {
+  const sorted = entries.slice().sort(function(a, b) {
+    return a.rowNumber - b.rowNumber;
+  });
+  const runs = [];
+  sorted.forEach(function(entry) {
+    const current = runs[runs.length - 1];
+    if (current && entry.rowNumber === current.startRow + current.entries.length) {
+      current.entries.push(entry);
+      return;
+    }
+    runs.push({ startRow: entry.rowNumber, entries: [entry] });
+  });
+  return runs.reverse();
+}
+
+function logDriveSuccessesAfterLockFailure_(snapshots) {
+  snapshots.forEach(function(snapshot) {
+    if (snapshot.fileId) {
+      logPinDeleteStage_(snapshot.pinId, 'spreadsheet_lock_failed_after_drive');
+    }
+  });
 }
 
 function deletePin(data) {
@@ -2035,24 +2392,52 @@ function deletePin(data) {
   if (!data || !data.id) return { ok: false, error: 'missing id' };
 
   const sheet = openMapInfoSheet_();
-  const rowIndex = findPinRowIndex_(sheet, data.id);
-  if (rowIndex === -1) return { ok: false, error: 'id not found' };
+  const rows = sheet.getDataRange().getValues();
+  const snapshots = buildPinDeleteSnapshots_(rows, [data.id]);
+  if (snapshots.length === 0) {
+    const missingPinId = String(data.id);
+    return withSpreadsheetMutationLock_(function() {
+      const currentRows = sheet.getDataRange().getValues();
+      const currentById = indexCurrentPinDeleteRows_(currentRows);
+      if (currentById[missingPinId]) {
+        logPinDeleteStage_(missingPinId, 'appeared_after_snapshot');
+        return { ok: false, error: PIN_DELETE_CONFLICT_ERROR };
+      }
+      deletePinRelationsAndCaches_([missingPinId]);
+      return { ok: false, error: 'id not found' };
+    });
+  }
+  const snapshot = snapshots[0];
 
-  const sheetRow = rowIndex + 1;
-  const row = sheet.getRange(sheetRow, 1, 1, 10).getValues()[0];
-  const fileId = row[6] || '';
-  if (fileId) {
+  if (snapshot.fileId) {
     try {
-      DriveApp.getFileById(fileId).setTrashed(true);
+      DriveApp.getFileById(snapshot.fileId).setTrashed(true);
     } catch (error) {
       return { ok: false, error: '写真の削除に失敗しました: ' + error.message };
     }
   }
 
-  sheet.deleteRow(sheetRow);
-  const affectedRouteIds = deleteRoutePinsForPinIds_([data.id]);
-  invalidateRouteCacheForRoutes_(affectedRouteIds);
-  return { ok: true };
+  const result = withSpreadsheetMutationLock_(function() {
+    const currentRows = sheet.getDataRange().getValues();
+    const currentById = indexCurrentPinDeleteRows_(currentRows);
+    const current = currentById[snapshot.pinId];
+    if (!current) {
+      deletePinRelationsAndCaches_([snapshot.pinId]);
+      return { ok: true };
+    }
+    if (current.fileId !== snapshot.fileId) {
+      logPinDeleteStage_(snapshot.pinId, 'file_id_conflict');
+      return { ok: false, error: PIN_DELETE_CONFLICT_ERROR };
+    }
+
+    sheet.deleteRow(current.rowNumber);
+    deletePinRelationsAndCaches_([snapshot.pinId]);
+    return { ok: true };
+  });
+  if (result && result.error === SPREADSHEET_MUTATION_BUSY_ERROR) {
+    logDriveSuccessesAfterLockFailure_([snapshot]);
+  }
+  return result;
 }
 
 function bulkDeletePins(data) {
@@ -2063,52 +2448,92 @@ function bulkDeletePins(data) {
 
   const sheet = openMapInfoSheet_();
   const rows = sheet.getDataRange().getValues();
+  const requestedPinIds = normalizePinDeleteRequestIds_(data.ids);
+  const snapshots = buildPinDeleteSnapshots_(rows, data.ids);
+  const driveSuccessfulSnapshots = [];
+  const failedIdSet = {};
 
-  // id → rowIndex のマッピングを作成
-  // findPinRowIndex_ は呼び出しごとに getDataRange() を行うため、
-  // バッチ処理ではここで一括取得した rows を使って検索する
-  const rowIndexMap = {};
-  data.ids.forEach(function(id) {
-    const rowIndex = rows.findIndex(function(row) { return row[8] === id; });
-    if (rowIndex !== -1) {
-      rowIndexMap[id] = rowIndex;
-    }
-  });
-
-  // deleteRow で行番号がずれるため、行番号の大きい順（逆順）に処理する
-  const sortedEntries = Object.keys(rowIndexMap)
-    .map(function(id) { return [id, rowIndexMap[id]]; })
-    .sort(function(a, b) { return b[1] - a[1]; });
-
-  let deletedCount = 0;
-  const failedIds = [];
-
-  sortedEntries.forEach(function(entry) {
-    const id = entry[0];
-    const rowIndex = entry[1];
-    const sheetRow = rowIndex + 1;
+  snapshots.forEach(function(snapshot) {
     try {
-      const row = sheet.getRange(sheetRow, 1, 1, 10).getValues()[0];
-      const fileId = row[6] || '';
-      if (fileId) {
-        DriveApp.getFileById(fileId).setTrashed(true);
+      if (snapshot.fileId) {
+        DriveApp.getFileById(snapshot.fileId).setTrashed(true);
       }
-      sheet.deleteRow(sheetRow);
-      deletedCount += 1;
-    } catch (error) {
-      Logger.log('bulkDeletePins: failed for id=' + id + ' — ' + error.message);
-      failedIds.push(id);
+      driveSuccessfulSnapshots.push(snapshot);
+    } catch (_error) {
+      failedIdSet[snapshot.pinId] = true;
+      logPinDeleteStage_(snapshot.pinId, 'drive_delete_failed');
     }
   });
 
-  if (deletedCount > 0) {
-    const affectedRouteIds = deleteRoutePinsForPinIds_(sortedEntries
-      .filter(function(entry) { return failedIds.indexOf(entry[0]) === -1; })
-      .map(function(entry) { return entry[0]; }));
-    invalidateRouteCacheForRoutes_(affectedRouteIds);
+  const snapshotIdSet = {};
+  snapshots.forEach(function(snapshot) { snapshotIdSet[snapshot.pinId] = true; });
+  const initiallyMissingPinIds = requestedPinIds.filter(function(pinId) {
+    return !snapshotIdSet[pinId];
+  });
+  if (driveSuccessfulSnapshots.length === 0 && initiallyMissingPinIds.length === 0) {
+    return {
+      ok: true,
+      deletedCount: 0,
+      failedIds: snapshots.filter(function(snapshot) {
+        return failedIdSet[snapshot.pinId];
+      }).map(function(snapshot) { return snapshot.pinId; })
+    };
   }
 
-  return { ok: true, deletedCount: deletedCount, failedIds: failedIds };
+  const result = withSpreadsheetMutationLock_(function() {
+    const currentRows = sheet.getDataRange().getValues();
+    const currentById = indexCurrentPinDeleteRows_(currentRows);
+    const currentEntries = [];
+    driveSuccessfulSnapshots.forEach(function(snapshot) {
+      const current = currentById[snapshot.pinId];
+      if (!current) return;
+      if (current.fileId !== snapshot.fileId) {
+        failedIdSet[snapshot.pinId] = true;
+        logPinDeleteStage_(snapshot.pinId, 'file_id_conflict');
+        return;
+      }
+      currentEntries.push({
+        pinId: snapshot.pinId,
+        fileId: current.fileId,
+        rowNumber: current.rowNumber
+      });
+    });
+    const deletedIds = [];
+
+    groupContiguousPinDeleteRows_(currentEntries).forEach(function(run) {
+      try {
+        sheet.deleteRows(run.startRow, run.entries.length);
+        run.entries.forEach(function(entry) { deletedIds.push(entry.pinId); });
+      } catch (_error) {
+        run.entries.forEach(function(entry) {
+          failedIdSet[entry.pinId] = true;
+          logPinDeleteStage_(entry.pinId, 'spreadsheet_delete_failed');
+        });
+      }
+    });
+
+    const cleanupIds = deletedIds.slice();
+    requestedPinIds.forEach(function(pinId) {
+      if (!currentById[pinId] && cleanupIds.indexOf(pinId) === -1) {
+        cleanupIds.push(pinId);
+      }
+    });
+    if (cleanupIds.length > 0) {
+      deletePinRelationsAndCaches_(cleanupIds);
+    }
+
+    return {
+      ok: true,
+      deletedCount: deletedIds.length,
+      failedIds: snapshots.filter(function(snapshot) {
+        return failedIdSet[snapshot.pinId];
+      }).map(function(snapshot) { return snapshot.pinId; })
+    };
+  });
+  if (result && result.error === SPREADSHEET_MUTATION_BUSY_ERROR) {
+    logDriveSuccessesAfterLockFailure_(driveSuccessfulSnapshots);
+  }
+  return result;
 }
 
 function getAppSettings() {
@@ -2152,13 +2577,9 @@ function renameDriveFileForTitle_(fileId, title) {
 }
 
 function getParentFolderUrlByFileId_(fileId) {
-  try {
-    const parents = DriveApp.getFileById(fileId).getParents();
-    if (!parents.hasNext()) return '';
-    return getDriveFolderUrl_(parents.next().getId());
-  } catch (_error) {
-    return '';
-  }
+  const parents = DriveApp.getFileById(fileId).getParents();
+  if (!parents.hasNext()) return '';
+  return getDriveFolderUrl_(parents.next().getId());
 }
 
 function enrichPinWithDriveMeta_(pin) {
@@ -2166,7 +2587,7 @@ function enrichPinWithDriveMeta_(pin) {
   Object.keys(pin).forEach(function(key) {
     enriched[key] = pin[key];
   });
-  enriched.folderUrl = pin.fileId ? getParentFolderUrlByFileId_(pin.fileId) : '';
+  enriched.folderUrl = '';
   return enriched;
 }
 
