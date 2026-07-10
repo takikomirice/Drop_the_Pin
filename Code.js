@@ -112,12 +112,13 @@ const PinData = (function() {
   }
 
   function buildFileNameForSave(title, originalName, shouldSync) {
-    const baseName = shouldSync && String(title || '').trim()
-      ? String(title).trim()
-      : String(originalName || 'image');
-    const extensionMatch = String(originalName || '').match(/(\.[^.]+)$/);
-    const extension = extensionMatch ? extensionMatch[1] : '';
-    return extension && !/\.[^.]+$/.test(baseName) ? baseName + extension : baseName;
+    const original = String(originalName || 'image');
+    const normalizedTitle = String(title || '').trim();
+    if (!shouldSync || !normalizedTitle) return original;
+    const extensionMatch = original.match(/(\.[^.]+)$/);
+    if (!extensionMatch) return normalizedTitle;
+    const titleWithoutExtension = normalizedTitle.replace(/\.(?:jpe?g|png|gif|webp|heic|heif)$/i, '') || 'image';
+    return titleWithoutExtension + extensionMatch[1];
   }
 
   function toNumberOrNull(value) {

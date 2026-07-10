@@ -97,6 +97,7 @@ function createHarness(options = {}) {
     renderColorFilterUI() {},
     renderIconFilterUI() {},
     renderTagFilterUI() {},
+    clearUploadPhotoState() {},
     document: {
       getElementById: (id) => {
         if (id === 'pin-detail-drive') return detailDrive;

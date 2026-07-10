@@ -81,3 +81,18 @@ test('application loads Leaflet, OpenStreetMap tiles, and exif-js', () => {
   assertIncludes(indexHtml, 'https://cdn.jsdelivr.net/npm/exif-js@2.3.0');
   assertIncludes(indexHtml, 'https://router.project-osrm.org/route/v1/driving/');
 });
+
+test('README documents HEIC conversion, metadata caveats, licenses, and device checks', () => {
+  assertIncludes(readme, 'HEIC / HEIF');
+  assertIncludes(readme, 'JPEG へ変換してから Google Drive へ保存');
+  assertIncludes(readme, '共有方法');
+  assertIncludes(readme, 'heic-to@1.5.2');
+  assertIncludes(readme, 'ExifReader@4.41.0');
+  assertIncludes(readme, 'GPS付きiPhone HEIC');
+  assertIncludes(readme, 'GPSなしiPhone HEIC');
+  assertIncludes(readme, 'GPS付きJPEG');
+  assertIncludes(readme, 'Chrome または Edge');
+  assertIncludes(readme, 'Safari');
+  assertIncludes(readme, '写真を外して再選択');
+  assertIncludes(readme, '未配置保存と自動配置');
+});
