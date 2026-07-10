@@ -38,12 +38,15 @@ function createAudit() {
   return {
     reads: [],
     writes: [],
+    dataRangeCalls: [],
     rangeListCalls: [],
     rangeListSets: [],
     driveCalls: [],
+    logs: [],
     lock: {
       held: false,
       available: true,
+      availabilitySequence: [],
       tryCalls: [],
       releaseCalls: 0,
       nestedAttempts: 0,
@@ -57,14 +60,25 @@ function createSheet(name, rows, formulas, audit) {
     name,
     rows: cloneMatrix(rows),
     formulas: cloneMatrix(formulas || rows.map((row) => row.map(() => ''))),
+    maxRows: rows.length,
     failNextSetValues: false,
+    failDeleteRowsStarts: new Set(),
     getLastRow() {
-      return this.rows.length;
+      for (let index = Math.max(this.rows.length, this.formulas.length) - 1; index >= 0; index -= 1) {
+        const values = this.rows[index] || [];
+        const formulasRow = this.formulas[index] || [];
+        if (values.some((value) => value !== '' && value != null)
+          || formulasRow.some((value) => value !== '' && value != null)) {
+          return index + 1;
+        }
+      }
+      return 0;
     },
     getLastColumn() {
       return this.rows.reduce((max, row) => Math.max(max, row.length), 0);
     },
     getDataRange() {
+      audit.dataRangeCalls.push({ sheet: name, lockHeld: audit.lock.held });
       return createRange(this, 1, 1, Math.max(1, this.getLastRow()), Math.max(1, this.getLastColumn()), audit);
     },
     getRange(row, column, numRows = 1, numColumns = 1) {
@@ -91,9 +105,32 @@ function createSheet(name, rows, formulas, audit) {
       };
     },
     appendRow(row) {
-      this.rows.push(row.slice());
-      this.formulas.push(row.map(() => ''));
-      audit.writes.push({ sheet: name, method: 'appendRow', lockHeld: audit.lock.held });
+      const rowIndex = this.getLastRow();
+      this.rows[rowIndex] = row.slice();
+      this.formulas[rowIndex] = row.map(() => '');
+      this.maxRows = Math.max(this.maxRows, rowIndex + 1);
+      audit.writes.push({ sheet: name, method: 'appendRow', values: row.slice(), lockHeld: audit.lock.held });
+    },
+    getMaxRows() {
+      return this.maxRows;
+    },
+    insertRowsAfter(afterPosition, howMany) {
+      assert.equal(afterPosition, this.maxRows);
+      this.maxRows += howMany;
+      audit.writes.push({ sheet: name, method: 'insertRowsAfter', afterPosition, howMany, lockHeld: audit.lock.held });
+    },
+    deleteRow(rowPosition) {
+      this.rows.splice(rowPosition - 1, 1);
+      this.formulas.splice(rowPosition - 1, 1);
+      this.maxRows = Math.max(0, this.maxRows - 1);
+      audit.writes.push({ sheet: name, method: 'deleteRow', row: rowPosition, count: 1, lockHeld: audit.lock.held });
+    },
+    deleteRows(startRow, howMany) {
+      audit.writes.push({ sheet: name, method: 'deleteRows', row: startRow, count: howMany, lockHeld: audit.lock.held });
+      if (this.failDeleteRowsStarts.has(startRow)) throw new Error('simulated deleteRows failure');
+      this.rows.splice(startRow - 1, howMany);
+      this.formulas.splice(startRow - 1, howMany);
+      this.maxRows = Math.max(0, this.maxRows - howMany);
     }
   };
   return sheet;
@@ -115,9 +152,10 @@ function setCell(sheet, rowIndex, columnIndex, value, formula) {
 function createRange(sheet, row, column, numRows, numColumns, audit) {
   function matrixFrom(source) {
     return Array.from({ length: numRows }, (_, rowOffset) =>
-      Array.from({ length: numColumns }, (_, columnOffset) =>
-        (source[row - 1 + rowOffset] || [])[column - 1 + columnOffset] || ''
-      )
+      Array.from({ length: numColumns }, (_, columnOffset) => {
+        const value = (source[row - 1 + rowOffset] || [])[column - 1 + columnOffset];
+        return value == null ? '' : value;
+      })
     );
   }
 
@@ -152,6 +190,15 @@ function createRange(sheet, row, column, numRows, numColumns, audit) {
         });
       });
       return this;
+    },
+    clearContent() {
+      audit.writes.push({ sheet: sheet.name, method: 'clearContent', row, column, numRows, numColumns, lockHeld: audit.lock.held });
+      for (let rowOffset = 0; rowOffset < numRows; rowOffset += 1) {
+        for (let columnOffset = 0; columnOffset < numColumns; columnOffset += 1) {
+          setCell(sheet, row - 1 + rowOffset, column - 1 + columnOffset, '', '');
+        }
+      }
+      return this;
     }
   };
 }
@@ -180,9 +227,28 @@ function routeRow(id, orderIndex, name = id) {
   return [id, name, '#1e88e5', 'straight', false, '', '', '', '', orderIndex, true, true, true, 'solid'];
 }
 
+function routePinRow(routeId, pinId, pinOrder = 0, createdAt = 'created', updatedAt = 'updated') {
+  return [routeId, pinId, pinOrder, createdAt, updatedAt];
+}
+
+function routeCacheRow(cacheKey, routeId, coordsJson = '[[35,139],[36,140]]', provider = 'osrm', createdAt = '2026-07-10T00:00:00.000Z', expiresAt = '') {
+  return [cacheKey, routeId, coordsJson, provider, createdAt, expiresAt];
+}
+
+function nonEmptyDataRows(sheet) {
+  return sheet.rows.slice(1, sheet.getLastRow()).map((row) => row.slice());
+}
+
+function writesFor(audit, sheetName, method) {
+  return audit.writes.filter((write) => write.sheet === sheetName && (!method || write.method === method));
+}
+
 function createHarness(options = {}) {
   const audit = createAudit();
   audit.lock.available = options.lockAvailable !== false;
+  audit.lock.availabilitySequence = Array.isArray(options.lockAvailabilitySequence)
+    ? options.lockAvailabilitySequence.slice()
+    : [];
   const mapRows = options.mapRows || [MAP_INFO_HEADERS, mapRow()];
   const routeRows = options.routeRows || [ROUTES_HEADERS];
   const sheets = {
@@ -192,10 +258,13 @@ function createHarness(options = {}) {
       ['RENAME_FILE_WITH_TITLE', options.renameFileWithTitle ? 'true' : 'false', '']
     ], null, audit),
     routes: createSheet('routes', routeRows, options.routeFormulas, audit),
-    route_pins: createSheet('route_pins', options.routePinRows || [ROUTE_PINS_HEADERS], null, audit),
-    route_cache: createSheet('route_cache', [ROUTE_CACHE_HEADERS], null, audit),
-    share_links: createSheet('share_links', [['createdAt', 'label', 'token', 'tags', 'tagMode', 'enabled', 'revokedAt', 'colors', 'routeIds']], null, audit)
+    route_pins: createSheet('route_pins', options.routePinRows || [ROUTE_PINS_HEADERS], options.routePinFormulas, audit),
+    route_cache: createSheet('route_cache', options.routeCacheRows || [ROUTE_CACHE_HEADERS], options.routeCacheFormulas, audit),
+    share_links: createSheet('share_links', options.shareRows || [['createdAt', 'label', 'token', 'tags', 'tagMode', 'enabled', 'revokedAt', 'colors', 'routeIds']], null, audit)
   };
+  Object.entries(options.failDeleteRowsStarts || {}).forEach(([sheetName, starts]) => {
+    (starts || []).forEach((start) => sheets[sheetName].failDeleteRowsStarts.add(start));
+  });
   const spreadsheet = {
     getSheetByName(name) {
       return sheets[name] || null;
@@ -203,12 +272,18 @@ function createHarness(options = {}) {
   };
   const lock = {
     tryLock(timeoutMs) {
+      if (typeof options.beforeLockAttempt === 'function') {
+        options.beforeLockAttempt({ attempt: audit.lock.tryCalls.length + 1, sheets, audit });
+      }
       audit.lock.tryCalls.push(timeoutMs);
       if (audit.lock.held) {
         audit.lock.nestedAttempts += 1;
         return false;
       }
-      if (!audit.lock.available) return false;
+      const available = audit.lock.availabilitySequence.length > 0
+        ? audit.lock.availabilitySequence.shift()
+        : audit.lock.available;
+      if (!available) return false;
       audit.lock.held = true;
       audit.lock.maxDepth = Math.max(audit.lock.maxDepth, 1);
       return true;
@@ -221,14 +296,17 @@ function createHarness(options = {}) {
   };
   const driveFiles = {};
   (options.mapRows || mapRows).slice(1).forEach((row) => {
-    if (row[6]) driveFiles[row[6]] = { name: options.driveFileName || 'original.jpg' };
+    if (row[6]) driveFiles[row[6]] = { name: options.driveFileName || 'original.jpg', trashed: false };
+  });
+  Object.entries(options.driveFiles || {}).forEach(([fileId, value]) => {
+    driveFiles[fileId] = { name: value.name || 'original.jpg', trashed: value.trashed === true };
   });
   const context = {
     console,
     Date,
     JSON,
     Set,
-    Logger: { log() {} },
+    Logger: { log(message) { audit.logs.push(String(message)); } },
     Session: { getScriptTimeZone: () => 'Asia/Tokyo' },
     Utilities: {
       getUuid: () => 'generated-id',
@@ -242,7 +320,7 @@ function createHarness(options = {}) {
     DriveApp: {
       getFileById(fileId) {
         audit.driveCalls.push({ method: 'getFileById', fileId, lockHeld: audit.lock.held });
-        const file = driveFiles[fileId] || { name: 'unknown.jpg' };
+        const file = driveFiles[fileId] || (driveFiles[fileId] = { name: 'unknown.jpg', trashed: false });
         return {
           getName() {
             audit.driveCalls.push({ method: 'getName', fileId, lockHeld: audit.lock.held });
@@ -252,6 +330,13 @@ function createHarness(options = {}) {
             audit.driveCalls.push({ method: 'setName', fileId, name, lockHeld: audit.lock.held });
             if (options.driveRenameError) throw new Error('simulated Drive rename failure');
             file.name = name;
+          },
+          setTrashed(trashed) {
+            audit.driveCalls.push({ method: 'setTrashed', fileId, trashed, lockHeld: audit.lock.held });
+            if ((options.driveTrashErrors || []).includes(fileId)) {
+              throw new Error('simulated Drive trash failure');
+            }
+            file.trashed = trashed;
           }
         };
       }
@@ -265,7 +350,21 @@ globalThis.__writeBatchApi = {
   unplacePin,
   bulkUpdatePinStatus,
   updateRoutesOrder,
-  updatePin
+  updatePin,
+  saveRouteGroup,
+  setRoutePins,
+  deleteRoutePinsForRoute_,
+  deleteRoutePinsForPinIds_,
+  deleteRouteCacheRowsForRouteIds_,
+  putRouteCache,
+  invalidateRouteCacheForPin,
+  invalidateRouteCacheForRoute,
+  deleteRouteGroup,
+  deletePin,
+  bulkDeletePins,
+  getRouteCache,
+  readLatestRouteCacheEntryByCacheKey_,
+  getSharedRoadRouteCache
 };`, context);
 
   return { api: context.__writeBatchApi, audit, sheets, driveFiles };
@@ -581,4 +680,654 @@ test('updateRoutesOrder rejects duplicate and missing route IDs before writing',
   result = plain(harness.api.updateRoutesOrder(withEditToken({ orderedIds: ['missing'] })));
   assert.deepEqual(result, { ok: false, error: 'route_not_found', routeId: 'missing' });
   assert.equal(harness.audit.writes.length, 0);
+});
+
+test('setRoutePins replaces memberships with one padded fixed-width write and preserves the header and other routes', () => {
+  const originalHeader = ROUTE_PINS_HEADERS.slice();
+  const harness = createHarness({
+    routeRows: [ROUTES_HEADERS, routeRow('route-a', 0), routeRow('route-b', 1)],
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'new-pin' }), mapRow({ id: 'other-1' }), mapRow({ id: 'other-2' })],
+    routePinRows: [
+      ROUTE_PINS_HEADERS,
+      routePinRow('route-a', 'old-1', 0, 'old-created-1', 'old-updated-1'),
+      routePinRow('route-b', 'other-1', 0, 'keep-created-1', 'keep-updated-1'),
+      routePinRow('route-a', 'old-2', 1, 'old-created-2', 'old-updated-2'),
+      routePinRow('route-b', 'other-2', 1, 'keep-created-2', 'keep-updated-2'),
+      routePinRow('route-a', 'old-3', 2, 'old-created-3', 'old-updated-3')
+    ]
+  });
+
+  const result = plain(harness.api.setRoutePins(withEditToken({ routeId: 'route-a', pinIds: ['new-pin'] })));
+
+  assert.deepEqual(result, { ok: true, routeId: 'route-a', pinIds: ['new-pin'] });
+  assert.deepEqual(harness.sheets.route_pins.rows[0], originalHeader);
+  const rows = nonEmptyDataRows(harness.sheets.route_pins);
+  assert.deepEqual(rows.slice(0, 2), [
+    routePinRow('route-b', 'other-1', 0, 'keep-created-1', 'keep-updated-1'),
+    routePinRow('route-b', 'other-2', 1, 'keep-created-2', 'keep-updated-2')
+  ]);
+  assert.equal(rows[2][0], 'route-a');
+  assert.equal(rows[2][1], 'new-pin');
+  assert.equal(rows[2][2], 0);
+  assert.equal(rows[2][3], rows[2][4]);
+  assert.match(String(rows[2][3]), /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(writesFor(harness.audit, 'route_pins', 'setValues').length, 1);
+  assert.equal(writesFor(harness.audit, 'route_pins', 'deleteRow').length, 0);
+  assert.equal(writesFor(harness.audit, 'route_pins', 'deleteRows').length, 0);
+  assert.equal(writesFor(harness.audit, 'route_pins', 'appendRow').length, 0);
+  const rewrite = writesFor(harness.audit, 'route_pins', 'setValues')[0];
+  assert.deepEqual([rewrite.row, rewrite.column, rewrite.numRows, rewrite.numColumns], [2, 1, 5, 5]);
+  assert.deepEqual(plain(rewrite.values.slice(3)), [new Array(5).fill(''), new Array(5).fill('')]);
+  assert.equal(rewrite.lockHeld, true);
+  assert.equal(harness.audit.lock.tryCalls.length, 1);
+  assert.equal(harness.audit.lock.releaseCalls, 1);
+  assert.equal(harness.audit.lock.held, false);
+  assert.equal(harness.audit.dataRangeCalls.filter((call) => call.sheet === 'route_pins').length, 0);
+  assert.equal(harness.audit.reads.filter((read) => read.sheet === 'route_pins' && read.method === 'getValues').length, 1);
+  assert.equal(harness.audit.driveCalls.length, 0);
+});
+
+test('setRoutePins supports zero, one, multiple, and MAX_ROUTE_PINS memberships', () => {
+  function run(pinCount, existingRows = []) {
+    const pinIds = Array.from({ length: pinCount }, (_, index) => `pin-${index}`);
+    const harness = createHarness({
+      routeRows: [ROUTES_HEADERS, routeRow('route-a', 0)],
+      mapRows: [MAP_INFO_HEADERS].concat(pinIds.map((id) => mapRow({ id }))),
+      routePinRows: [ROUTE_PINS_HEADERS].concat(existingRows)
+    });
+    const result = plain(harness.api.setRoutePins(withEditToken({ routeId: 'route-a', pinIds })));
+    return { harness, result, pinIds };
+  }
+
+  let execution = run(0, [routePinRow('route-a', 'legacy', 0)]);
+  assert.deepEqual(execution.result, { ok: true, routeId: 'route-a', pinIds: [] });
+  assert.equal(execution.harness.sheets.route_pins.getLastRow(), 1);
+  assert.equal(writesFor(execution.harness.audit, 'route_pins', 'setValues').length, 1);
+
+  for (const count of [1, 3, 100]) {
+    execution = run(count);
+    assert.equal(execution.result.ok, true);
+    assert.deepEqual(execution.result.pinIds, execution.pinIds);
+    assert.deepEqual(nonEmptyDataRows(execution.harness.sheets.route_pins).map((row) => row[2]),
+      Array.from({ length: count }, (_, index) => index));
+    assert.equal(writesFor(execution.harness.audit, 'route_pins', 'setValues').length, 1);
+  }
+});
+
+test('setRoutePins route existence lookup uses the calculated routeId value without rewriting its formula', () => {
+  const routeRows = [ROUTES_HEADERS, routeRow('route-a', 0)];
+  const routeFormulas = routeRows.map((row) => row.map(() => ''));
+  routeFormulas[1][0] = '=CONCAT("route-","a")';
+  const harness = createHarness({
+    routeRows,
+    routeFormulas,
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a' })]
+  });
+
+  const result = plain(harness.api.setRoutePins(withEditToken({ routeId: 'route-a', pinIds: ['pin-a'] })));
+
+  assert.deepEqual(result, { ok: true, routeId: 'route-a', pinIds: ['pin-a'] });
+  assert.equal(harness.sheets.routes.formulas[1][0], '=CONCAT("route-","a")');
+  assert.equal(writesFor(harness.audit, 'routes').length, 0);
+});
+
+test('setRoutePins keeps validation errors and performs no write for invalid inputs', () => {
+  const baseOptions = {
+    routeRows: [ROUTES_HEADERS, routeRow('route-a', 0)],
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-1' })]
+  };
+
+  let harness = createHarness(baseOptions);
+  let result = plain(harness.api.setRoutePins(withEditToken({ routeId: 'route-a', pinIds: ['pin-1', 'pin-1'] })));
+  assert.deepEqual(result, { ok: false, error: 'pin_ids_duplicated', pinId: 'pin-1' });
+  assert.equal(writesFor(harness.audit, 'route_pins').length, 0);
+
+  harness = createHarness(baseOptions);
+  result = plain(harness.api.setRoutePins(withEditToken({ routeId: 'route-a', pinIds: ['missing'] })));
+  assert.deepEqual(result, { ok: false, error: 'pin_not_found', pinId: 'missing' });
+  assert.equal(writesFor(harness.audit, 'route_pins').length, 0);
+
+  harness = createHarness(baseOptions);
+  result = plain(harness.api.setRoutePins(withEditToken({ routeId: 'route-a', pinIds: null })));
+  assert.deepEqual(result, { ok: false, error: 'pin_ids_invalid' });
+  assert.equal(writesFor(harness.audit, 'route_pins').length, 0);
+
+  harness = createHarness(baseOptions);
+  result = plain(harness.api.setRoutePins(withEditToken({ routeId: 'missing', pinIds: [] })));
+  assert.deepEqual(result, { ok: false, error: 'route_not_found' });
+  assert.equal(writesFor(harness.audit, 'route_pins').length, 0);
+
+  const tooManyIds = Array.from({ length: 101 }, (_, index) => `pin-${index}`);
+  harness = createHarness({
+    routeRows: [ROUTES_HEADERS, routeRow('route-a', 0)],
+    mapRows: [MAP_INFO_HEADERS].concat(tooManyIds.map((id) => mapRow({ id })))
+  });
+  result = plain(harness.api.setRoutePins(withEditToken({ routeId: 'route-a', pinIds: tooManyIds })));
+  assert.deepEqual(result, { ok: false, error: 'too_many_pins' });
+  assert.equal(writesFor(harness.audit, 'route_pins').length, 0);
+});
+
+test('setRoutePins returns the shared busy error without Spreadsheet access and releases the lock after rewrite exceptions', () => {
+  let harness = createHarness({
+    lockAvailable: false,
+    routeRows: [ROUTES_HEADERS, routeRow('route-a', 0)]
+  });
+  let result = plain(harness.api.setRoutePins(withEditToken({ routeId: 'route-a', pinIds: [] })));
+  assert.deepEqual(result, { ok: false, error: '別の更新処理が実行中です。少し待ってから再試行してください。' });
+  assert.equal(harness.audit.reads.length, 0);
+  assert.equal(harness.audit.writes.length, 0);
+  assert.equal(harness.audit.lock.releaseCalls, 0);
+
+  harness = createHarness({
+    routeRows: [ROUTES_HEADERS, routeRow('route-a', 0)],
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-1' })]
+  });
+  harness.sheets.route_pins.failNextSetValues = true;
+  assert.throws(
+    () => harness.api.setRoutePins(withEditToken({ routeId: 'route-a', pinIds: ['pin-1'] })),
+    /simulated Spreadsheet write failure/
+  );
+  assert.equal(harness.audit.lock.held, false);
+  assert.equal(harness.audit.lock.releaseCalls, 1);
+});
+
+test('route_pins route and pin deletion use stable single rewrites and preserve headers', () => {
+  let harness = createHarness({ routePinRows: [
+    ROUTE_PINS_HEADERS,
+    routePinRow('route-a', 'pin-a', 0),
+    routePinRow('route-b', 'pin-a', 0, 'b-created', 'b-updated'),
+    routePinRow('route-a', 'pin-b', 1),
+    routePinRow('route-c', 'pin-c', 0, 'c-created', 'c-updated')
+  ] });
+
+  let removedRoutes = plain(harness.api.deleteRoutePinsForRoute_('route-a'));
+  assert.deepEqual(removedRoutes, ['route-a']);
+  assert.deepEqual(harness.sheets.route_pins.rows[0], ROUTE_PINS_HEADERS);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_pins), [
+    routePinRow('route-b', 'pin-a', 0, 'b-created', 'b-updated'),
+    routePinRow('route-c', 'pin-c', 0, 'c-created', 'c-updated')
+  ]);
+  assert.equal(writesFor(harness.audit, 'route_pins', 'setValues').length, 1);
+  assert.equal(writesFor(harness.audit, 'route_pins', 'deleteRow').length, 0);
+
+  harness = createHarness({ routePinRows: [
+    ROUTE_PINS_HEADERS,
+    routePinRow('route-a', 'pin-a', 0),
+    routePinRow('route-b', 'pin-a', 0),
+    routePinRow('route-b', 'pin-b', 1),
+    routePinRow('route-c', 'pin-c', 0)
+  ] });
+  removedRoutes = plain(harness.api.deleteRoutePinsForPinIds_(['pin-a', 'missing'])).sort();
+  assert.deepEqual(removedRoutes, ['route-a', 'route-b']);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_pins).map((row) => [row[0], row[1]]), [
+    ['route-b', 'pin-b'], ['route-c', 'pin-c']
+  ]);
+  assert.equal(writesFor(harness.audit, 'route_pins', 'setValues').length, 1);
+  assert.equal(writesFor(harness.audit, 'route_pins', 'deleteRow').length, 0);
+
+  harness = createHarness({ routePinRows: [ROUTE_PINS_HEADERS, routePinRow('route-a', 'pin-a', 0)] });
+  removedRoutes = plain(harness.api.deleteRoutePinsForPinIds_(['missing']));
+  assert.deepEqual(removedRoutes, []);
+  assert.equal(writesFor(harness.audit, 'route_pins').length, 0);
+  assert.deepEqual(harness.sheets.route_pins.rows[0], ROUTE_PINS_HEADERS);
+});
+
+test('route_cache deletion preserves unrelated rows and all cache fields while returning the exact count', () => {
+  const keepOne = routeCacheRow('keep-1', 'route-b', '[[1,2],[3,4]]', 'provider-b', 'created-b', 'expires-b');
+  const keepTwo = routeCacheRow('keep-2', 'route-c', '[[5,6],[7,8]]', 'provider-c', 'created-c', 'expires-c');
+  let harness = createHarness({ routeCacheRows: [
+    ROUTE_CACHE_HEADERS,
+    routeCacheRow('drop-1', 'route-a'),
+    keepOne,
+    routeCacheRow('drop-2', 'route-d'),
+    keepTwo,
+    routeCacheRow('drop-3', 'route-a')
+  ] });
+
+  let deleted = harness.api.deleteRouteCacheRowsForRouteIds_(['route-a', 'route-d']);
+  assert.equal(deleted, 3);
+  assert.deepEqual(harness.sheets.route_cache.rows[0], ROUTE_CACHE_HEADERS);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_cache), [keepOne, keepTwo]);
+  assert.equal(writesFor(harness.audit, 'route_cache', 'setValues').length, 1);
+  assert.equal(writesFor(harness.audit, 'route_cache', 'deleteRow').length, 0);
+  assert.deepEqual(plain(harness.api.readLatestRouteCacheEntryByCacheKey_('keep-2')), {
+    cacheKey: 'keep-2', routeId: 'route-c', coords: [[5, 6], [7, 8]], provider: 'provider-c', createdAt: 'created-c'
+  });
+
+  harness = createHarness({ routeCacheRows: [ROUTE_CACHE_HEADERS, keepOne] });
+  deleted = harness.api.deleteRouteCacheRowsForRouteIds_(['missing']);
+  assert.equal(deleted, 0);
+  assert.equal(writesFor(harness.audit, 'route_cache').length, 0);
+});
+
+test('route_pins and route_cache rewrites keep formulas and extension columns attached to retained rows', () => {
+  const routePinRows = [
+    ROUTE_PINS_HEADERS.concat(['extension']),
+    routePinRow('route-drop', 'pin-drop').concat(['drop-extra']),
+    routePinRow('route-keep', 'pin-keep', 0, 'keep-created', 'computed-updated').concat(['computed-extra'])
+  ];
+  const routePinFormulas = routePinRows.map((row) => row.map(() => ''));
+  routePinFormulas[1][0] = '=CONCAT("route-","drop")';
+  routePinFormulas[2][4] = '=ROW()';
+  routePinFormulas[2][5] = '=A3';
+  let harness = createHarness({ routePinRows, routePinFormulas });
+
+  assert.deepEqual(plain(harness.api.deleteRoutePinsForRoute_('route-drop')), ['route-drop']);
+  assert.deepEqual(harness.sheets.route_pins.rows[0], ROUTE_PINS_HEADERS.concat(['extension']));
+  assert.equal(harness.sheets.route_pins.formulas[1][4], '=ROW()');
+  assert.equal(harness.sheets.route_pins.formulas[1][5], '=A3');
+  assert.equal(harness.sheets.route_pins.getLastRow(), 2);
+  assert.equal(writesFor(harness.audit, 'route_pins', 'setValues')[0].numColumns, 6);
+
+  const routeCacheRows = [
+    ROUTE_CACHE_HEADERS.concat(['extension']),
+    routeCacheRow('drop', 'route-drop').concat(['drop-extra']),
+    routeCacheRow('keep', 'route-keep', '[[1,2],[3,4]]', 'osrm', 'computed-created', 'computed-expires').concat(['computed-extra'])
+  ];
+  const routeCacheFormulas = routeCacheRows.map((row) => row.map(() => ''));
+  routeCacheFormulas[1][1] = '=CONCAT("route-","drop")';
+  routeCacheFormulas[2][4] = '=NOW()';
+  routeCacheFormulas[2][5] = '=E3+1';
+  routeCacheFormulas[2][6] = '=B3';
+  harness = createHarness({ routeCacheRows, routeCacheFormulas });
+
+  assert.equal(harness.api.deleteRouteCacheRowsForRouteIds_(['route-drop']), 1);
+  assert.deepEqual(harness.sheets.route_cache.rows[0], ROUTE_CACHE_HEADERS.concat(['extension']));
+  assert.equal(harness.sheets.route_cache.formulas[1][4], '=NOW()');
+  assert.equal(harness.sheets.route_cache.formulas[1][5], '=E3+1');
+  assert.equal(harness.sheets.route_cache.formulas[1][6], '=B3');
+  assert.equal(harness.sheets.route_cache.getLastRow(), 2);
+  assert.equal(writesFor(harness.audit, 'route_cache', 'setValues')[0].numColumns, 7);
+});
+
+test('shared road-route cache lookup still returns an unrelated retained cache after rewrite deletion', () => {
+  const cacheKey = 'osrm|road|false|p1:35.00000,139.00000>p2:36.00000,140.00000';
+  const harness = createHarness({
+    mapRows: [
+      MAP_INFO_HEADERS,
+      mapRow({ id: 'p1', lat: 35, lng: 139 }),
+      mapRow({ id: 'p2', lat: 36, lng: 140 })
+    ],
+    routeRows: [
+      ROUTES_HEADERS,
+      ['route-keep', 'Keep', '#1e88e5', 'road', false, '', '', '', '', 0, true, true, true, 'solid']
+    ],
+    routePinRows: [
+      ROUTE_PINS_HEADERS,
+      routePinRow('route-keep', 'p1', 0),
+      routePinRow('route-keep', 'p2', 1)
+    ],
+    routeCacheRows: [
+      ROUTE_CACHE_HEADERS,
+      routeCacheRow('drop-cache', 'route-drop'),
+      routeCacheRow(cacheKey, 'route-keep', '[[35,139],[36,140]]')
+    ],
+    shareRows: [
+      ['createdAt', 'label', 'token', 'tags', 'tagMode', 'enabled', 'revokedAt', 'colors', 'routeIds'],
+      ['2026-07-10T00:00:00.000Z', 'Shared keep route', 'share-token', '', 'or', true, '', '', 'route-keep']
+    ]
+  });
+
+  assert.equal(harness.api.deleteRouteCacheRowsForRouteIds_(['route-drop']), 1);
+  assert.deepEqual(plain(harness.api.getSharedRoadRouteCache({ token: 'share-token', routeId: 'route-keep' })), {
+    ok: true,
+    routeId: 'route-keep',
+    coords: [[35, 139], [36, 140]]
+  });
+});
+
+test('public route/cache writers share one non-nested lock and report lock failure', () => {
+  let harness = createHarness({
+    routeRows: [ROUTES_HEADERS, routeRow('route-a', 0)],
+    routeCacheRows: [ROUTE_CACHE_HEADERS, routeCacheRow('cache-a', 'route-a')]
+  });
+  let result = plain(harness.api.invalidateRouteCacheForRoute(withEditToken({ routeId: 'route-a' })));
+  assert.deepEqual(result, { ok: true, deleted: 1 });
+  assert.equal(harness.audit.lock.tryCalls.length, 1);
+  assert.equal(harness.audit.lock.releaseCalls, 1);
+  assert.equal(harness.audit.lock.nestedAttempts, 0);
+  assert.equal(writesFor(harness.audit, 'route_cache').every((write) => write.lockHeld), true);
+
+  harness = createHarness({ lockAvailable: false });
+  result = plain(harness.api.putRouteCache(withEditToken({
+    cacheKey: 'new-cache', routeId: 'route-a', coords: [[35, 139], [36, 140]], provider: 'osrm'
+  })));
+  assert.deepEqual(result, { ok: false, error: '別の更新処理が実行中です。少し待ってから再試行してください。' });
+  assert.equal(harness.audit.reads.length, 0);
+  assert.equal(harness.audit.writes.length, 0);
+});
+
+test('saveRouteGroup validates input before locking and locks Spreadsheet work', () => {
+  let harness = createHarness();
+  let result = plain(harness.api.saveRouteGroup(withEditToken({ name: '' })));
+  assert.deepEqual(result, { ok: false, error: 'route_name_required' });
+  assert.equal(harness.audit.lock.tryCalls.length, 0);
+  assert.equal(harness.audit.reads.length, 0);
+  assert.equal(harness.audit.writes.length, 0);
+
+  harness = createHarness({ lockAvailable: false });
+  result = plain(harness.api.saveRouteGroup(withEditToken({ name: 'New route' })));
+  assert.deepEqual(result, { ok: false, error: '別の更新処理が実行中です。少し待ってから再試行してください。' });
+  assert.equal(harness.audit.reads.length, 0);
+  assert.equal(harness.audit.writes.length, 0);
+});
+
+test('deleteRouteGroup removes route, memberships, and cache under one lock without duplicate route_pins scans', () => {
+  const harness = createHarness({
+    routeRows: [ROUTES_HEADERS, routeRow('route-a', 0), routeRow('route-b', 1)],
+    routePinRows: [ROUTE_PINS_HEADERS, routePinRow('route-a', 'pin-a'), routePinRow('route-b', 'pin-b')],
+    routeCacheRows: [ROUTE_CACHE_HEADERS, routeCacheRow('cache-a', 'route-a'), routeCacheRow('cache-b', 'route-b')]
+  });
+
+  const result = plain(harness.api.deleteRouteGroup(withEditToken({ routeId: 'route-a' })));
+
+  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.routes).map((row) => row[0]), ['route-b']);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_pins).map((row) => row[0]), ['route-b']);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_cache).map((row) => row[1]), ['route-b']);
+  assert.equal(harness.audit.lock.tryCalls.length, 1);
+  assert.equal(harness.audit.lock.releaseCalls, 1);
+  assert.equal(harness.audit.dataRangeCalls.filter((call) => call.sheet === 'route_pins').length, 0);
+  assert.equal(harness.audit.reads.filter((read) => read.sheet === 'route_pins' && read.method === 'getValues').length, 1);
+  assert.equal(writesFor(harness.audit, 'route_pins', 'setValues').length, 1);
+  assert.equal(writesFor(harness.audit, 'route_cache', 'setValues').length, 1);
+});
+
+test('bulkDeletePins uses one current-row commit scan, Drive outside the lock, and descending contiguous deleteRows runs', () => {
+  const harness = createHarness({
+    mapRows: [
+      MAP_INFO_HEADERS,
+      mapRow({ id: 'pin-a', fileId: 'file-a' }),
+      mapRow({ id: 'pin-c' }),
+      mapRow({ id: 'pin-b', fileId: 'file-b' }),
+      mapRow({ id: 'keep' }),
+      mapRow({ id: 'pin-d', fileId: 'file-d' })
+    ],
+    routePinRows: [
+      ROUTE_PINS_HEADERS,
+      routePinRow('route-a', 'pin-a'),
+      routePinRow('route-fail', 'pin-b'),
+      routePinRow('route-c', 'pin-c'),
+      routePinRow('route-d', 'pin-d'),
+      routePinRow('route-keep', 'keep')
+    ],
+    routeCacheRows: [
+      ROUTE_CACHE_HEADERS,
+      routeCacheRow('cache-a', 'route-a'),
+      routeCacheRow('cache-fail', 'route-fail'),
+      routeCacheRow('cache-c', 'route-c'),
+      routeCacheRow('cache-d', 'route-d'),
+      routeCacheRow('cache-keep', 'route-keep')
+    ],
+    driveTrashErrors: ['file-b']
+  });
+
+  const result = plain(harness.api.bulkDeletePins(withEditToken({
+    ids: ['pin-a', 'pin-c', 'pin-b', 'pin-d', 'missing', 'pin-a']
+  })));
+
+  assert.deepEqual(result, { ok: true, deletedCount: 3, failedIds: ['pin-b'] });
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.map_info).map((row) => row[8]), ['pin-b', 'keep']);
+  assert.deepEqual(writesFor(harness.audit, 'map_info', 'deleteRows').map((write) => [write.row, write.count]), [[6, 1], [2, 2]]);
+  assert.equal(writesFor(harness.audit, 'map_info', 'deleteRow').length, 0);
+  assert.equal(harness.audit.dataRangeCalls.filter((call) => call.sheet === 'map_info').length, 2);
+  assert.equal(harness.audit.reads.filter((read) => read.sheet === 'map_info' && read.method === 'getValues').length, 2);
+
+  const getFileCalls = harness.audit.driveCalls.filter((call) => call.method === 'getFileById');
+  const trashCalls = harness.audit.driveCalls.filter((call) => call.method === 'setTrashed');
+  assert.equal(getFileCalls.length, 3);
+  assert.equal(trashCalls.length, 3);
+  assert.equal(harness.audit.driveCalls.every((call) => call.lockHeld === false), true);
+
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_pins).map((row) => [row[0], row[1]]), [
+    ['route-fail', 'pin-b'], ['route-keep', 'keep']
+  ]);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_cache).map((row) => row[1]), ['route-fail', 'route-keep']);
+  assert.equal(writesFor(harness.audit, 'route_pins', 'setValues').length, 1);
+  assert.equal(writesFor(harness.audit, 'route_cache', 'setValues').length, 1);
+  assert.equal(writesFor(harness.audit, 'route_pins', 'deleteRow').length, 0);
+  assert.equal(writesFor(harness.audit, 'route_cache', 'deleteRow').length, 0);
+  assert.equal(harness.audit.lock.tryCalls.length, 1);
+  assert.equal(harness.audit.lock.releaseCalls, 1);
+  assert.equal(harness.audit.lock.nestedAttempts, 0);
+  assert.equal(harness.audit.writes.every((write) => write.lockHeld), true);
+});
+
+test('bulkDeletePins returns busy after Drive success, logs only pinId/stage, and converges on retry', () => {
+  const harness = createHarness({
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'secret-file-a' })],
+    routePinRows: [ROUTE_PINS_HEADERS, routePinRow('route-a', 'pin-a')],
+    routeCacheRows: [ROUTE_CACHE_HEADERS, routeCacheRow('cache-a', 'route-a')],
+    lockAvailabilitySequence: [false, true]
+  });
+
+  let result = plain(harness.api.bulkDeletePins(withEditToken({ ids: ['pin-a'] })));
+  assert.deepEqual(result, { ok: false, error: '別の更新処理が実行中です。少し待ってから再試行してください。' });
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.map_info).map((row) => row[8]), ['pin-a']);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_pins).map((row) => row[1]), ['pin-a']);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_cache).map((row) => row[1]), ['route-a']);
+  assert.equal(harness.driveFiles['secret-file-a'].trashed, true);
+  assert.equal(harness.audit.logs.some((line) => line.includes('pinId=pin-a') && line.includes('spreadsheet_lock_failed_after_drive')), true);
+  assert.equal(harness.audit.logs.some((line) => line.includes('secret-file-a')), false);
+  assert.equal(harness.audit.writes.length, 0);
+
+  result = plain(harness.api.bulkDeletePins(withEditToken({ ids: ['pin-a'] })));
+  assert.deepEqual(result, { ok: true, deletedCount: 1, failedIds: [] });
+  assert.equal(harness.audit.driveCalls.filter((call) => call.method === 'setTrashed' && call.fileId === 'secret-file-a').length, 2);
+  assert.equal(harness.sheets.map_info.getLastRow(), 1);
+  assert.equal(harness.sheets.route_pins.getLastRow(), 1);
+  assert.equal(harness.sheets.route_cache.getLastRow(), 1);
+  assert.equal(harness.audit.lock.held, false);
+  assert.equal(harness.audit.lock.releaseCalls, 1);
+});
+
+test('bulkDeletePins treats a row removed before commit as completed without deleting its old row occupant', () => {
+  const harness = createHarness({
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'file-a' }), mapRow({ id: 'pin-b' })],
+    beforeLockAttempt({ sheets }) {
+      sheets.map_info.rows.splice(1, 1);
+      sheets.map_info.formulas.splice(1, 1);
+      sheets.map_info.maxRows -= 1;
+    }
+  });
+
+  const result = plain(harness.api.bulkDeletePins(withEditToken({ ids: ['pin-a'] })));
+
+  assert.deepEqual(result, { ok: true, deletedCount: 0, failedIds: [] });
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.map_info).map((row) => row[8]), ['pin-b']);
+  assert.equal(writesFor(harness.audit, 'map_info', 'deleteRows').length, 0);
+  assert.equal(writesFor(harness.audit, 'map_info', 'deleteRow').length, 0);
+});
+
+test('bulkDeletePins re-resolves moved rows by pinId and never deletes a different pin at the stale row number', () => {
+  const harness = createHarness({
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'file-a' }), mapRow({ id: 'pin-b' })],
+    beforeLockAttempt({ sheets }) {
+      sheets.map_info.rows.splice(1, 0, mapRow({ id: 'inserted' }));
+      sheets.map_info.formulas.splice(1, 0, MAP_INFO_HEADERS.map(() => ''));
+      sheets.map_info.maxRows += 1;
+    }
+  });
+
+  const result = plain(harness.api.bulkDeletePins(withEditToken({ ids: ['pin-a'] })));
+
+  assert.deepEqual(result, { ok: true, deletedCount: 1, failedIds: [] });
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.map_info).map((row) => row[8]), ['inserted', 'pin-b']);
+  assert.deepEqual(writesFor(harness.audit, 'map_info', 'deleteRows').map((write) => [write.row, write.count]), [[3, 1]]);
+});
+
+test('bulkDeletePins isolates a fileId conflict and commits other verified photo deletions', () => {
+  const harness = createHarness({
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'old-file' }), mapRow({ id: 'pin-b', fileId: 'file-b' })],
+    routePinRows: [ROUTE_PINS_HEADERS, routePinRow('route-a', 'pin-a'), routePinRow('route-b', 'pin-b')],
+    routeCacheRows: [ROUTE_CACHE_HEADERS, routeCacheRow('cache-a', 'route-a'), routeCacheRow('cache-b', 'route-b')],
+    beforeLockAttempt({ sheets }) {
+      sheets.map_info.rows[1][6] = 'replacement-file';
+    }
+  });
+
+  const result = plain(harness.api.bulkDeletePins(withEditToken({ ids: ['pin-a', 'pin-b'] })));
+
+  assert.deepEqual(result, { ok: true, deletedCount: 1, failedIds: ['pin-a'] });
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.map_info).map((row) => row[8]), ['pin-a']);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_pins).map((row) => row[1]), ['pin-a']);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_cache).map((row) => row[1]), ['route-a']);
+  assert.equal(harness.audit.driveCalls.filter((call) => call.method === 'setTrashed').length, 2);
+  assert.equal(harness.audit.logs.some((line) => line.includes('pinId=pin-a') && line.includes('file_id_conflict')), true);
+  assert.equal(harness.audit.logs.some((line) => line.includes('old-file') || line.includes('replacement-file') || line.includes('file-b')), false);
+  assert.equal(harness.audit.lock.releaseCalls, 1);
+  assert.equal(harness.audit.lock.held, false);
+});
+
+test('bulkDeletePins reports every ID in a failed contiguous deleteRows run and leaves related route data intact', () => {
+  const harness = createHarness({
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a' }), mapRow({ id: 'pin-b' }), mapRow({ id: 'keep' })],
+    routePinRows: [ROUTE_PINS_HEADERS, routePinRow('route-a', 'pin-a'), routePinRow('route-b', 'pin-b')],
+    routeCacheRows: [ROUTE_CACHE_HEADERS, routeCacheRow('cache-a', 'route-a'), routeCacheRow('cache-b', 'route-b')],
+    failDeleteRowsStarts: { map_info: [2] }
+  });
+
+  const result = plain(harness.api.bulkDeletePins(withEditToken({ ids: ['pin-a', 'pin-b'] })));
+
+  assert.deepEqual(result, { ok: true, deletedCount: 0, failedIds: ['pin-b', 'pin-a'] });
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.map_info).map((row) => row[8]), ['pin-a', 'pin-b', 'keep']);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_pins).map((row) => row[1]), ['pin-a', 'pin-b']);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_cache).map((row) => row[1]), ['route-a', 'route-b']);
+  assert.equal(writesFor(harness.audit, 'route_pins').length, 0);
+  assert.equal(writesFor(harness.audit, 'route_cache').length, 0);
+  assert.equal(harness.audit.lock.held, false);
+  assert.equal(harness.audit.lock.releaseCalls, 1);
+});
+
+test('bulkDeletePins commits successful runs and cleans only those IDs when another run fails', () => {
+  const harness = createHarness({
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a' }), mapRow({ id: 'keep' }), mapRow({ id: 'pin-b' })],
+    routePinRows: [ROUTE_PINS_HEADERS, routePinRow('route-a', 'pin-a'), routePinRow('route-b', 'pin-b')],
+    routeCacheRows: [ROUTE_CACHE_HEADERS, routeCacheRow('cache-a', 'route-a'), routeCacheRow('cache-b', 'route-b')],
+    failDeleteRowsStarts: { map_info: [4] }
+  });
+
+  const result = plain(harness.api.bulkDeletePins(withEditToken({ ids: ['pin-a', 'pin-b'] })));
+
+  assert.deepEqual(result, { ok: true, deletedCount: 1, failedIds: ['pin-b'] });
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.map_info).map((row) => row[8]), ['keep', 'pin-b']);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_pins).map((row) => row[1]), ['pin-b']);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_cache).map((row) => row[1]), ['route-b']);
+  assert.equal(harness.audit.lock.held, false);
+  assert.equal(harness.audit.lock.releaseCalls, 1);
+});
+
+test('bulkDeletePins retry repairs route memberships after post-map cache cleanup failure', () => {
+  const harness = createHarness({
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a' })],
+    routePinRows: [ROUTE_PINS_HEADERS, routePinRow('route-a', 'pin-a')],
+    routeCacheRows: [ROUTE_CACHE_HEADERS, routeCacheRow('cache-a', 'route-a')]
+  });
+  harness.sheets.route_cache.failNextSetValues = true;
+
+  assert.throws(
+    () => harness.api.bulkDeletePins(withEditToken({ ids: ['pin-a'] })),
+    /simulated Spreadsheet write failure/
+  );
+  assert.equal(harness.sheets.map_info.getLastRow(), 1);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_pins).map((row) => row[1]), ['pin-a']);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_cache).map((row) => row[1]), ['route-a']);
+  assert.equal(harness.audit.lock.held, false);
+
+  const result = plain(harness.api.bulkDeletePins(withEditToken({ ids: ['pin-a'] })));
+  assert.deepEqual(result, { ok: true, deletedCount: 0, failedIds: [] });
+  assert.equal(harness.sheets.route_pins.getLastRow(), 1);
+  assert.equal(harness.sheets.route_cache.getLastRow(), 1);
+  assert.equal(harness.audit.lock.held, false);
+});
+
+test('bulkDeletePins handles all-missing and all-Drive-failure batches without unrelated cleanup', () => {
+  let harness = createHarness({
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'keep' })],
+    routePinRows: [ROUTE_PINS_HEADERS, routePinRow('route-keep', 'keep')],
+    routeCacheRows: [ROUTE_CACHE_HEADERS, routeCacheRow('cache-keep', 'route-keep')]
+  });
+  let result = plain(harness.api.bulkDeletePins(withEditToken({ ids: ['missing'] })));
+  assert.deepEqual(result, { ok: true, deletedCount: 0, failedIds: [] });
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_pins).map((row) => row[1]), ['keep']);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_cache).map((row) => row[1]), ['route-keep']);
+
+  harness = createHarness({
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'file-a' }), mapRow({ id: 'pin-b', fileId: 'file-b' })],
+    routePinRows: [ROUTE_PINS_HEADERS, routePinRow('route-a', 'pin-a'), routePinRow('route-b', 'pin-b')],
+    routeCacheRows: [ROUTE_CACHE_HEADERS, routeCacheRow('cache-a', 'route-a'), routeCacheRow('cache-b', 'route-b')],
+    driveTrashErrors: ['file-a', 'file-b'],
+    lockAvailable: false
+  });
+  result = plain(harness.api.bulkDeletePins(withEditToken({ ids: ['pin-a', 'pin-b'] })));
+  assert.deepEqual(result, { ok: true, deletedCount: 0, failedIds: ['pin-b', 'pin-a'] });
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.map_info).map((row) => row[8]), ['pin-a', 'pin-b']);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_pins).map((row) => row[1]), ['pin-a', 'pin-b']);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_cache).map((row) => row[1]), ['route-a', 'route-b']);
+  assert.equal(harness.audit.lock.tryCalls.length, 0);
+});
+
+test('single pin and route deletion retries repair cleanup after the parent row was committed', () => {
+  let harness = createHarness({
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a' })],
+    routePinRows: [ROUTE_PINS_HEADERS, routePinRow('route-a', 'pin-a')],
+    routeCacheRows: [ROUTE_CACHE_HEADERS, routeCacheRow('cache-a', 'route-a')]
+  });
+  harness.sheets.route_cache.failNextSetValues = true;
+  assert.throws(() => harness.api.deletePin(withEditToken({ id: 'pin-a' })), /simulated Spreadsheet write failure/);
+  assert.equal(harness.sheets.map_info.getLastRow(), 1);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_pins).map((row) => row[1]), ['pin-a']);
+  let result = plain(harness.api.deletePin(withEditToken({ id: 'pin-a' })));
+  assert.deepEqual(result, { ok: false, error: 'id not found' });
+  assert.equal(harness.sheets.route_pins.getLastRow(), 1);
+  assert.equal(harness.sheets.route_cache.getLastRow(), 1);
+
+  harness = createHarness({
+    routeRows: [ROUTES_HEADERS, routeRow('route-a', 0)],
+    routePinRows: [ROUTE_PINS_HEADERS, routePinRow('route-a', 'pin-a')],
+    routeCacheRows: [ROUTE_CACHE_HEADERS, routeCacheRow('cache-a', 'route-a')]
+  });
+  harness.sheets.route_cache.failNextSetValues = true;
+  assert.throws(() => harness.api.deleteRouteGroup(withEditToken({ routeId: 'route-a' })), /simulated Spreadsheet write failure/);
+  assert.equal(harness.sheets.routes.getLastRow(), 1);
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.route_pins).map((row) => row[0]), ['route-a']);
+  result = plain(harness.api.deleteRouteGroup(withEditToken({ routeId: 'route-a' })));
+  assert.deepEqual(result, { ok: false, error: 'route_not_found' });
+  assert.equal(harness.sheets.route_pins.getLastRow(), 1);
+  assert.equal(harness.sheets.route_cache.getLastRow(), 1);
+});
+
+test('deletePin applies the same post-Drive lock, current-row, missing-row, and fileId conflict rules', () => {
+  let harness = createHarness({
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'file-a' })],
+    lockAvailable: false
+  });
+  let result = plain(harness.api.deletePin(withEditToken({ id: 'pin-a' })));
+  assert.deepEqual(result, { ok: false, error: '別の更新処理が実行中です。少し待ってから再試行してください。' });
+  assert.equal(harness.sheets.map_info.getLastRow(), 2);
+  assert.equal(harness.audit.logs.some((line) => line.includes('pinId=pin-a') && line.includes('spreadsheet_lock_failed_after_drive')), true);
+
+  harness = createHarness({
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'file-a' }), mapRow({ id: 'pin-b' })],
+    beforeLockAttempt({ sheets }) {
+      sheets.map_info.rows.splice(1, 1);
+      sheets.map_info.formulas.splice(1, 1);
+      sheets.map_info.maxRows -= 1;
+    }
+  });
+  result = plain(harness.api.deletePin(withEditToken({ id: 'pin-a' })));
+  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.map_info).map((row) => row[8]), ['pin-b']);
+  assert.equal(writesFor(harness.audit, 'map_info').length, 0);
+
+  harness = createHarness({
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'old-file' })],
+    beforeLockAttempt({ sheets }) { sheets.map_info.rows[1][6] = 'new-file'; }
+  });
+  result = plain(harness.api.deletePin(withEditToken({ id: 'pin-a' })));
+  assert.equal(result.ok, false);
+  assert.match(result.error, /更新|競合|再試行/);
+  assert.equal(harness.sheets.map_info.getLastRow(), 2);
+  assert.equal(harness.audit.logs.some((line) => line.includes('pinId=pin-a') && line.includes('file_id_conflict')), true);
+  assert.equal(harness.audit.lock.held, false);
 });

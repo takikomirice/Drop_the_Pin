@@ -308,13 +308,23 @@ test('pin mutations reject the header index while preserving the row-index contr
 
   assert.deepEqual(result, { ok: false, error: 'id not found' });
   assert.deepEqual(sheets.map_info.rows[0], originalHeader);
-  ['updatePinDetails', 'movePin', 'unplacePin', 'deletePin'].forEach((name) => {
+  ['updatePinDetails', 'movePin', 'unplacePin'].forEach((name) => {
     assert.match(sourceFunctionBody(codeJs, name), /rowIndex < 1/);
   });
+  const deletePinBody = sourceFunctionBody(codeJs, 'deletePin');
+  assert.match(deletePinBody, /buildPinDeleteSnapshots_\(rows, \[data\.id\]\)/);
+  assert.match(deletePinBody, /indexCurrentPinDeleteRows_\(currentRows\)/);
+  assert.match(deletePinBody, /current\.fileId !== snapshot\.fileId/);
+  assert.match(deletePinBody, /sheet\.deleteRow\(current\.rowNumber\)/);
   const bulkStatusBody = sourceFunctionBody(codeJs, 'bulkUpdatePinStatus');
   assert.match(bulkStatusBody, /new Set\(data\.ids\)/);
   assert.match(bulkStatusBody, /for \(var rowIndex = 1;/);
-  assert.match(sourceFunctionBody(codeJs, 'bulkDeletePins'), /index > 0 && row\[8\] === id/);
+  const bulkDeleteBody = sourceFunctionBody(codeJs, 'bulkDeletePins');
+  assert.match(bulkDeleteBody, /buildPinDeleteSnapshots_\(rows, data\.ids\)/);
+  assert.match(bulkDeleteBody, /indexCurrentPinDeleteRows_\(currentRows\)/);
+  assert.match(bulkDeleteBody, /current\.fileId !== snapshot\.fileId/);
+  assert.match(bulkDeleteBody, /failedIdSet\[snapshot\.pinId\] = true/);
+  assert.match(bulkDeleteBody, /groupContiguousPinDeleteRows_\(currentEntries\)/);
 });
 
 test('getPinDriveMeta requires edit access and a registered pinId', () => {
