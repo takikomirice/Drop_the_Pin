@@ -32,21 +32,20 @@ test('route card visibility label is an accessible optimistic toggle', () => {
   assertIncludes(indexHtml, 'function getRouteDisplayVisible(group)');
   assertIncludes(indexHtml, 'Object.prototype.hasOwnProperty.call(state.routeVisibilityOverrides, routeId)');
   assertIncludes(body, 'const isVisible = getRouteDisplayVisible(group);');
-  assertIncludes(body, "visibility.setAttribute('role', 'button');");
-  assertIncludes(body, "visibility.setAttribute('tabindex', '0');");
+  assertIncludes(body, "visibility.type = 'button';");
   assertIncludes(body, "visibility.setAttribute('aria-pressed', isVisible ? 'true' : 'false');");
+  assertIncludes(body, "visibility.setAttribute('aria-label',");
   assertIncludes(body, 'function toggleRouteVisibilityFromCard(event)');
   assertIncludes(body, 'event.stopPropagation();');
   assertIncludes(body, 'if (state.shareMode) return;');
-  assertIncludes(body, 'if (canEdit()) {');
+  assertIncludes(body, 'if (canEditRouteControls()) {');
   assertIncludes(body, 'updateRouteGroupOptimistic(routeId, { visible: nextVisible });');
   assertIncludes(body, 'state.routeVisibilityOverrides[routeId] = nextVisible;');
   assertIncludes(body, 'renderPins();');
   assertIncludes(body, 'renderSidePanel();');
   assertIncludes(body, "visibility.addEventListener('click', toggleRouteVisibilityFromCard);");
-  assertIncludes(body, "visibility.addEventListener('keydown', function(event)");
-  assertIncludes(body, "if (event.key !== 'Enter' && event.key !== ' ') return;");
-  assertIncludes(body, 'event.preventDefault();');
+  assert.equal(body.includes("visibility.addEventListener('keydown'"), false);
+  assert.equal(body.includes('summary.appendChild(visibility)'), false);
 });
 
 test('route display visibility drives lines, numbers, and route card state without hiding pins', () => {
@@ -79,7 +78,7 @@ test('share route clear action is labeled and behaves as explicit no-route selec
   assertIncludes(indexHtml, "const SHARE_ROUTE_NONE_SENTINEL = '__share_no_routes__';");
   assertIncludes(indexHtml, '<button id="share-route-clear-btn" class="ghost-btn" type="button">選択解除</button>');
   assert.equal(indexHtml.includes('<button id="share-route-clear-btn" class="ghost-btn" type="button">全ルートに戻す</button>'), false);
-  assertIncludes(indexHtml, 'state.shareManager.routeIds = [SHARE_ROUTE_NONE_SENTINEL];');
+  assertIncludes(indexHtml, 'state.shareManager.routeTargets = [];');
   assertIncludes(indexHtml, "if (isShareRouteSelectionNone(routeIds)) return '表示するルート: なし';");
 
   const filterBody = sourceFunctionBody(indexHtml, 'getActivePinFilterState');

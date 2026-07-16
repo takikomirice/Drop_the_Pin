@@ -19,6 +19,26 @@ const ROUTES_HEADERS = [
 ];
 const ROUTE_PINS_HEADERS = ['routeId', 'pinId', 'pinOrder', 'createdAt', 'updatedAt'];
 const ROUTE_CACHE_HEADERS = ['cacheKey', 'routeId', 'coordsJson', 'provider', 'createdAt', 'expiresAt'];
+const IMPORT_RECEIPT_HEADERS = [
+  'idempotencyKey', 'jobId', 'itemId', 'payloadHash', 'state', 'leaseOwner',
+  'leaseUntil', 'pinId', 'targetFolderId', 'tempFileName', 'fileId', 'imageUrl',
+  'folderUrl', 'createdAt', 'updatedAt', 'lastErrorCode', 'sourceDriveFileId'
+];
+
+function importReceiptRow({ pinId, fileId, sourceDriveFileId, targetFolderId = 'managed-folder' }) {
+  const values = {
+    idempotencyKey: `key-${pinId}`,
+    jobId: 'job',
+    itemId: pinId,
+    payloadHash: `hash-${pinId}`,
+    state: 'completed',
+    pinId,
+    targetFolderId,
+    fileId,
+    sourceDriveFileId
+  };
+  return IMPORT_RECEIPT_HEADERS.map((header) => values[header] || '');
+}
 
 function cloneMatrix(matrix) {
   return matrix.map((row) => row.slice());
@@ -43,6 +63,7 @@ function createAudit() {
     rangeListSets: [],
     driveCalls: [],
     logs: [],
+    errors: [],
     lock: {
       held: false,
       available: true,
@@ -251,6 +272,13 @@ function createHarness(options = {}) {
     : [];
   const mapRows = options.mapRows || [MAP_INFO_HEADERS, mapRow()];
   const routeRows = options.routeRows || [ROUTES_HEADERS];
+  const defaultImportReceiptRows = [IMPORT_RECEIPT_HEADERS].concat(
+    mapRows.slice(1).filter((row) => row[6]).map((row) => importReceiptRow({
+      pinId: String(row[8] || 'pin'),
+      fileId: String(row[6]),
+      sourceDriveFileId: ''
+    }))
+  );
   const sheets = {
     map_info: createSheet('map_info', mapRows, options.mapFormulas, audit),
     config: createSheet('config', [
@@ -262,6 +290,15 @@ function createHarness(options = {}) {
     route_cache: createSheet('route_cache', options.routeCacheRows || [ROUTE_CACHE_HEADERS], options.routeCacheFormulas, audit),
     share_links: createSheet('share_links', options.shareRows || [['createdAt', 'label', 'token', 'tags', 'tagMode', 'enabled', 'revokedAt', 'colors', 'routeIds']], null, audit)
   };
+  if (options.includeImportReceipts !== false) {
+    sheets.import_receipts = createSheet(
+      'import_receipts',
+      Object.prototype.hasOwnProperty.call(options, 'importReceiptRows')
+        ? options.importReceiptRows : defaultImportReceiptRows,
+      null,
+      audit
+    );
+  }
   Object.entries(options.failDeleteRowsStarts || {}).forEach(([sheetName, starts]) => {
     (starts || []).forEach((start) => sheets[sheetName].failDeleteRowsStarts.add(start));
   });
@@ -302,7 +339,11 @@ function createHarness(options = {}) {
     driveFiles[fileId] = { name: value.name || 'original.jpg', trashed: value.trashed === true };
   });
   const context = {
-    console,
+    console: {
+      error(message) { audit.errors.push(String(message)); },
+      log: console.log.bind(console),
+      warn: console.warn.bind(console)
+    },
     Date,
     JSON,
     Set,
@@ -481,6 +522,62 @@ test('updatePinDetails renames photos only when enabled and never while locked',
   harness = createHarness({ renameFileWithTitle: true });
   harness.api.updatePinDetails(withEditToken({ id: 'pin-1', title: 'No photo' }));
   assert.equal(harness.audit.driveCalls.length, 0);
+});
+
+test('updatePinDetails never renames a directly linked Drive import source', () => {
+  const harness = createHarness({
+    renameFileWithTitle: true,
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-source', fileId: 'source-file' })],
+    importReceiptRows: [
+      IMPORT_RECEIPT_HEADERS,
+      importReceiptRow({
+        pinId: 'pin-source', fileId: 'source-file', sourceDriveFileId: 'source-file'
+      })
+    ]
+  });
+
+  const result = plain(harness.api.updatePinDetails(withEditToken({
+    id: 'pin-source', title: 'Source stays unchanged'
+  })));
+
+  assert.equal(result.ok, true);
+  assert.equal(harness.sheets.map_info.rows[1][1], 'Source stays unchanged');
+  assert.equal(harness.audit.driveCalls.length, 0);
+  assert.equal(harness.driveFiles['source-file'].name, 'original.jpg');
+});
+
+test('updatePinDetails fails closed on Drive rename when ownership receipts are missing', () => {
+  const harness = createHarness({
+    includeImportReceipts: false,
+    renameFileWithTitle: true,
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-unknown', fileId: 'unknown-file' })]
+  });
+
+  const result = plain(harness.api.updatePinDetails(withEditToken({
+    id: 'pin-unknown', title: 'Metadata only'
+  })));
+
+  assert.equal(result.ok, true);
+  assert.equal(harness.sheets.map_info.rows[1][1], 'Metadata only');
+  assert.equal(harness.audit.driveCalls.length, 0);
+  assert.equal(harness.driveFiles['unknown-file'].name, 'original.jpg');
+});
+
+test('updatePinDetails also fails closed when the ownership receipt row is missing', () => {
+  const harness = createHarness({
+    importReceiptRows: [IMPORT_RECEIPT_HEADERS],
+    renameFileWithTitle: true,
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-unknown-row', fileId: 'unknown-row-file' })]
+  });
+
+  const result = plain(harness.api.updatePinDetails(withEditToken({
+    id: 'pin-unknown-row', title: 'Metadata only'
+  })));
+
+  assert.equal(result.ok, true);
+  assert.equal(harness.sheets.map_info.rows[1][1], 'Metadata only');
+  assert.equal(harness.audit.driveCalls.length, 0);
+  assert.equal(harness.driveFiles['unknown-row-file'].name, 'original.jpg');
 });
 
 test('Drive rename failure propagates after the row is committed and the lock is released', () => {
@@ -781,6 +878,71 @@ test('setRoutePins supports zero, one, multiple, and MAX_ROUTE_PINS memberships'
   }
 });
 
+test('setRoutePins rejects unplaced and invalid coordinates atomically inside the mutation lock', () => {
+  const invalidCoordinates = [
+    { label: 'both null', lat: null, lng: null },
+    { label: 'latitude null', lat: null, lng: 139 },
+    { label: 'longitude null', lat: 35, lng: null },
+    { label: 'latitude NaN equivalent', lat: 'not-a-number', lng: 139 },
+    { label: 'longitude NaN equivalent', lat: 35, lng: Number.NaN },
+    { label: 'latitude below range', lat: -90.0001, lng: 139 },
+    { label: 'latitude above range', lat: 90.0001, lng: 139 },
+    { label: 'longitude below range', lat: 35, lng: -180.0001 },
+    { label: 'longitude above range', lat: 35, lng: 180.0001 }
+  ];
+
+  invalidCoordinates.forEach(({ label, lat, lng }) => {
+    const harness = createHarness({
+      routeRows: [ROUTES_HEADERS, routeRow('route-a', 0), routeRow('route-b', 1)],
+      mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'candidate', lat, lng })],
+      routePinRows: [
+        ROUTE_PINS_HEADERS,
+        routePinRow('route-a', 'existing', 0, 'existing-created', 'existing-updated'),
+        routePinRow('route-b', 'other', 0, 'other-created', 'other-updated')
+      ]
+    });
+    const before = cloneMatrix(harness.sheets.route_pins.rows);
+
+    const result = plain(harness.api.setRoutePins(withEditToken({
+      routeId: 'route-a',
+      pinIds: ['candidate']
+    })));
+
+    assert.deepEqual(result, { ok: false, error: 'pin_unplaced', pinId: 'candidate' }, label);
+    assert.deepEqual(harness.sheets.route_pins.rows, before, `${label}: memberships must remain unchanged`);
+    assert.equal(writesFor(harness.audit, 'route_pins').length, 0, `${label}: no route_pins writes`);
+    const mapReads = harness.audit.dataRangeCalls.filter((call) => call.sheet === 'map_info');
+    assert.equal(mapReads.length, 1, `${label}: map_info must be read once`);
+    assert.equal(mapReads[0].lockHeld, true, `${label}: validation must run inside the lock`);
+  });
+});
+
+test('setRoutePins rejects a placed and unplaced mixed batch without partially replacing memberships', () => {
+  const harness = createHarness({
+    routeRows: [ROUTES_HEADERS, routeRow('route-a', 0), routeRow('route-b', 1)],
+    mapRows: [
+      MAP_INFO_HEADERS,
+      mapRow({ id: 'placed', lat: 35, lng: 139 }),
+      mapRow({ id: 'unplaced', lat: null, lng: null })
+    ],
+    routePinRows: [
+      ROUTE_PINS_HEADERS,
+      routePinRow('route-a', 'existing-a', 0, 'a-created', 'a-updated'),
+      routePinRow('route-b', 'existing-b', 0, 'b-created', 'b-updated')
+    ]
+  });
+  const before = cloneMatrix(harness.sheets.route_pins.rows);
+
+  const result = plain(harness.api.setRoutePins(withEditToken({
+    routeId: 'route-a',
+    pinIds: ['placed', 'unplaced']
+  })));
+
+  assert.deepEqual(result, { ok: false, error: 'pin_unplaced', pinId: 'unplaced' });
+  assert.deepEqual(harness.sheets.route_pins.rows, before);
+  assert.equal(writesFor(harness.audit, 'route_pins').length, 0);
+});
+
 test('setRoutePins route existence lookup uses the calculated routeId value without rewriting its formula', () => {
   const routeRows = [ROUTES_HEADERS, routeRow('route-a', 0)];
   const routeFormulas = routeRows.map((row) => row.map(() => ''));
@@ -1064,11 +1226,11 @@ test('bulkDeletePins uses one current-row commit scan, Drive outside the lock, a
   const harness = createHarness({
     mapRows: [
       MAP_INFO_HEADERS,
-      mapRow({ id: 'pin-a', fileId: 'file-a' }),
+      mapRow({ id: 'pin-a', fileId: 'file-aaaaaaaaaa' }),
       mapRow({ id: 'pin-c' }),
-      mapRow({ id: 'pin-b', fileId: 'file-b' }),
+      mapRow({ id: 'pin-b', fileId: 'file-bbbbbbbbbb' }),
       mapRow({ id: 'keep' }),
-      mapRow({ id: 'pin-d', fileId: 'file-d' })
+      mapRow({ id: 'pin-d', fileId: 'file-dddddddddd' })
     ],
     routePinRows: [
       ROUTE_PINS_HEADERS,
@@ -1086,7 +1248,7 @@ test('bulkDeletePins uses one current-row commit scan, Drive outside the lock, a
       routeCacheRow('cache-d', 'route-d'),
       routeCacheRow('cache-keep', 'route-keep')
     ],
-    driveTrashErrors: ['file-b']
+    driveTrashErrors: ['file-bbbbbbbbbb']
   });
 
   const result = plain(harness.api.bulkDeletePins(withEditToken({
@@ -1150,7 +1312,7 @@ test('bulkDeletePins returns busy after Drive success, logs only pinId/stage, an
 
 test('bulkDeletePins treats a row removed before commit as completed without deleting its old row occupant', () => {
   const harness = createHarness({
-    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'file-a' }), mapRow({ id: 'pin-b' })],
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'file-aaaaaaaaaa' }), mapRow({ id: 'pin-b' })],
     beforeLockAttempt({ sheets }) {
       sheets.map_info.rows.splice(1, 1);
       sheets.map_info.formulas.splice(1, 1);
@@ -1168,7 +1330,7 @@ test('bulkDeletePins treats a row removed before commit as completed without del
 
 test('bulkDeletePins re-resolves moved rows by pinId and never deletes a different pin at the stale row number', () => {
   const harness = createHarness({
-    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'file-a' }), mapRow({ id: 'pin-b' })],
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'file-aaaaaaaaaa' }), mapRow({ id: 'pin-b' })],
     beforeLockAttempt({ sheets }) {
       sheets.map_info.rows.splice(1, 0, mapRow({ id: 'inserted' }));
       sheets.map_info.formulas.splice(1, 0, MAP_INFO_HEADERS.map(() => ''));
@@ -1185,7 +1347,7 @@ test('bulkDeletePins re-resolves moved rows by pinId and never deletes a differe
 
 test('bulkDeletePins isolates a fileId conflict and commits other verified photo deletions', () => {
   const harness = createHarness({
-    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'old-file' }), mapRow({ id: 'pin-b', fileId: 'file-b' })],
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'old-file-aaaa' }), mapRow({ id: 'pin-b', fileId: 'file-bbbbbbbbbb' })],
     routePinRows: [ROUTE_PINS_HEADERS, routePinRow('route-a', 'pin-a'), routePinRow('route-b', 'pin-b')],
     routeCacheRows: [ROUTE_CACHE_HEADERS, routeCacheRow('cache-a', 'route-a'), routeCacheRow('cache-b', 'route-b')],
     beforeLockAttempt({ sheets }) {
@@ -1201,7 +1363,7 @@ test('bulkDeletePins isolates a fileId conflict and commits other verified photo
   assert.deepEqual(nonEmptyDataRows(harness.sheets.route_cache).map((row) => row[1]), ['route-a']);
   assert.equal(harness.audit.driveCalls.filter((call) => call.method === 'setTrashed').length, 2);
   assert.equal(harness.audit.logs.some((line) => line.includes('pinId=pin-a') && line.includes('file_id_conflict')), true);
-  assert.equal(harness.audit.logs.some((line) => line.includes('old-file') || line.includes('replacement-file') || line.includes('file-b')), false);
+  assert.equal(harness.audit.logs.some((line) => line.includes('old-file-aaaa') || line.includes('replacement-file') || line.includes('file-bbbbbbbbbb')), false);
   assert.equal(harness.audit.lock.releaseCalls, 1);
   assert.equal(harness.audit.lock.held, false);
 });
@@ -1280,10 +1442,10 @@ test('bulkDeletePins handles all-missing and all-Drive-failure batches without u
   assert.deepEqual(nonEmptyDataRows(harness.sheets.route_cache).map((row) => row[1]), ['route-keep']);
 
   harness = createHarness({
-    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'file-a' }), mapRow({ id: 'pin-b', fileId: 'file-b' })],
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'file-aaaaaaaaaa' }), mapRow({ id: 'pin-b', fileId: 'file-bbbbbbbbbb' })],
     routePinRows: [ROUTE_PINS_HEADERS, routePinRow('route-a', 'pin-a'), routePinRow('route-b', 'pin-b')],
     routeCacheRows: [ROUTE_CACHE_HEADERS, routeCacheRow('cache-a', 'route-a'), routeCacheRow('cache-b', 'route-b')],
-    driveTrashErrors: ['file-a', 'file-b'],
+    driveTrashErrors: ['file-aaaaaaaaaa', 'file-bbbbbbbbbb'],
     lockAvailable: false
   });
   result = plain(harness.api.bulkDeletePins(withEditToken({ ids: ['pin-a', 'pin-b'] })));
@@ -1326,7 +1488,7 @@ test('single pin and route deletion retries repair cleanup after the parent row 
 
 test('deletePin applies the same post-Drive lock, current-row, missing-row, and fileId conflict rules', () => {
   let harness = createHarness({
-    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'file-a' })],
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'file-aaaaaaaaaa' })],
     lockAvailable: false
   });
   let result = plain(harness.api.deletePin(withEditToken({ id: 'pin-a' })));
@@ -1335,7 +1497,7 @@ test('deletePin applies the same post-Drive lock, current-row, missing-row, and 
   assert.equal(harness.audit.logs.some((line) => line.includes('pinId=pin-a') && line.includes('spreadsheet_lock_failed_after_drive')), true);
 
   harness = createHarness({
-    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'file-a' }), mapRow({ id: 'pin-b' })],
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'file-aaaaaaaaaa' }), mapRow({ id: 'pin-b' })],
     beforeLockAttempt({ sheets }) {
       sheets.map_info.rows.splice(1, 1);
       sheets.map_info.formulas.splice(1, 1);
@@ -1348,8 +1510,8 @@ test('deletePin applies the same post-Drive lock, current-row, missing-row, and 
   assert.equal(writesFor(harness.audit, 'map_info').length, 0);
 
   harness = createHarness({
-    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'old-file' })],
-    beforeLockAttempt({ sheets }) { sheets.map_info.rows[1][6] = 'new-file'; }
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-a', fileId: 'old-file-aaaa' })],
+    beforeLockAttempt({ sheets }) { sheets.map_info.rows[1][6] = 'new-file-aaaa'; }
   });
   result = plain(harness.api.deletePin(withEditToken({ id: 'pin-a' })));
   assert.equal(result.ok, false);
@@ -1357,4 +1519,254 @@ test('deletePin applies the same post-Drive lock, current-row, missing-row, and 
   assert.equal(harness.sheets.map_info.getLastRow(), 2);
   assert.equal(harness.audit.logs.some((line) => line.includes('pinId=pin-a') && line.includes('file_id_conflict')), true);
   assert.equal(harness.audit.lock.held, false);
+});
+
+test('pin deletion does not trash a Drive file still referenced by another surviving pin', () => {
+  const harness = createHarness({
+    mapRows: [
+      MAP_INFO_HEADERS,
+      mapRow({ id: 'pin-a', fileId: 'shared-file' }),
+      mapRow({ id: 'pin-b', fileId: 'shared-file' })
+    ]
+  });
+  const result = plain(harness.api.deletePin(withEditToken({ id: 'pin-a' })));
+  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(nonEmptyDataRows(harness.sheets.map_info).map((row) => row[8]), ['pin-b']);
+  assert.equal(harness.audit.driveCalls.filter((call) => call.method === 'getFileById').length, 0);
+  assert.equal(harness.driveFiles['shared-file'].trashed, false);
+});
+
+test('pin deletion removes the pin but never trashes a directly linked Drive import source', () => {
+  const harness = createHarness({
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-source', fileId: 'source-file' })],
+    importReceiptRows: [
+      IMPORT_RECEIPT_HEADERS,
+      importReceiptRow({
+        pinId: 'pin-source', fileId: 'source-file', sourceDriveFileId: 'source-file'
+      })
+    ]
+  });
+
+  const result = plain(harness.api.deletePin(withEditToken({ id: 'pin-source' })));
+
+  assert.deepEqual(result, { ok: true });
+  assert.equal(harness.sheets.map_info.getLastRow(), 1);
+  assert.equal(harness.audit.driveCalls.length, 0);
+  assert.equal(harness.driveFiles['source-file'].trashed, false);
+});
+
+test('pin deletion trashes only the managed JPEG and preserves its Drive source', () => {
+  const harness = createHarness({
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-managed', fileId: 'managed-jpeg' })],
+    driveFiles: { 'source-photo': { name: 'source.jpg' } },
+    importReceiptRows: [
+      IMPORT_RECEIPT_HEADERS,
+      importReceiptRow({
+        pinId: 'pin-managed',
+        fileId: 'managed-jpeg',
+        sourceDriveFileId: 'source-photo',
+        targetFolderId: 'managed-folder'
+      })
+    ]
+  });
+
+  const result = plain(harness.api.deletePin(withEditToken({ id: 'pin-managed' })));
+
+  assert.deepEqual(result, { ok: true });
+  assert.equal(harness.sheets.map_info.getLastRow(), 1);
+  assert.equal(harness.driveFiles['managed-jpeg'].trashed, true);
+  assert.equal(harness.driveFiles['source-photo'].trashed, false);
+  assert.deepEqual(
+    harness.audit.driveCalls.filter((call) => call.method === 'setTrashed').map((call) => call.fileId),
+    ['managed-jpeg']
+  );
+});
+
+test('pin deletion fails closed on Drive cleanup when the ownership receipt sheet is missing', () => {
+  const harness = createHarness({
+    includeImportReceipts: false,
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-unknown', fileId: 'unknown-file' })]
+  });
+
+  const result = plain(harness.api.deletePin(withEditToken({ id: 'pin-unknown' })));
+
+  assert.deepEqual(result, { ok: true });
+  assert.equal(harness.sheets.map_info.getLastRow(), 1);
+  assert.equal(harness.audit.driveCalls.length, 0);
+  assert.equal(harness.driveFiles['unknown-file'].trashed, false);
+});
+
+test('pin deletion also fails closed when the ownership receipt row is missing', () => {
+  const harness = createHarness({
+    importReceiptRows: [IMPORT_RECEIPT_HEADERS],
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-unknown-row', fileId: 'unknown-row-file' })]
+  });
+
+  const result = plain(harness.api.deletePin(withEditToken({ id: 'pin-unknown-row' })));
+
+  assert.deepEqual(result, { ok: true });
+  assert.equal(harness.sheets.map_info.getLastRow(), 1);
+  assert.equal(harness.audit.driveCalls.length, 0);
+  assert.equal(harness.driveFiles['unknown-row-file'].trashed, false);
+});
+
+test('pin deletion fails closed when a receipt cannot prove local or Drive managed ownership', () => {
+  const harness = createHarness({
+    mapRows: [MAP_INFO_HEADERS, mapRow({ id: 'pin-ambiguous', fileId: 'ambiguous-file' })],
+    importReceiptRows: [
+      IMPORT_RECEIPT_HEADERS,
+      importReceiptRow({
+        pinId: 'pin-ambiguous',
+        fileId: 'ambiguous-file',
+        sourceDriveFileId: '',
+        targetFolderId: ''
+      })
+    ]
+  });
+
+  const result = plain(harness.api.deletePin(withEditToken({ id: 'pin-ambiguous' })));
+
+  assert.deepEqual(result, { ok: true });
+  assert.equal(harness.driveFiles['ambiguous-file'].trashed, false);
+  assert.equal(harness.audit.driveCalls.length, 0);
+});
+
+test('pin deletion treats malformed source ownership ids as unknown and fails closed', () => {
+  const harness = createHarness({
+    mapRows: [
+      MAP_INFO_HEADERS,
+      mapRow({ id: 'pin-malformed-source', fileId: 'photo_DIRECTVALID' })
+    ],
+    importReceiptRows: [
+      IMPORT_RECEIPT_HEADERS,
+      importReceiptRow({
+        pinId: 'pin-malformed-source',
+        fileId: 'photo_DIRECTVALID',
+        sourceDriveFileId: 'bad',
+        targetFolderId: 'managed-folder'
+      })
+    ]
+  });
+
+  const result = plain(harness.api.deletePin(withEditToken({ id: 'pin-malformed-source' })));
+
+  assert.deepEqual(result, { ok: true });
+  assert.equal(harness.driveFiles['photo_DIRECTVALID'].trashed, false);
+  assert.equal(harness.audit.driveCalls.length, 0);
+});
+
+test('pin deletion treats a malformed nonempty managed target id as unknown', () => {
+  const harness = createHarness({
+    mapRows: [
+      MAP_INFO_HEADERS,
+      mapRow({ id: 'pin-malformed-target', fileId: 'photo_MANAGEDVALID' })
+    ],
+    importReceiptRows: [
+      IMPORT_RECEIPT_HEADERS,
+      importReceiptRow({
+        pinId: 'pin-malformed-target',
+        fileId: 'photo_MANAGEDVALID',
+        sourceDriveFileId: 'photo_SOURCEVALIDA',
+        targetFolderId: 'bad'
+      })
+    ]
+  });
+
+  const result = plain(harness.api.deletePin(withEditToken({ id: 'pin-malformed-target' })));
+
+  assert.deepEqual(result, { ok: true });
+  assert.equal(harness.driveFiles['photo_MANAGEDVALID'].trashed, false);
+  assert.equal(harness.audit.driveCalls.length, 0);
+});
+
+test('source ownership protects the Drive file globally across legacy duplicate pin references', () => {
+  const harness = createHarness({
+    mapRows: [
+      MAP_INFO_HEADERS,
+      mapRow({ id: 'pin-source', fileId: 'source-file' }),
+      mapRow({ id: 'pin-legacy', fileId: 'source-file' })
+    ],
+    importReceiptRows: [
+      IMPORT_RECEIPT_HEADERS,
+      importReceiptRow({
+        pinId: 'pin-source', fileId: 'source-file', sourceDriveFileId: 'source-file'
+      })
+    ]
+  });
+
+  const result = plain(harness.api.bulkDeletePins(withEditToken({
+    ids: ['pin-source', 'pin-legacy']
+  })));
+
+  assert.deepEqual(result, { ok: true, deletedCount: 2, failedIds: [] });
+  assert.equal(harness.driveFiles['source-file'].trashed, false);
+  assert.equal(harness.audit.driveCalls.length, 0);
+});
+
+test('managed-copy ownership also protects its source when a legacy pin references that source', () => {
+  const harness = createHarness({
+    mapRows: [
+      MAP_INFO_HEADERS,
+      mapRow({ id: 'pin-managed', fileId: 'managed-copy' }),
+      mapRow({ id: 'pin-legacy-source', fileId: 'private-source' })
+    ],
+    importReceiptRows: [
+      IMPORT_RECEIPT_HEADERS,
+      importReceiptRow({
+        pinId: 'pin-managed', fileId: 'managed-copy', sourceDriveFileId: 'private-source'
+      })
+    ]
+  });
+
+  const result = plain(harness.api.deletePin(withEditToken({ id: 'pin-legacy-source' })));
+
+  assert.deepEqual(result, { ok: true });
+  assert.equal(harness.driveFiles['private-source'].trashed, false);
+  assert.equal(harness.audit.driveCalls.length, 0);
+});
+
+test('bulk deletion trashes a shared Drive file once only when every referencing pin is deleted', () => {
+  const harness = createHarness({
+    mapRows: [
+      MAP_INFO_HEADERS,
+      mapRow({ id: 'pin-a', fileId: 'shared-file' }),
+      mapRow({ id: 'pin-b', fileId: 'shared-file' })
+    ]
+  });
+  const result = plain(harness.api.bulkDeletePins(withEditToken({ ids: ['pin-a', 'pin-b'] })));
+  assert.deepEqual(result, { ok: true, deletedCount: 2, failedIds: [] });
+  assert.equal(harness.audit.driveCalls.filter((call) => call.method === 'getFileById').length, 1);
+  assert.equal(harness.audit.driveCalls.filter((call) => call.method === 'setTrashed').length, 1);
+  assert.equal(harness.sheets.map_info.getLastRow(), 1);
+});
+
+test('bulk deletion preserves direct sources and trashes only app-managed display copies', () => {
+  const harness = createHarness({
+    mapRows: [
+      MAP_INFO_HEADERS,
+      mapRow({ id: 'pin-source', fileId: 'source-file' }),
+      mapRow({ id: 'pin-copy', fileId: 'managed-copy' })
+    ],
+    importReceiptRows: [
+      IMPORT_RECEIPT_HEADERS,
+      importReceiptRow({
+        pinId: 'pin-source', fileId: 'source-file', sourceDriveFileId: 'source-file'
+      }),
+      importReceiptRow({
+        pinId: 'pin-copy', fileId: 'managed-copy', sourceDriveFileId: 'private-source'
+      })
+    ]
+  });
+
+  const result = plain(harness.api.bulkDeletePins(withEditToken({
+    ids: ['pin-source', 'pin-copy']
+  })));
+
+  assert.deepEqual(result, { ok: true, deletedCount: 2, failedIds: [] });
+  assert.equal(harness.driveFiles['source-file'].trashed, false);
+  assert.equal(harness.driveFiles['managed-copy'].trashed, true);
+  assert.deepEqual(
+    harness.audit.driveCalls.filter((call) => call.method === 'setTrashed').map((call) => call.fileId),
+    ['managed-copy']
+  );
 });

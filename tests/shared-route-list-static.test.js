@@ -83,10 +83,10 @@ globalThis.__routeDisplayFn = ${name};`;
 }
 
 test('shared panel is split into route and pin sections', () => {
-  assertIncludes(sharedHtml, '<section id="shared-route-section">');
+  assertIncludes(sharedHtml, '<section id="shared-route-section" role="tabpanel" aria-labelledby="shared-mobile-routes-tab">');
   assertIncludes(sharedHtml, '<h3 class="shared-section-title">ルート</h3>');
   assertIncludes(sharedHtml, '<div id="shared-route-list"></div>');
-  assertIncludes(sharedHtml, '<section id="shared-pin-section">');
+  assertIncludes(sharedHtml, '<section id="shared-pin-section" role="tabpanel" aria-labelledby="shared-mobile-pins-tab">');
   assertIncludes(sharedHtml, '<h3 class="shared-section-title">ピン</h3>');
   assertIncludes(sharedHtml, '<div id="shared-list"></div>');
 });
@@ -94,17 +94,17 @@ test('shared panel is split into route and pin sections', () => {
 test('route list styles are present without edit controls', () => {
   [
     '.shared-section-title',
-    '.shared-route-card',
-    '.shared-route-card-header',
-    '.shared-route-color-dot',
-    '.shared-route-name',
-    '.shared-route-display-mode',
-    '.shared-route-display-mode.is-off',
-    '.shared-route-meta',
-    '.shared-route-pin-list',
-    '.shared-route-pin-item',
-    '.shared-route-pin-num',
-    '.shared-route-pin-title'
+    '.unified-route-card',
+    '.route-card-header',
+    '.route-color-swatch',
+    '.route-name',
+    '.route-fit',
+    '.route-visibility',
+    '.route-meta',
+    '.route-pin-list',
+    '.route-pin-row',
+    '.route-pin-order',
+    '.shared-route-pin-action'
   ].forEach((selector) => assertIncludes(sharedHtml, selector));
 
   assert.equal(/shared-route-(?:edit|delete|rename|drag|reorder)/.test(sharedHtml), false);
@@ -166,13 +166,13 @@ test('phase 2 and phase 3 route visibility checks use local route visibility', (
 test('route list helpers and renderer implement expected interactions', () => {
   [
     'function getSharedRouteVisiblePins(group)',
-    'function getSharedRouteDistanceMeters(group)',
     'function getSharedRouteMetaText(group, routePins)',
     'function fitSharedMapToRoute(group)',
     'function renderSharedRouteList()',
     'function getSharedRouteDisplayState(routeId)',
     'function cycleSharedRouteDisplayMode(routeId)',
-    "routeSection.style.display = 'none'",
+    "routeSection.style.display = ''",
+    '公開されているルートはありません。',
     'cycleSharedRouteDisplayMode(routeId);',
     'renderSharedRouteList();',
     'renderSharedPins();',
@@ -190,8 +190,8 @@ test('shared route card meta omits state labels and marks hidden distance as str
   assertIncludes(body, "'（直線距離）'");
   assert.equal(/道路|直線(?!距離)|非表示/.test(body), false);
 
-  const renderBody = functionBody('renderSharedRouteList');
-  assertIncludes(renderBody, 'meta.textContent = getSharedRouteMetaText(group, routePins);');
+  const builderBody = sourceFunctionBody(sharedHtml, 'buildSharedPinRouteCard');
+  assertIncludes(builderBody, 'meta.textContent = getSharedRouteMetaText(group, routePins);');
 });
 
 test('shared view initializes and renders the route list', () => {
@@ -205,16 +205,13 @@ test('shared route display state and controls are declared without orphan pin co
   assertIncludes(sharedHtml, '<div class="shared-route-section-header">');
   assert.equal(sharedHtml.includes('id="shared-orphan-toggle"'), false);
   assert.equal(sharedHtml.includes('ルート外も表示'), false);
-  assertIncludes(sharedHtml, '<button id="shared-reset-routes" class="shared-control-btn" type="button" title="ルート表示を初期状態に戻します">ルートも初期化</button>');
+  assertIncludes(sharedHtml, '<button id="shared-reset-routes" class="shared-control-btn shared-text-btn" type="button" title="ルート表示を初期状態に戻します">ルートも初期化</button>');
 });
 
 test('shared route membership never removes pins client-side', () => {
-  assertIncludes(sharedHtml, 'function isPinAllowedByRoutes(pin)');
-  const body = sourceFunctionBody(sharedHtml, 'isPinAllowedByRoutes');
-  assertIncludes(body, 'return true;');
-  assert.equal(body.includes('state.routeGroups'), false);
-  assert.equal(body.includes('hasSharedRouteRestriction()'), false);
-  assert.equal(body.includes('showOrphanPins'), false);
+  assert.equal(sharedHtml.includes('function isPinAllowedByRoutes(pin)'), false);
+  assert.equal(sharedHtml.includes('function hasSharedRouteRestriction()'), false);
+  assert.equal(sharedHtml.includes('showOrphanPins'), false);
 });
 
 test('filtered shared pins use only search, tag, and color filters before sorting', () => {
@@ -240,9 +237,10 @@ test('route state reset restores route display state only', () => {
   assert.equal(/state\.listQuery\s*=/.test(body), false);
 });
 
-test('route list hides route-only controls when empty without orphan toggle state', () => {
+test('route list keeps an empty state while hiding route-only controls without orphan toggle state', () => {
   const body = functionBody('renderSharedRouteList');
   assert.equal(body.includes('orphanToggle'), false);
+  assertIncludes(body, '公開されているルートはありません。');
   assertIncludes(sharedHtml, "resetRoutesButton.style.display = 'none';");
 });
 
@@ -250,8 +248,7 @@ test('shared route-restricted links select route cards and lines without client-
   assertIncludes(sharedHtml, 'allowedRouteIds: []');
   assertIncludes(sharedHtml, "const SHARED_ROUTE_NONE_SENTINEL = '__share_no_routes__';");
   assertIncludes(sharedHtml, 'function isSharedRouteSelectionNone(routeIds)');
-  assertIncludes(sharedHtml, 'function hasSharedRouteRestriction()');
-  assertIncludes(sharedHtml, 'if (isSharedRouteSelectionNone(state.allowedRouteIds)) return false;');
+  assert.equal(sharedHtml.includes('function hasSharedRouteRestriction()'), false);
   assertIncludes(sharedHtml, 'state.allowedRouteIds = normalizeSharedAllowedRouteIds(result.allowedRouteIds);');
   assert.equal(sharedHtml.includes('if (!groups || !groups.length) return !hasSharedRouteRestriction();'), false);
   assert.equal(sharedHtml.includes('if (hasSharedRouteRestriction()) return false;'), false);
@@ -390,7 +387,7 @@ test('shared.html draws cached road routes through GAS only and falls back to st
   assertIncludes(sharedHtml, 'interactive: false');
   assertIncludes(sharedHtml, "attachSharedRouteHitPolyline(layerGroup, latLngs, group, '道路');");
   assertIncludes(sharedHtml, 'drawSharedStraightRouteLine(layerGroup, latLngs, group);');
-  assertIncludes(sharedHtml, "withGAS('getSharedRoadRouteCache', { token: state.token, routeId: routeId })");
+  assertIncludes(sharedHtml, "withGAS('getSharedRoadRouteCache', { token: state.token, routeId: key })");
   assertIncludes(sharedHtml, 'if (version !== sharedRouteRenderVersion) return;');
   assertIncludes(sharedHtml, 'state.roadRouteCache[routeId] = { ok: true, coords: coords };');
 });

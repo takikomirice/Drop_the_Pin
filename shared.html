@@ -3,136 +3,298 @@
 <head>
   <base target="_top">
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-  <title>Drop the Pin! Shared View</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Drop the Pin!</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
+    :root {
+      --safe-area-top: env(safe-area-inset-top, 0px);
+      --safe-area-right: env(safe-area-inset-right, 0px);
+      --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+      --safe-area-left: env(safe-area-inset-left, 0px);
+      --font-family: "Noto Sans JP", "Yu Gothic", "Hiragino Sans", sans-serif;
+      --font-size-body: 16px;
+      --line-height-body: 1.6;
+      --sp-1: 4px;
+      --sp-2: 8px;
+      --sp-3: 12px;
+      --sp-4: 16px;
+      --sp-6: 24px;
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 18px;
+      --border-width: 1px;
+      --focus: #2E90FA;
+      --focus-ring-width: 3px;
+      --focus-ring-offset: 2px;
+      --selected-swatch-ring-light: #FFFFFF;
+      --selected-swatch-ring-dark: #111111;
+      --app-header-height: 56px;
+      --app-dock-width: clamp(340px, 26.35vw, 360px);
+      --app-modal-viewport-inset: 28px;
+      --dialog-viewport-height: 100dvh;
+      --dialog-viewport-offset-top: 0px;
+      --dock-pin-region-min-height: 200px;
+      --dock-pin-region-preferred-height: 64%;
+      --dock-pin-region-max-height: 450px;
+      --dock-route-region-min-height: 160px;
+      --dock-route-resizer-size: 12px;
+      --mobile-route-map-min-height: 154px;
+      --mobile-route-sheet-max-height: 626px;
+      --shadow-sm: 0 1px 3px rgba(23, 32, 25, 0.12);
+      --shadow-md: 0 6px 16px rgba(23, 32, 25, 0.12);
+      --shadow-lg: 0 12px 32px rgba(23, 32, 25, 0.16);
+    }
     :root, [data-theme="light"] {
-      --bg: #f3f1eb;
-      --surface: rgba(255, 252, 246, 0.96);
-      --surface-strong: #fffaf0;
-      --text: #2f2418;
-      --text-sub: #786a58;
-      --border: rgba(96, 74, 49, 0.18);
-      --accent: #b95f2d;
-      --accent-soft: rgba(185, 95, 45, 0.1);
-      --chip: rgba(88, 123, 74, 0.12);
-      --chip-border: rgba(88, 123, 74, 0.24);
-      --shadow: 0 18px 40px rgba(71, 49, 25, 0.12);
-      --overlay: rgba(37, 25, 14, 0.42);
-      --topbar-bg: rgba(255, 252, 246, 0.9);
-      --note-bg: rgba(255, 252, 246, 0.96);
+      --color-surface: #F7F8F5;
+      --color-surface-muted: #EDF1EC;
+      --color-surface-raised: #FFFFFF;
+      --color-text: #172019;
+      --color-text-muted: #536158;
+      --accent: #22643D;
+      --accent-soft: #DCECDF;
+      --accent-strong: #174A2D;
+      --on-accent: #FFFFFF;
+      --border: #C9D2CB;
+      --danger: #B42318;
+      --on-danger: #FFFFFF;
+      --warning: #8A4B08;
+      --on-warning: #FFFFFF;
+      --info: #175CD3;
+      --form-bg: #FFFFFF;
+      --form-border: #68746B;
+      --route-type-pin-foreground: #174A2D;
+      --route-type-pin-background: #DCECDF;
+      --route-type-gpx-foreground: #1D3F7A;
+      --route-type-gpx-background: #E3EBFC;
+      --route-type-geojson-foreground: #54246E;
+      --route-type-geojson-background: #F1E5F7;
+      --bg: var(--color-surface);
+      --surface: var(--color-surface-muted);
+      --surface2: var(--color-surface-raised);
+      --text: var(--color-text);
+      --text-sub: var(--color-text-muted);
+      --chip: var(--accent-soft);
+      --chip-border: #7FA38A;
+      --overlay: rgba(23, 32, 25, 0.44);
+      --sheet-bg: rgba(255, 255, 255, 0.98);
+      --topbar-bg: rgba(255, 255, 255, 0.96);
+      --shadow: var(--shadow-lg);
     }
     [data-theme="dark"] {
-      --bg: #121212;
-      --surface: rgba(31, 31, 36, 0.96);
-      --surface-strong: #1f1f24;
-      --text: #ececec;
-      --text-sub: #a0a0aa;
-      --border: #3c3c48;
-      --accent: #d98b5f;
-      --accent-soft: rgba(217, 139, 95, 0.12);
-      --chip: rgba(124, 179, 66, 0.16);
-      --chip-border: rgba(124, 179, 66, 0.28);
-      --shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
-      --overlay: rgba(0, 0, 0, 0.62);
-      --topbar-bg: rgba(18, 18, 18, 0.9);
-      --note-bg: rgba(31, 31, 36, 0.96);
+      --color-surface: #111713;
+      --color-surface-muted: #252E27;
+      --color-surface-raised: #1A211C;
+      --color-text: #F2F6F3;
+      --color-text-muted: #B8C3BB;
+      --accent: #64C987;
+      --accent-soft: #1F3A29;
+      --accent-strong: #89DDA4;
+      --on-accent: #071D0F;
+      --border: #3C4940;
+      --danger: #FF8B82;
+      --on-danger: #2B0B08;
+      --warning: #F3B35D;
+      --on-warning: #2A1904;
+      --info: #84ADFF;
+      --form-bg: #1A211C;
+      --form-border: #78877D;
+      --route-type-pin-foreground: #D7F8E1;
+      --route-type-pin-background: #1F3A29;
+      --route-type-gpx-foreground: #E3EAFF;
+      --route-type-gpx-background: #202D4A;
+      --route-type-geojson-foreground: #F1E0F8;
+      --route-type-geojson-background: #392442;
+      --bg: var(--color-surface);
+      --surface: var(--color-surface-muted);
+      --surface2: var(--color-surface-raised);
+      --text: var(--color-text);
+      --text-sub: var(--color-text-muted);
+      --chip: var(--accent-soft);
+      --chip-border: #568164;
+      --overlay: rgba(0, 0, 0, 0.6);
+      --sheet-bg: rgba(26, 33, 28, 0.98);
+      --topbar-bg: rgba(26, 33, 28, 0.96);
+      --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.28);
+      --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.34);
+      --shadow-lg: 0 12px 36px rgba(0, 0, 0, 0.44);
+      --shadow: var(--shadow-lg);
     }
-    * { box-sizing: border-box; }
-    html, body { margin: 0; height: 100%; }
-    body {
-      overflow: hidden;
-      font-family: "Yu Gothic", "Hiragino Sans", sans-serif;
-      color: var(--text);
-      background: var(--bg);
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%; overflow: hidden; font-family: var(--font-family);
+      font-size: var(--font-size-body); line-height: var(--line-height-body);
     }
-    button, input, a { font: inherit; }
-    a { color: var(--accent); }
+    body { background: var(--bg); color: var(--text); }
+    button, input, select, a { font: inherit; }
+    button { touch-action: manipulation; }
+    a { color: var(--info); }
+    [hidden] { display: none !important; }
+    :where(a, button, input, select, [tabindex]):focus-visible {
+      outline: var(--focus-ring-width) solid var(--focus);
+      outline-offset: var(--focus-ring-offset);
+    }
     #shared-topbar {
+      position: fixed; inset: 0 0 auto 0; z-index: 1200;
+      height: calc(var(--app-header-height) + var(--safe-area-top));
+      display: flex; align-items: center; justify-content: space-between;
+      gap: var(--sp-3);
+      padding: var(--safe-area-top) max(18px, var(--safe-area-right)) 0 max(18px, var(--safe-area-left));
+      background: var(--topbar-bg); backdrop-filter: blur(10px);
+      border-bottom: var(--border-width) solid var(--border);
+    }
+    .shared-topbar-heading {
+      min-width: 0; flex: 1 1 auto; display: flex; align-items: center; gap: var(--sp-3);
+    }
+    .shared-topbar-title {
+      flex: 0 0 auto; display: inline-flex; align-items: center; gap: 10px;
+      font-size: 15px; font-weight: 700; white-space: nowrap;
+    }
+    .shared-topbar-brand-icon { width: 22px; height: 22px; color: var(--accent); }
+    #shared-display-name {
+      min-width: 0; overflow: hidden; padding-left: var(--sp-3);
+      border-left: var(--border-width) solid var(--border);
+      color: var(--color-text-muted); font-size: 13px; font-weight: 700;
+      text-overflow: ellipsis; white-space: nowrap;
+    }
+    #shared-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .shared-topbar-actions {
+      display: flex; align-items: center; gap: 6px; min-width: 0; flex: 0 0 auto;
+    }
+    #shared-app-shell {
       position: fixed;
-      inset: 0 0 auto 0;
-      z-index: 1200;
-      height: 52px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      min-width: 0;
-      padding: 0 12px;
-      background: var(--topbar-bg);
-      backdrop-filter: blur(10px);
-      border-bottom: 1px solid var(--border);
-    }
-    .shared-topbar-title-wrap {
-      min-width: 0;
-    }
-    .shared-topbar-kicker {
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: var(--text-sub);
+      top: calc(var(--app-header-height) + var(--safe-area-top));
+      right: var(--safe-area-right); bottom: 0; left: var(--safe-area-left);
+      z-index: 0; overflow: hidden; background: var(--color-surface);
     }
     #shared-map {
-      position: fixed;
-      inset: 52px 0 0 0;
-      z-index: 1;
-      background: #efe3d0;
+      position: absolute; inset: 0; z-index: 1; background: #efe3d0;
+      transition: right 180ms ease;
     }
+    #shared-side-panel {
+      display: grid; position: absolute; top: 0; right: 0; bottom: 0; z-index: 700;
+      width: min(var(--app-dock-width), 100%); min-width: 0;
+      grid-template-rows: minmax(0, 1fr) 68px; overflow: hidden;
+      background: var(--sheet-bg); border-left: var(--border-width) solid var(--border);
+      box-shadow: var(--shadow); transform: translateX(0);
+      transition: transform 180ms ease, visibility 0s linear, grid-template-rows 180ms ease;
+    }
+    #shared-side-panel.shared-route-dock-expanded {
+      grid-template-rows:
+        clamp(var(--dock-pin-region-min-height), var(--dock-pin-region-preferred-height), var(--dock-pin-region-max-height))
+        minmax(var(--dock-route-region-min-height), 1fr);
+    }
+    #shared-list-panel { display: contents; }
+    #shared-route-resizer {
+      display: none; position: relative; min-width: 0; height: var(--dock-route-resizer-size);
+      background: var(--color-surface-muted); cursor: row-resize; touch-action: none; user-select: none;
+    }
+    #shared-route-resizer::after {
+      content: ''; position: absolute; top: 50%; right: var(--sp-3); left: var(--sp-3); height: 2px;
+      border-radius: 999px; background: var(--border); transform: translateY(-50%);
+    }
+    #shared-route-resizer:hover::after,
+    #shared-route-resizer:focus-visible::after,
+    #shared-route-resizer.is-resizing::after { height: 3px; background: var(--accent); }
+    body.shared-route-dock-resizing { cursor: row-resize; user-select: none; }
+    body.shared-route-dock-resizing #shared-side-panel {
+      transition: transform 180ms ease, visibility 0s linear;
+    }
+    #shared-panel-toggle {
+      position: absolute; top: 18px; right: var(--app-dock-width); z-index: 1120;
+      min-width: 44px; min-height: 44px; width: 44px; height: 44px; padding: 0;
+      border: var(--border-width) solid var(--border); border-radius: 8px 0 0 8px;
+      background: var(--color-surface-raised); color: var(--color-text-muted);
+      box-shadow: var(--shadow-sm); line-height: 1;
+      transition: right 180ms ease, background-color 120ms ease;
+    }
+    .shared-panel-toggle-icon { width: 16px; height: 16px; }
+    #shared-panel-toggle .shared-panel-toggle-icon-open { display: none; }
+    #shared-panel-toggle[aria-expanded="false"] .shared-panel-toggle-icon-open { display: block; }
+    #shared-panel-toggle[aria-expanded="false"] .shared-panel-toggle-icon-close { display: none; }
+    body.shared-panel-visible #shared-panel-toggle { right: var(--app-dock-width); }
+    body.shared-panel-hidden #shared-panel-toggle { right: 0; }
+    body.shared-panel-hidden #shared-map { right: 0; }
     #shared-status-note {
-      display: none;
-      position: fixed;
-      top: 64px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 1100;
-      padding: 12px 18px;
-      border-radius: 14px;
-      border: 1px solid var(--border);
-      background: var(--note-bg);
-      box-shadow: var(--shadow);
-      font-size: 13px;
-      line-height: 1.5;
-      color: var(--text);
-      max-width: min(90vw, 520px);
-      text-align: center;
+      display: none; position: fixed;
+      top: calc(var(--app-header-height) + var(--safe-area-top) + var(--sp-2));
+      left: 50%; transform: translateX(-50%); z-index: 1100;
+      max-width: min(90vw, 520px); padding: 12px 18px;
+      border: var(--border-width) solid var(--border); border-radius: 14px;
+      background: var(--sheet-bg); box-shadow: var(--shadow);
+      color: var(--text); font-size: 13px; line-height: 1.5; text-align: center;
     }
     #shared-map-search-bar {
-      position: fixed;
-      top: 64px;
-      left: 12px;
+      position: absolute;
+      top: 16px;
+      left: var(--sp-6);
       z-index: 800;
-      width: min(320px, calc(100vw - 24px));
-      background: var(--surface);
+      width: min(500px, calc(100% - 48px));
+      background: var(--sheet-bg);
       border: 1px solid var(--border);
-      border-radius: 12px;
-      box-shadow: var(--shadow);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-md);
       padding: 8px;
       display: flex;
       flex-direction: column;
       gap: 6px;
+      max-height: calc(100% - 40px);
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
     }
     #shared-map-search-bar-row1 {
       display: flex;
       gap: 6px;
       align-items: center;
     }
+    .shared-map-search-field {
+      display: flex; flex: 1; min-width: 0; height: 32px; align-items: center; padding: 0 8px;
+      border: 1px solid color-mix(in srgb, var(--border) 78%, transparent); border-radius: 8px;
+      background: color-mix(in srgb, var(--color-surface-raised) 88%, transparent);
+    }
+    .shared-map-search-field:focus-within {
+      border-color: var(--focus);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--focus) 24%, transparent);
+    }
+    .shared-map-search-leading-icon { display: none; }
     #shared-search-input {
-      flex: 1;
-      min-width: 0;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: var(--surface-strong);
-      color: var(--text);
-      padding: 10px 12px;
-      font-size: 14px;
+      flex: 1; width: 100%; min-width: 0; height: 30px; min-height: 30px; padding: 0;
+      border: 0; border-radius: 0; background: transparent; color: var(--color-text);
+      font-size: 14px; font-weight: 500; line-height: 30px;
+    }
+    #shared-search-input:focus-visible { outline: 0; }
+    #shared-search-input::placeholder { color: var(--color-text-muted); opacity: 1; }
+    @media (max-width: 720px) {
+      #shared-map-search-bar {
+        left: var(--sp-4);
+        width: calc(100% - (var(--sp-4) * 2));
+      }
+    }
+    @media (min-width: 641px) {
+      #shared-map-search-bar { padding: 4px 7px 4px 12px; border-radius: 12px; }
+      #shared-map-search-bar-row1 { min-height: 34px; gap: 8px; }
+      .shared-map-search-leading-icon {
+        display: inline-flex; flex: 0 0 18px; align-items: center; justify-content: center;
+        width: 18px; height: 18px; color: var(--color-text-muted);
+      }
+      .shared-map-search-leading-icon svg { width: 18px; height: 18px; }
+      #shared-search-toggle {
+        flex: 0 0 44px; width: 44px; min-width: 44px; height: 44px; min-height: 44px;
+        border-color: transparent; background: transparent; color: var(--color-text-muted);
+      }
     }
     .geocode-result-item {
+      width: 100%;
+      min-height: 44px;
       padding: 8px 10px;
       cursor: pointer;
+      border: 0;
       border-bottom: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--text);
+      text-align: left;
     }
     .geocode-result-item:last-child { border-bottom: none; }
     .geocode-result-name {
@@ -160,14 +322,17 @@
       overflow: hidden;
       border-radius: 8px;
       border: 1px solid var(--border);
-      background: var(--surface-strong);
+      background: var(--surface2);
     }
-    #shared-geocode-results .geocode-result-item:hover { background: var(--surface); }
+    #shared-geocode-results .geocode-result-item:hover,
+    #shared-geocode-results .geocode-result-item:focus-visible,
+    #shared-geocode-results .geocode-result-item[aria-selected="true"] { background: var(--surface); }
     .shared-control-btn,
     #shared-sort {
+      min-height: 44px;
       border: 1px solid var(--border);
       border-radius: 10px;
-      background: var(--surface-strong);
+      background: var(--form-bg);
       color: var(--text);
       padding: 8px 10px;
       font-size: 12px;
@@ -175,8 +340,43 @@
     .shared-control-btn {
       cursor: pointer;
     }
-    .shared-control-btn.is-off {
-      opacity: 0.55;
+    .shared-icon-btn {
+      width: 44px;
+      min-width: 44px;
+      height: 44px;
+      min-height: 44px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--text-sub);
+      cursor: pointer;
+    }
+    .shared-icon-btn:hover { background: var(--surface); color: var(--text); }
+    .shared-icon-btn svg {
+      width: 20px;
+      height: 20px;
+      display: block;
+      pointer-events: none;
+    }
+    .shared-theme-icon-sun,
+    .shared-search-icon-up { display: none !important; }
+    [data-theme="dark"] .shared-theme-icon-moon { display: none; }
+    [data-theme="dark"] .shared-theme-icon-sun { display: block !important; }
+    #shared-search-toggle[aria-expanded="true"] .shared-search-icon-down { display: none; }
+    #shared-search-toggle[aria-expanded="true"] .shared-search-icon-up { display: block !important; }
+    .shared-text-btn {
+      min-height: 44px;
+      border-radius: 10px;
+      padding: 8px 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      white-space: nowrap;
     }
     .shared-inline-help {
       margin-top: 6px;
@@ -196,8 +396,8 @@
     }
     .filter-toggle-btn.active,
     #shared-tag-mode {
-      border-color: rgba(185, 95, 45, 0.22);
-      background: rgba(185, 95, 45, 0.1);
+      border-color: var(--accent);
+      background: var(--accent-soft);
       color: var(--accent);
       font-weight: 800;
     }
@@ -219,32 +419,47 @@
     .filter-tag-chip {
       border: 1px solid var(--border);
       border-radius: 999px;
-      background: var(--surface-strong);
+      background: var(--surface2);
       color: var(--text-sub);
       padding: 6px 12px;
       cursor: pointer;
-      transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+      transition: border-color 120ms ease, background 120ms ease;
+      min-height: 44px;
     }
     .filter-tag-chip.active {
       border-color: var(--chip-border);
       background: var(--chip);
-      color: #4f6b44;
-      transform: translateY(-1px);
+      color: var(--accent-strong);
+      box-shadow: inset 0 0 0 1px var(--accent-strong);
     }
     .shared-color-swatch {
-      width: 28px;
-      height: 28px;
+      position: relative;
+      width: 44px;
+      height: 44px;
+      padding: 8px;
+      background-clip: content-box;
       border-radius: 999px;
       border: 2px solid rgba(0,0,0,0.16);
-      background: var(--surface-strong);
+      background: var(--surface2);
       cursor: pointer;
       box-shadow: inset 0 0 0 2px rgba(255,255,255,0.68);
-      transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+      transition: border-color 120ms ease, box-shadow 120ms ease;
     }
     .shared-color-swatch.active {
-      border-color: var(--accent);
-      transform: translateY(-1px) scale(1.08);
-      box-shadow: 0 0 0 2px rgba(185, 95, 45, 0.16), inset 0 0 0 2px rgba(255,255,255,0.68);
+      border-color: var(--selected-swatch-ring-dark);
+      box-shadow: 0 0 0 2px var(--selected-swatch-ring-light), 0 0 0 4px var(--selected-swatch-ring-dark), inset 0 0 0 2px rgba(255,255,255,0.68);
+    }
+    .shared-color-swatch.active::after {
+      content: '✓';
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      color: var(--selected-swatch-ring-light);
+      font-size: 18px;
+      font-weight: 900;
+      line-height: 1;
+      text-shadow: 0 1px 2px var(--selected-swatch-ring-dark), 0 0 2px var(--selected-swatch-ring-dark);
     }
     .shared-route-hit-polyline {
       cursor: pointer;
@@ -290,121 +505,89 @@
     .shared-route-section-header .shared-section-title {
       margin: 0;
     }
-    .shared-route-card {
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      background: var(--surface-strong);
-      color: var(--text);
-      padding: 10px 12px;
-      margin-bottom: 10px;
-      cursor: pointer;
-      transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+    .action-icon { width: 18px; height: 18px; flex: 0 0 18px; pointer-events: none; }
+    .unified-route-card {
+      position: relative; flex: 0 0 auto; min-height: 56px; border: 1px solid var(--border); border-radius: 10px;
+      background: var(--color-surface-raised); color: var(--color-text); overflow: hidden; box-shadow: var(--shadow-sm);
     }
-    .shared-route-card:hover {
-      border-color: rgba(185, 95, 45, 0.22);
-      box-shadow: 0 10px 20px rgba(71, 49, 25, 0.08);
-      transform: translateY(-1px);
+    [data-theme="dark"] .unified-route-card { background: var(--color-surface-raised); }
+    .unified-route-card.is-hidden {
+      border-color: color-mix(in srgb, var(--border) 72%, var(--color-surface-muted));
+      background: color-mix(in srgb, var(--color-surface-raised) 72%, var(--color-surface-muted));
+      box-shadow: none;
     }
-    .shared-route-card-header {
-      display: grid;
-      grid-template-columns: auto minmax(0, 1fr) auto;
-      align-items: center;
-      gap: 8px;
-      min-width: 0;
+    .unified-route-card.is-hidden :is(.route-toggle, .route-color-swatch, .route-meta) { opacity: 0.62; }
+    .unified-route-card.is-open { border-color: color-mix(in srgb, var(--accent) 44%, var(--border)); }
+    .route-card-header {
+      display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: stretch; min-width: 0;
     }
-    .shared-route-color-dot {
-      width: 12px;
-      height: 12px;
-      border-radius: 50%;
-      flex: 0 0 auto;
+    .route-summary {
+      width: 100%; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+      border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer;
     }
-    .shared-route-name {
-      font-weight: 800;
-      font-size: 13px;
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+    .route-card-header > button:focus-visible { outline-offset: -3px; }
+    .route-toggle { width: 14px; flex: 0 0 14px; color: var(--text-sub); font-size: 12px; line-height: 1; }
+    .route-color-swatch {
+      width: 18px; height: 18px; flex: 0 0 18px; border-radius: 50%;
+      border: 1px solid rgba(0,0,0,0.18); box-shadow: inset 0 0 0 2px rgba(255,255,255,0.42);
     }
-    .shared-route-display-mode {
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      background: var(--surface);
-      color: var(--text-sub);
-      padding: 4px 8px;
-      font-size: 11px;
-      line-height: 1.2;
-      cursor: pointer;
-      white-space: nowrap;
-      min-width: 48px;
-      text-align: center;
+    .route-main { min-width: 0; flex: 1; }
+    .route-name { display: block; font-size: 12px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .route-meta { display: block; margin-top: 2px; font-size: 10px; line-height: 1.35; color: var(--text-sub); white-space: normal; overflow-wrap: anywhere; }
+    .route-type-badge {
+      display: inline-flex; align-items: center; width: fit-content; min-height: 24px; margin-top: 3px; padding: 3px 8px;
+      border-radius: 999px; font-size: 10px; line-height: 1; font-weight: 800; white-space: nowrap;
     }
-    .shared-route-display-mode:hover {
-      border-color: rgba(185, 95, 45, 0.28);
-      color: var(--accent);
+    .route-type-badge.type-pin { color: var(--route-type-pin-foreground); background: var(--route-type-pin-background); }
+    .route-type-badge.type-gpx { color: var(--route-type-gpx-foreground); background: var(--route-type-gpx-background); }
+    .route-type-badge.type-geojson { color: var(--route-type-geojson-foreground); background: var(--route-type-geojson-background); }
+    .route-fit {
+      align-self: center; min-width: 44px; min-height: 44px; width: 44px; height: 44px; margin: 6px 0; padding: 0;
+      display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 999px;
+      background: transparent; color: var(--text-sub); cursor: pointer;
     }
-    .shared-route-display-mode.is-off {
-      opacity: 0.55;
+    .route-fit:hover { color: var(--accent); background: var(--color-surface-muted); }
+    .route-visibility {
+      align-self: center; min-width: 44px; min-height: 44px; margin: 6px 8px 6px 0; padding: 2px 7px;
+      display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; border: 1px solid var(--border);
+      font-size: 10px; font-weight: 700; color: var(--text-sub); background: var(--surface);
+      cursor: pointer; user-select: none;
     }
-    .shared-route-meta {
-      color: var(--text-sub);
-      font-size: 11px;
-      margin-top: 4px;
+    .route-visibility.is-visible { color: var(--accent); background: rgba(46,125,50,0.1); border-color: rgba(46,125,50,0.24); }
+    .route-visibility:focus-visible { outline: var(--focus-ring-width) solid var(--focus); outline-offset: var(--focus-ring-offset); }
+    .route-detail {
+      display: none; padding: 0 10px 10px 50px; color: var(--text-sub); font-size: 11px; line-height: 1.45;
     }
-    .shared-route-pin-list {
-      margin: 8px 0 0;
-      padding: 0;
-      list-style: none;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
+    .unified-route-card.is-open .route-detail { display: block; }
+    .route-detail-row {
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+      gap: 6px 8px; padding-top: 2px;
     }
-    .shared-route-pin-item {
-      display: flex;
-      gap: 6px;
-      align-items: baseline;
-      padding: 4px 6px;
-      border-radius: 8px;
-      cursor: pointer;
-      min-width: 0;
+    .route-detail-title { flex: 1 1 70px; min-width: 0; font-weight: 800; color: var(--text-sub); }
+    .route-pin-list {
+      position: relative; display: flex; flex-direction: column; gap: 4px; max-height: min(42dvh, 352px);
+      margin-top: 8px; min-height: 38px; overflow-x: hidden; overflow-y: auto;
+      scrollbar-gutter: stable; touch-action: pan-y;
     }
-    .shared-route-pin-item:hover {
-      background: var(--accent-soft);
+    .route-pin-row {
+      display: grid; grid-template-columns: 26px minmax(0, 1fr); align-items: center; gap: 6px;
+      min-height: 44px; padding: 4px 0; border-top: 1px solid var(--border);
     }
-    .shared-route-pin-num {
-      flex: 0 0 auto;
-      font-weight: 800;
-      font-size: 11px;
-      color: var(--accent);
-      min-width: 1.6em;
+    .route-pin-order {
+      color: var(--text-sub); font-size: 10px; font-weight: 800; text-align: right; user-select: none;
     }
-    .shared-route-pin-title {
-      font-size: 12px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      min-width: 0;
+    .shared-route-pin-action {
+      width: 100%; min-width: 0; min-height: 44px; padding: 4px 6px; border: 0; border-radius: 8px;
+      background: transparent; color: var(--text); text-align: left; cursor: pointer;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    #shared-title {
-      margin-top: 2px;
-      font-size: 15px;
-      font-weight: 700;
-      line-height: 1.4;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .shared-topbar-actions {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex: 0 0 auto;
-    }
+    .shared-route-pin-action:hover { background: var(--accent-soft); }
     #shared-help-open-btn,
-    #shared-theme-toggle,
-    #shared-panel-toggle {
-      width: 34px;
-      height: 34px;
+    #shared-theme-toggle {
+      width: 44px;
+      min-width: 44px;
+      height: 44px;
+      min-height: 44px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -412,78 +595,81 @@
       font-size: 16px;
       flex: 0 0 auto;
     }
-    #shared-list-panel {
-      display: none;
-      position: fixed;
-      top: 64px;
-      right: 12px;
-      bottom: 12px;
-      z-index: 700;
-      width: 280px;
-      max-width: calc(100vw - 24px);
-      overflow-y: auto;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 18px;
-      box-shadow: var(--shadow);
-      backdrop-filter: blur(12px);
-      padding: 12px;
+    #shared-mobile-sheet-header { display: none; }
+    #shared-pin-section,
+    #shared-route-section {
+      min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
     }
-    body.shared-panel-visible #shared-list-panel {
-      display: block;
+    #shared-pin-section { background: var(--color-surface-raised); }
+    #shared-route-section {
+      border-top: var(--border-width) solid var(--border); background: var(--color-surface-muted);
     }
-    @media (min-width: 900px) {
-      body:not(.shared-panel-hidden) #shared-list-panel {
-        display: block;
-      }
+    #shared-pin-section > .shared-section-title,
+    .shared-route-section-header {
+      flex: 0 0 auto; min-height: 48px; margin: 0; padding: 0 var(--sp-3);
+      display: flex; align-items: center;
+      background: var(--color-surface-raised);
     }
-    body.shared-panel-hidden #shared-list-panel {
-      display: none !important;
+    .shared-route-section-header { justify-content: space-between; }
+    #shared-route-dock-toggle {
+      width: 44px; min-width: 44px; height: 44px; min-height: 44px; padding: 0;
+      border: 0; background: transparent; color: var(--color-text-muted); box-shadow: none;
     }
+    #shared-route-dock-toggle .shared-route-dock-icon-expanded { display: none; }
+    #shared-route-dock-toggle[aria-expanded="true"] .shared-route-dock-icon-collapsed { display: none; }
+    #shared-route-dock-toggle[aria-expanded="true"] .shared-route-dock-icon-expanded { display: block; }
+    #shared-route-list[hidden],
+    #shared-side-panel:not(.shared-route-dock-expanded) #shared-route-section > .shared-inline-help { display: none; }
+    #shared-pin-list,
+    #shared-route-list {
+      min-height: 0; flex: 1 1 auto; overflow-x: hidden; overflow-y: auto;
+      overscroll-behavior: contain; scrollbar-gutter: stable; touch-action: pan-y;
+      padding: var(--sp-2) var(--sp-3) var(--sp-3);
+    }
+    #shared-route-list { display: flex; flex-direction: column; gap: 6px; }
     .list-item {
-      width: 100%;
-      margin: 0 0 10px;
-      border: 1px solid var(--border);
-      border-radius: 18px;
-      background: var(--surface-strong);
-      color: var(--text);
-      text-align: left;
-      cursor: pointer;
-      padding: 14px;
-      transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+      width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 6px;
+      border: 1px solid var(--border); border-radius: 12px; background: rgba(255,255,255,0.8);
+      color: var(--text); text-align: left; cursor: pointer;
     }
-    .list-item:hover {
-      transform: translateY(-1px);
-      border-color: rgba(185, 95, 45, 0.22);
-      box-shadow: 0 12px 24px rgba(71, 49, 25, 0.08);
+    [data-theme="dark"] .list-item { background: rgba(31,31,36,0.92); }
+    #shared-side-panel .list-item {
+      min-height: 62px; gap: 8px; margin-bottom: 5px; padding: 6px 9px;
+      border-radius: 10px; background: var(--color-surface-raised); box-shadow: var(--shadow-sm);
     }
+    #shared-side-panel .list-item:hover { border-color: var(--accent); background: var(--color-surface-muted); }
+    .route-number-badge {
+      width: 18px; height: 18px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+      flex: 0 0 18px; border: 1.5px solid rgba(255,255,255,0.96); border-radius: 50%;
+      background: var(--route-badge-color, #1f2937); color: var(--route-badge-foreground, #fff); box-shadow: 0 1px 3px rgba(17,24,39,0.34);
+      font-family: Arial, sans-serif; font-size: 9px; font-weight: 800; line-height: 1;
+      font-variant-numeric: tabular-nums; white-space: nowrap; text-shadow: 0 1px 1px rgba(0,0,0,0.4);
+    }
+    .map-route-number-badge { position: absolute; left: 0; top: 2px; z-index: 3; pointer-events: none; }
+    .list-route-number-badge { align-self: center; }
+    .list-route-number-spacer { width: 18px; height: 18px; flex: 0 0 18px; align-self: center; }
+    .list-thumb {
+      width: 30px; height: 36px; border-radius: 0; flex: 0 0 30px; overflow: visible;
+      display: flex; align-items: center; justify-content: center; background: transparent;
+    }
+    .list-thumb-icon { width: 26px; height: 36px; display: block; filter: drop-shadow(0 1px 1px rgba(17,24,39,0.22)); }
+    .list-meta { min-width: 0; flex: 1; }
     .list-title {
-      font-size: 14px;
-      font-weight: 800;
-      line-height: 1.35;
+      font-size: 12px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .list-subtitle {
-      margin-top: 4px;
-      color: var(--text-sub);
-      font-size: 11px;
+      margin-top: 2px; font-size: 10px; color: var(--text-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
+    .view-card-chevron { flex: 0 0 auto; color: var(--color-text-muted); font-size: 18px; line-height: 1; }
     .tag-chips {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin-top: 10px;
+      display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;
     }
     .tag-chip {
-      display: inline-flex;
-      align-items: center;
-      padding: 4px 9px;
-      border-radius: 999px;
-      font-size: 11px;
-      color: #4f6b44;
-      background: var(--chip);
-      border: 1px solid var(--chip-border);
-      white-space: nowrap;
+      font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(46,125,50,0.1);
+      color: var(--accent); border: 1px solid rgba(46,125,50,0.25); white-space: nowrap;
     }
+    #shared-side-panel .tag-chips { flex-wrap: nowrap; max-width: 100%; margin-top: 3px; overflow: hidden; }
+    #shared-side-panel .tag-chip { padding: 1px 6px; font-size: 9px; }
     .empty-note {
       display: flex;
       align-items: center;
@@ -495,74 +681,92 @@
       font-size: 14px;
       line-height: 1.6;
     }
-    .muted {
+    .sheet-subtitle, .muted {
       color: var(--text-sub);
       font-size: 12px;
       line-height: 1.5;
     }
     .sheet-overlay {
-      position: fixed;
-      inset: 0;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      padding: 16px;
-      background: var(--overlay);
-      z-index: 1000;
+      position: fixed; inset: var(--dialog-viewport-offset-top, 0px) 0 auto; z-index: 1400;
+      width: 100%; height: var(--dialog-viewport-height, 100dvh); display: none; align-items: flex-end; justify-content: center;
+      overflow: hidden; overscroll-behavior: contain; background: var(--overlay); padding: 14px;
+      padding: max(14px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right))
+        max(14px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
     }
     .sheet-overlay.open { display: flex; }
-    .detail-card {
-      width: min(100%, 560px);
-      max-height: min(88vh, 760px);
-      overflow: auto;
-      padding: 20px;
-      border-radius: 24px;
-      border: 1px solid var(--border);
-      background: var(--surface);
-      box-shadow: 0 24px 48px rgba(37, 25, 14, 0.25);
+    .sheet-body {
+      width: min(100%, 520px); max-height: min(90vh, calc(var(--dialog-viewport-height, 100dvh) - var(--app-modal-viewport-inset)), 860px);
+      min-height: 0; overflow-y: auto; overscroll-behavior: contain; scroll-padding-block: 12px 64px;
+      background: var(--sheet-bg);
+      border: 1px solid var(--border); border-radius: 22px; box-shadow: var(--shadow); padding: 18px 16px 20px;
     }
-    .shared-help-content {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
+    .sheet-handle { width: 42px; height: 4px; border-radius: 999px; background: var(--border); margin: 0 auto 14px; }
+    .sheet-title {
+      max-block-size: 2.7em; overflow: hidden; overflow-wrap: anywhere;
+      font-size: 17px; font-weight: 800; line-height: 1.35; margin-bottom: 14px;
     }
-    .shared-help-content h3 {
-      margin-bottom: 4px;
-      color: var(--text);
-      font-size: 13px;
-      font-weight: 800;
+    .sheet-title-with-icon { display: flex; align-items: center; gap: 7px; }
+    .sheet-title-with-icon > span { min-width: 0; overflow-wrap: anywhere; }
+    .sheet-body > .sheet-title { position: sticky; top: 0; z-index: 3; background: var(--sheet-bg); }
+    .sheet-body > .inline-actions:last-child {
+      position: sticky; bottom: 0; z-index: 3; background: var(--sheet-bg);
     }
-    .shared-help-content p {
-      color: var(--text-sub);
-      font-size: 12px;
-      line-height: 1.55;
+    .ghost-btn {
+      min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+      padding: 0 12px; border: 1px solid var(--border); border-radius: 10px;
+      max-width: 100%; background: transparent; color: var(--text); cursor: pointer;
+      font-size: 12px; font-weight: 700; line-height: 1.2; white-space: nowrap;
     }
-    .detail-header {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 12px;
+    .inline-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .help-content { display: flex; flex-direction: column; gap: 12px; }
+    .help-content h3 { margin-bottom: 4px; font-size: 13px; font-weight: 800; color: var(--text); }
+    .help-content p { font-size: 12px; line-height: 1.55; color: var(--text-sub); }
+    #shared-help-description { margin-bottom: 14px; }
+    #shared-detail-image {
+      width: 100%; max-height: 220px; border-radius: 14px; display: none;
     }
-    .detail-title {
-      font-size: 20px;
-      font-weight: 800;
-      line-height: 1.3;
+    .photo-fit-cover { object-fit: cover; }
+    .photo-fit-contain { object-fit: contain; }
+    .photo-viewer-trigger {
+      position: relative; width: 100%; padding: 0; border: 0; border-radius: 14px;
+      overflow: hidden; background: transparent; color: inherit; cursor: zoom-in; line-height: 0; text-align: initial;
     }
-    .detail-close {
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      background: transparent;
-      color: var(--text-sub);
-      padding: 8px 12px;
-      cursor: pointer;
+    .photo-viewer-trigger:hover .photo-viewer-zoom-hint,
+    .photo-viewer-trigger:focus-visible .photo-viewer-zoom-hint { opacity: 1; }
+    .photo-viewer-trigger:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+    .photo-viewer-zoom-hint {
+      position: absolute; right: 9px; bottom: 9px; display: inline-flex; align-items: center; justify-content: center;
+      width: 34px; height: 34px; border-radius: 999px; color: #fff; background: rgba(0,0,0,0.66);
+      box-shadow: 0 3px 10px rgba(0,0,0,0.24); opacity: 0.86; pointer-events: none;
     }
-    .detail-image {
-      width: 100%;
-      max-height: 280px;
-      object-fit: cover;
-      border-radius: 18px;
-      margin-top: 16px;
-      display: block;
+    .photo-viewer-zoom-hint svg { width: 17px; height: 17px; }
+    #shared-detail-image-trigger { margin-top: 10px; }
+    .photo-viewer-overlay {
+      z-index: 1410; align-items: stretch; overflow: hidden;
+      padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right))
+        max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+      background: rgba(5, 8, 12, 0.94);
+    }
+    .photo-viewer-sheet {
+      width: 100%; max-width: none; max-height: none; height: 100%; min-height: 0; overflow: hidden;
+      display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 8px; padding: 0;
+      border: 0; border-radius: 16px; background: transparent; box-shadow: none; color: #fff;
+    }
+    .photo-viewer-header { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .photo-viewer-title {
+      flex: 1 1 auto; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-size: 16px; font-weight: 800; color: #fff;
+    }
+    .photo-viewer-close {
+      flex: 0 0 auto; min-width: 44px; min-height: 44px; border-color: rgba(255,255,255,0.5);
+      background: rgba(0,0,0,0.3); color: #fff;
+    }
+    .photo-viewer-status { min-height: 1.4em; font-size: 12px; color: rgba(255,255,255,0.82); }
+    .photo-viewer-stage {
+      min-width: 0; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden;
+    }
+    .photo-viewer-image {
+      width: 100%; height: 100%; max-width: 100%; max-height: 100%; display: block; object-fit: contain; touch-action: pinch-zoom;
     }
     .protected-photo {
       user-select: none;
@@ -570,55 +774,46 @@
       -webkit-user-drag: none;
       -webkit-touch-callout: none;
     }
-    .detail-body {
-      margin-top: 14px;
-      display: grid;
-      gap: 12px;
+    #shared-detail-status { display: none; margin-bottom: 6px; }
+    #shared-detail-tags, #shared-detail-routes { margin-bottom: 8px; }
+    #shared-detail-description { margin-bottom: 12px; white-space: pre-wrap; }
+    #shared-detail-links { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+    #shared-detail-time { margin-bottom: 14px; }
+    .pin-link {
+      display: block; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+      text-decoration: none; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere;
     }
-    .detail-section-title {
-      font-size: 12px;
-      font-weight: 800;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--text-sub);
+    .status-badge {
+      display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px;
+      background: rgba(255,152,0,0.12); color: var(--warning); border: 1px solid rgba(255,152,0,0.3);
+      white-space: nowrap; margin-top: 4px;
     }
-    .detail-links {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    .detail-link {
-      display: block;
-      padding: 10px 12px;
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      background: var(--surface-strong);
-      text-decoration: none;
-      word-break: break-all;
-    }
-    @media (max-width: 900px) {
-      body { overflow: auto; }
-      #shared-status-note {
-        top: 60px;
-      }
-      #shared-map-search-bar {
-        top: 108px;
-      }
+    .pin-marker-root {
+      border: 0; background: transparent; overflow: visible;
     }
     .pin-icon-visual {
       position: relative;
-      width: 30px;
-      height: 46px;
+      width: 43px;
+      height: 38px;
       display: block;
-      transform-origin: center bottom;
+      overflow: visible;
+      transform-origin: 30px bottom;
+    }
+    .pin-marker-svg {
+      display: block;
+      overflow: visible;
+    }
+    .pin-icon-visual .map-pin-svg {
+      position: absolute;
+      left: 17px;
+      top: 1px;
+      width: 26px;
+      height: 36px;
+      filter: drop-shadow(0 2px 2px rgba(17, 24, 39, 0.28));
     }
     .pin-icon-visual svg {
-      width: 100%;
-      height: 100%;
-      display: block;
       position: relative;
       z-index: 1;
-      overflow: visible;
     }
     .leaflet-marker-icon.is-linked-highlight {
       z-index: 640 !important;
@@ -632,10 +827,10 @@
     .leaflet-marker-icon.is-linked-highlight .pin-icon-visual::after {
       content: "";
       position: absolute;
-      left: 50%;
-      top: 1px;
-      width: 22px;
-      height: 22px;
+      left: 30px;
+      top: 3px;
+      width: 24px;
+      height: 24px;
       border-radius: 50%;
       border: 2px solid rgba(46,125,50,0.28);
       transform: translateX(-50%) scale(0.92);
@@ -678,7 +873,198 @@
       70% { transform: translateX(-50%) scale(1.34); opacity: 0.14; }
       100% { transform: translateX(-50%) scale(1.46); opacity: 0; }
     }
+    @media (min-width: 900px) {
+      #shared-side-panel.shared-route-dock-expanded {
+        grid-template-rows:
+          minmax(
+            var(--shared-dock-pin-region-effective-min-height, var(--dock-pin-region-min-height)),
+            var(--shared-dock-pin-region-height, clamp(
+              var(--dock-pin-region-min-height),
+              var(--dock-pin-region-preferred-height),
+              var(--dock-pin-region-max-height)
+            ))
+          )
+          var(--dock-route-resizer-size)
+          minmax(var(--shared-dock-route-region-effective-min-height, var(--dock-route-region-min-height)), 1fr);
+      }
+      #shared-side-panel.shared-route-dock-expanded #shared-route-resizer { display: block; }
+      .sheet-overlay { align-items: center; }
+      .sheet-body { max-height: min(calc(var(--dialog-viewport-height, 100dvh) - var(--app-modal-viewport-inset)), 860px); }
+      .sheet-handle { display: none; }
+      body:not(.shared-panel-hidden) #shared-detail-overlay.open {
+        inset: calc(var(--app-header-height) + var(--safe-area-top)) 0 auto auto; z-index: 1000;
+        width: var(--app-dock-width); height: calc((100dvh - var(--app-header-height) - var(--safe-area-top)) * 0.68);
+        min-height: 0; padding: 0; align-items: stretch; justify-content: stretch;
+        background: var(--color-surface-raised);
+      }
+      body:not(.shared-panel-hidden) #shared-detail-overlay .sheet-body {
+        width: 100%; max-width: none; max-height: none; border: 0; border-bottom: var(--border-width) solid var(--border);
+        border-radius: 0; box-shadow: none; padding: var(--sp-4); background: var(--color-surface-raised);
+      }
+      body:not(.shared-panel-hidden) #shared-detail-overlay .sheet-handle { display: none; }
+      body:not(.shared-panel-hidden) #shared-map,
+      body.shared-panel-visible #shared-map { right: var(--app-dock-width); }
+      body:not(.shared-panel-hidden) #shared-side-panel,
+      body.shared-panel-visible #shared-side-panel {
+        display: grid; transform: translateX(0); visibility: visible; pointer-events: auto;
+      }
+      body.shared-panel-hidden #shared-side-panel {
+        display: grid; transform: translateX(100%); visibility: hidden; pointer-events: none;
+        transition: transform 180ms ease, visibility 0s linear 180ms;
+      }
+    }
+    @media (min-width: 641px) and (max-width: 1279px) {
+      :root {
+        --app-effective-dock-width: clamp(320px, 38vw, var(--app-dock-width));
+        --app-compact-search-left: var(--sp-6);
+        --app-compact-control-gap: var(--sp-3);
+      }
+      #shared-side-panel { width: min(var(--app-effective-dock-width), 100%); }
+      #shared-panel-toggle,
+      body.shared-panel-visible #shared-panel-toggle { right: var(--app-effective-dock-width); }
+      #shared-map-search-bar { left: var(--app-compact-search-left); }
+      body.shared-panel-hidden #shared-map-search-bar {
+        width: min(
+          500px,
+          calc(100% - var(--app-compact-search-left) - var(--app-compact-search-left))
+        );
+      }
+      body.shared-panel-visible #shared-map-search-bar {
+        width: min(
+          500px,
+          calc(
+            100%
+            - var(--app-effective-dock-width)
+            - 36px
+            - var(--app-compact-search-left)
+            - var(--app-compact-control-gap)
+          )
+        );
+      }
+    }
+    @media (min-width: 900px) and (max-width: 1023px) {
+      body:not(.shared-panel-hidden) #shared-map,
+      body.shared-panel-visible #shared-map { right: var(--app-effective-dock-width); }
+    }
+    @media not all and (min-width: 900px) {
+      body.shared-panel-visible #shared-side-panel {
+        display: grid; transform: translateX(0); visibility: visible; pointer-events: auto;
+      }
+      body.shared-panel-hidden #shared-side-panel {
+        display: grid; transform: translateX(100%); visibility: hidden; pointer-events: none;
+        transition: transform 180ms ease, visibility 0s linear 180ms;
+      }
+      body.shared-panel-visible #shared-map,
+      body.shared-panel-hidden #shared-map { right: 0; }
+    }
+    @media (max-width: 640px) {
+      #shared-topbar {
+        gap: 6px;
+        padding: var(--safe-area-top) max(16px, var(--safe-area-right)) 0 max(16px, var(--safe-area-left));
+      }
+      .shared-topbar-heading { gap: 8px; }
+      .shared-topbar-title { font-size: 16px; }
+      #shared-display-name { padding-left: 8px; font-size: 12px; }
+      .shared-topbar-actions { gap: 4px; }
+      #shared-panel-toggle { display: none; }
+      #shared-map { inset: 0; }
+      body.shared-narrow-view #shared-map-search-bar {
+        top: 12px; left: 16px; width: calc(100% - 32px); max-width: none;
+        max-height: calc(100% - 252px);
+        padding: 5px 7px; border-radius: 12px; box-shadow: var(--shadow-md);
+      }
+      body.shared-narrow-view #shared-map-search-bar-row1 { min-height: 32px; gap: 6px; }
+      body.shared-narrow-view .shared-map-search-field { height: 30px; }
+      body.shared-narrow-view #shared-search-input {
+        height: 28px; min-height: 28px; font-size: 13px; line-height: 28px;
+      }
+      body.shared-narrow-view #shared-search-toggle {
+        flex: 0 0 44px; width: 44px; min-width: 44px; height: 44px; min-height: 44px; padding: 0;
+      }
+      #shared-side-panel {
+        display: grid; position: absolute; top: auto; right: 0; bottom: 0; left: 0;
+        width: 100%; height: 220px; min-height: 220px;
+        grid-template: auto minmax(0, 1fr) / minmax(0, 1fr) !important;
+        transform: translateY(0); visibility: visible; pointer-events: auto;
+        border: var(--border-width) solid var(--border); border-bottom: 0;
+        border-radius: 20px 20px 0 0;
+        box-shadow: 0 -8px 24px rgba(23, 32, 25, 0.13);
+        transition: height 180ms ease, transform 180ms ease, visibility 0s linear;
+      }
+      body.shared-mobile-sheet-expanded #shared-side-panel { height: min(70dvh, 586px); }
+      body.shared-mobile-sheet-expanded.shared-mobile-routes #shared-side-panel {
+        height: min(
+          calc(100dvh - var(--app-header-height) - var(--mobile-route-map-min-height)),
+          var(--mobile-route-sheet-max-height)
+        );
+      }
+      body.shared-panel-hidden #shared-side-panel {
+        display: grid; transform: translateY(calc(100% - 30px)); visibility: visible; pointer-events: auto;
+      }
+      #shared-mobile-sheet-header {
+        display: grid; grid-row: 1; grid-column: 1; gap: 8px; padding: 8px 16px 0;
+        background: var(--color-surface-raised);
+      }
+      #shared-mobile-sheet-handle {
+        width: 42px; height: 4px; justify-self: center; border-radius: 999px; background: var(--border);
+      }
+      #shared-mobile-sheet-tabs {
+        display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px;
+        min-height: 44px; padding: 4px; border-radius: var(--radius-md);
+        background: var(--color-surface-muted);
+      }
+      #shared-mobile-sheet-tabs button {
+        min-width: 44px; min-height: 44px; padding: 6px 10px; border: 0;
+        border-radius: 9px; background: transparent; color: var(--color-text-muted);
+        font-size: 13px; font-weight: 800;
+      }
+      #shared-mobile-sheet-tabs button[aria-selected="true"] {
+        background: var(--accent-soft); color: var(--accent-strong);
+      }
+      #shared-pin-section,
+      #shared-route-section {
+        grid-row: 2; grid-column: 1; min-height: 0; border: 0;
+      }
+      #shared-pin-section > .shared-section-title,
+      .shared-route-section-header,
+      #shared-route-section > .shared-inline-help { display: none; }
+      #shared-route-dock-toggle { display: none; }
+      #shared-route-resizer { display: none !important; }
+      #shared-pin-list,
+      #shared-route-list {
+        min-height: 0; height: 100%; overflow-x: hidden; overflow-y: auto;
+        padding: 8px 16px calc(18px + var(--safe-area-bottom));
+        overscroll-behavior: contain; scrollbar-gutter: stable;
+      }
+      body.shared-narrow-view #shared-side-panel .list-item {
+        min-height: 66px; margin-bottom: 5px; padding: 7px 10px;
+      }
+      body.shared-narrow-view .route-summary { min-height: 64px; }
+      body.shared-mobile-routes #shared-pin-section { display: none; }
+      body:not(.shared-mobile-routes) #shared-route-section { display: none; }
+      body.shared-panel-hidden #shared-map { right: 0; }
+      body.shared-narrow-view #shared-detail-overlay.open {
+        display: flex; align-items: flex-end; justify-content: stretch; padding: 0; background: transparent;
+      }
+      body.shared-narrow-view #shared-detail-overlay .sheet-body {
+        width: 100%; max-width: none;
+        height: min(75dvh, calc(var(--dialog-viewport-height, 100dvh) - env(safe-area-inset-top)), 634px);
+        max-height: min(75dvh, calc(var(--dialog-viewport-height, 100dvh) - env(safe-area-inset-top)), 634px);
+        padding: 10px max(16px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom))
+          max(16px, env(safe-area-inset-left));
+        border-radius: 20px 20px 0 0; border-bottom: 0;
+        box-shadow: 0 -8px 24px rgba(23, 32, 25, 0.13);
+      }
+    }
+    @media (max-width: 359px) {
+      #shared-display-name { display: none; }
+      #shared-topbar { padding-right: max(8px, var(--safe-area-right)); padding-left: max(8px, var(--safe-area-left)); }
+    }
     @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important; animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important; transition-duration: 0.01ms !important;
+      }
       .list-item.is-linked-highlight {
         animation: none;
         transform: none;
@@ -694,30 +1080,48 @@
         transform: translateX(-50%) scale(1.06);
         opacity: 0.28;
       }
+      #shared-map, #shared-side-panel, #shared-panel-toggle { transition: none; }
     }
   </style>
 </head>
 <body>
   <div id="shared-topbar">
-    <div class="shared-topbar-title-wrap">
-      <div class="shared-topbar-kicker">Shared View</div>
-      <div id="shared-title">Drop the Pin!</div>
+    <div class="shared-topbar-heading">
+      <span class="shared-topbar-title">
+        <svg class="shared-topbar-brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+        <span>Drop the Pin!</span>
+      </span>
+      <span id="shared-display-name" hidden><span id="shared-title"></span></span>
     </div>
     <div class="shared-topbar-actions">
-      <button id="shared-help-open-btn" class="shared-control-btn" type="button" title="使い方">?</button>
-      <button id="shared-theme-toggle" class="shared-control-btn" type="button" title="テーマ切替">🌙</button>
-      <button id="shared-panel-toggle" class="shared-control-btn" type="button" title="リストを隠す">🗺️</button>
+      <button id="shared-help-open-btn" class="shared-icon-btn" type="button" title="使い方" aria-label="使い方">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9.8 9.2a2.45 2.45 0 0 1 4.72.9c0 1.75-2.52 2.02-2.52 3.55" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="17.2" r="1" fill="currentColor"/></svg>
+      </button>
+      <button id="shared-theme-toggle" class="shared-icon-btn" type="button" title="ダークモードに切替" aria-label="ダークモードに切替">
+        <svg class="shared-theme-icon shared-theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15.2A8.4 8.4 0 0 1 8.8 4a8.5 8.5 0 1 0 11.2 11.2Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+        <svg class="shared-theme-icon shared-theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M18.7 5.3l-1.4 1.4M6.7 17.3l-1.4 1.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
     </div>
   </div>
   <div id="shared-status-note" style="display:none;"></div>
+  <main id="shared-app-shell">
   <div id="shared-map"></div>
   <div id="shared-map-search-bar">
     <div id="shared-map-search-bar-row1">
-      <input id="shared-search-input" type="search" placeholder="タイトル・説明・タグで検索">
-      <button id="shared-search-toggle" class="shared-control-btn" type="button" title="検索設定">▼</button>
+      <span class="shared-map-search-leading-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false">
+          <circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path>
+        </svg>
+      </span>
+      <div class="shared-map-search-field">
+        <input id="shared-search-input" type="search" placeholder="ピン・タグ・場所を検索" aria-label="ピン・タグ・場所を検索">
+      </div>
+      <button id="shared-search-toggle" class="shared-icon-btn" type="button" aria-label="フィルタ・ソート" aria-controls="shared-search-expanded" aria-expanded="false" title="フィルタ・ソート">
+        <svg class="shared-search-icon shared-search-icon-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+        <svg class="shared-search-icon shared-search-icon-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 15-6-6-6 6"></path></svg>
+      </button>
     </div>
     <div id="shared-geocode-results" style="display:none;"></div>
-    <div class="shared-inline-help">ピンは検索・タグ・色で絞り込めます。</div>
     <div id="shared-search-expanded" style="display:none;">
       <div id="shared-search-controls">
         <select id="shared-sort">
@@ -725,10 +1129,10 @@
           <option value="oldest">古い順</option>
           <option value="title">タイトル順</option>
         </select>
-        <button id="shared-filter-color-btn" class="shared-control-btn filter-toggle-btn" type="button">色で検索</button>
-        <button id="shared-filter-tag-btn" class="shared-control-btn filter-toggle-btn" type="button">タグで検索</button>
-        <button id="shared-clear-filters" class="shared-control-btn" type="button">条件クリア</button>
-        <button id="shared-reset-routes" class="shared-control-btn" type="button" title="ルート表示を初期状態に戻します">ルートも初期化</button>
+        <button id="shared-filter-color-btn" class="shared-control-btn shared-text-btn filter-toggle-btn" type="button" aria-pressed="false" aria-expanded="false" aria-controls="shared-filter-color-detail">色で検索</button>
+        <button id="shared-filter-tag-btn" class="shared-control-btn shared-text-btn filter-toggle-btn" type="button" aria-pressed="false" aria-expanded="false" aria-controls="shared-filter-tag-detail">タグで検索</button>
+        <button id="shared-clear-filters" class="shared-control-btn shared-text-btn" type="button">条件クリア</button>
+        <button id="shared-reset-routes" class="shared-control-btn shared-text-btn" type="button" title="ルート表示を初期状態に戻します">ルートも初期化</button>
       </div>
       <div id="shared-filter-color-detail" style="display:none;margin-top:4px;">
         <div id="shared-color-filter-header">
@@ -739,32 +1143,51 @@
       <div id="shared-filter-tag-detail" style="display:none;margin-top:4px;">
         <div id="shared-tag-filter-header">
           <span>タグ絞り込み</span>
-          <button id="shared-tag-mode" class="shared-control-btn" type="button">OR</button>
+          <button id="shared-tag-mode" class="shared-control-btn shared-text-btn" type="button">OR</button>
         </div>
         <div id="shared-tag-chips"></div>
       </div>
     </div>
   </div>
-  <aside id="shared-list-panel">
-    <section id="shared-route-section">
+  <aside id="shared-side-panel" aria-label="ピンとルート">
+  <div id="shared-list-panel">
+    <div id="shared-mobile-sheet-header">
+      <div id="shared-mobile-sheet-handle" aria-hidden="true"></div>
+      <div id="shared-mobile-sheet-tabs" role="tablist" aria-label="閲覧内容">
+        <button id="shared-mobile-pins-tab" type="button" role="tab" aria-selected="true" aria-controls="shared-pin-section" tabindex="0"><svg class="action-icon mobile-sheet-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z"></path><circle cx="12" cy="10" r="3"></circle></svg><span>ピン</span></button>
+        <button id="shared-mobile-routes-tab" type="button" role="tab" aria-selected="false" aria-controls="shared-route-section" tabindex="-1"><svg class="action-icon mobile-sheet-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="18" r="2"></circle><circle cx="18" cy="6" r="2"></circle><path d="M8 17c4-1 4-9 8-10"></path></svg><span>ルート</span></button>
+      </div>
+    </div>
+    <section id="shared-pin-section" role="tabpanel" aria-labelledby="shared-mobile-pins-tab">
+      <h3 class="shared-section-title">ピン</h3>
+      <div id="shared-pin-list"><div id="shared-list"></div></div>
+    </section>
+    <div id="shared-route-resizer" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="ピン領域とルート領域の高さを調整" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"></div>
+    <section id="shared-route-section" role="tabpanel" aria-labelledby="shared-mobile-routes-tab">
       <div class="shared-route-section-header">
         <h3 class="shared-section-title">ルート</h3>
+        <button id="shared-route-dock-toggle" type="button" aria-label="ルート領域を展開" aria-controls="shared-route-list" aria-expanded="false" title="ルート領域を展開">
+          <svg class="action-icon shared-route-dock-icon-collapsed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>
+          <svg class="action-icon shared-route-dock-icon-expanded" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+        </button>
       </div>
       <div class="shared-inline-help">ルートのボタンで 道路 / 直線 / 非表示 を切り替えできます。</div>
       <div id="shared-route-list"></div>
     </section>
-    <section id="shared-pin-section">
-      <h3 class="shared-section-title">ピン</h3>
-      <div id="shared-list"></div>
-    </section>
+  </div>
   </aside>
+  <button id="shared-panel-toggle" class="shared-icon-btn" type="button" title="一覧を閉じる" aria-label="一覧を閉じる" aria-controls="shared-side-panel" aria-expanded="true">
+    <svg class="shared-panel-toggle-icon shared-panel-toggle-icon-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>
+    <svg class="shared-panel-toggle-icon shared-panel-toggle-icon-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+  </button>
+  </main>
 
-  <div id="shared-help-overlay" class="sheet-overlay" role="dialog" aria-modal="true" aria-labelledby="shared-help-title"><div class="detail-card">
-    <div class="detail-header">
-      <div id="shared-help-title" class="detail-title">使い方</div>
-      <button id="shared-help-close" class="shared-control-btn" type="button">閉じる</button>
-    </div>
-    <div class="shared-help-content" style="margin-top:14px;">
+  <div id="shared-help-overlay" class="sheet-overlay" role="dialog" aria-modal="true" aria-labelledby="shared-help-title" aria-describedby="shared-help-description">
+    <div class="sheet-body">
+      <div class="sheet-handle" aria-hidden="true"></div>
+      <div id="shared-help-title" class="sheet-title">使い方</div>
+      <div id="shared-help-description" class="sheet-subtitle">共有マップを閲覧するための操作説明です。</div>
+      <div class="help-content">
       <section>
         <h3>このページは閲覧専用</h3>
         <p>ピンの追加・編集・削除はできません。</p>
@@ -775,20 +1198,59 @@
       </section>
       <section>
         <h3>検索・絞り込み</h3>
-        <p>タイトル・説明・タグで検索できます。タグ・色で絞り込みでき、並び順も変更できます。</p>
+        <p>ピンは検索・タグ・色で絞り込めます。場所の検索や並び順の変更もできます。</p>
       </section>
       <section>
         <h3>ルート</h3>
         <p>ルートカードの表示ボタンで「道路 / 直線 / 非表示」を切り替えできます。「ルートも初期化」で共有時の初期状態に戻せます。</p>
       </section>
       <section>
+        <h3>キーボード操作</h3>
+        <p>Tab／Shift+Tabで操作間を移動できます。詳細や使い方はEscapeで閉じられます。</p>
+      </section>
+      <section>
         <h3>注意</h3>
         <p>表示するルートが限定されていても、説明用の未所属ピンが表示されることがあります。ピンの表示は共有作成時のタグ・色条件、および閲覧中の検索・絞り込み条件で変わります。</p>
       </section>
+      </div>
+      <div class="inline-actions" style="margin-top:14px;">
+        <button id="shared-help-close" class="ghost-btn" type="button" title="閉じる" data-shared-initial-focus>閉じる</button>
+      </div>
     </div>
-  </div></div>
+  </div>
 
-  <div id="shared-detail-overlay" class="sheet-overlay" style="display:none;"></div>
+  <div id="shared-detail-overlay" class="sheet-overlay" role="dialog" aria-modal="true" aria-labelledby="shared-detail-title" aria-describedby="shared-detail-description">
+    <div class="sheet-body">
+      <div class="sheet-handle" aria-hidden="true"></div>
+      <button id="shared-detail-image-trigger" class="photo-viewer-trigger" type="button" aria-controls="shared-photo-viewer-overlay" aria-haspopup="dialog" hidden disabled>
+        <img id="shared-detail-image" class="photo-fit-cover protected-photo" draggable="false" alt="ピン画像">
+        <span class="photo-viewer-zoom-hint" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m15.5 15.5 5 5M10.5 7.5v6M7.5 10.5h6"></path></svg></span>
+      </button>
+      <div id="shared-detail-title" class="sheet-title" style="margin-top:10px;"></div>
+      <div id="shared-detail-status"></div>
+      <div id="shared-detail-tags"></div>
+      <div id="shared-detail-description" class="sheet-subtitle"></div>
+      <div id="shared-detail-routes"></div>
+      <div id="shared-detail-links"></div>
+      <div id="shared-detail-time" class="muted"></div>
+      <div class="inline-actions">
+        <button id="shared-detail-close" class="ghost-btn" type="button" title="閉じる" data-shared-initial-focus>閉じる</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="shared-photo-viewer-overlay" class="sheet-overlay photo-viewer-overlay" role="dialog" aria-modal="true" aria-labelledby="shared-photo-viewer-title">
+    <div class="sheet-body photo-viewer-sheet">
+      <header class="photo-viewer-header">
+        <h2 id="shared-photo-viewer-title" class="photo-viewer-title">写真を全体表示</h2>
+        <button id="shared-photo-viewer-close" class="ghost-btn photo-viewer-close" type="button" title="閉じる" data-shared-initial-focus>閉じる</button>
+      </header>
+      <span id="shared-photo-viewer-status" class="photo-viewer-status" role="status" aria-live="polite"></span>
+      <div class="photo-viewer-stage">
+        <img id="shared-photo-viewer-image" class="photo-fit-contain protected-photo photo-viewer-image" draggable="false" alt="">
+      </div>
+    </div>
+  </div>
 
   <script>
     const SHARED_DEFAULT_COLOR = '#e53935';
@@ -818,6 +1280,46 @@
       return SHARED_SAFE_COLOR_RE.test(String(color || '')) ? String(color).toLowerCase() : SHARED_DEFAULT_ROUTE_COLOR;
     }
 
+    function hexToRgb(value) {
+      const match = String(value || '').trim().match(/^#([0-9a-f]{6})$/i);
+      if (!match) return null;
+      return {
+        r: parseInt(match[1].slice(0, 2), 16),
+        g: parseInt(match[1].slice(2, 4), 16),
+        b: parseInt(match[1].slice(4, 6), 16)
+      };
+    }
+
+    function relativeLuminance(value) {
+      const rgb = hexToRgb(value);
+      if (!rgb) return 0;
+      return ['r', 'g', 'b'].reduce(function(total, channel, index) {
+        const component = rgb[channel] / 255;
+        const linear = component <= 0.04045
+          ? component / 12.92
+          : Math.pow((component + 0.055) / 1.055, 2.4);
+        return total + linear * [0.2126, 0.7152, 0.0722][index];
+      }, 0);
+    }
+
+    function contrastRatio(first, second) {
+      const firstLuminance = relativeLuminance(first);
+      const secondLuminance = relativeLuminance(second);
+      return (Math.max(firstLuminance, secondLuminance) + 0.05)
+        / (Math.min(firstLuminance, secondLuminance) + 0.05);
+    }
+
+    function getReadableTextColor(backgroundColor) {
+      const background = safeColor(backgroundColor);
+      const dark = '#000000';
+      const light = '#FFFFFF';
+      return contrastRatio(background, dark) >= contrastRatio(background, light) ? dark : light;
+    }
+
+    function getSharedContrastForeground(color) {
+      return getReadableTextColor(color);
+    }
+
     function normalizeSharedIcon(value) {
       const icon = String(value || '').trim().toLowerCase();
       return SHARED_PIN_ICONS.some(function(item) { return item.id === icon; }) ? icon : SHARED_PIN_ICONS[0].id;
@@ -826,65 +1328,88 @@
     function sharedPinIconGlyph(icon) {
       switch (normalizeSharedIcon(icon)) {
         case 'photo':
-          return '<rect x="7.5" y="8" width="15" height="9.5" rx="1.6" fill="currentColor"/><rect x="11.5" y="6.2" width="7" height="3" rx="1" fill="currentColor"/><circle cx="15" cy="12.8" r="3.1" fill="none" stroke="currentColor" stroke-width="1.8"/>';
+          return '<path d="M8 9h3l1.3-2h5.4L19 9h3v9H8V9Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="15" cy="13.5" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/>';
         case 'food':
-          return '<path d="M10 5v14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M7.5 5v5.5c0 1.4 1.1 2.5 2.5 2.5s2.5-1.1 2.5-2.5V5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M19 5c-2.2 1.7-3.3 4-3.3 7.2H19V19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+          return '<path d="M9.5 5.5V19M7 5.5v5c0 1.4 1.1 2.5 2.5 2.5s2.5-1.1 2.5-2.5v-5M19 5.5c-2.1 1.7-3.2 4-3.2 7.1H19V19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>';
         case 'hotel':
-          return '<rect x="7" y="11" width="16" height="6" rx="1.2" fill="currentColor"/><rect x="8" y="8" width="5" height="3" rx="1" fill="currentColor"/><path d="M7 7v12M23 10v9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
+          return '<path d="M7 7v12M23 11v8M7 12h16v5H7M9 9h5v3H9V9Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>';
         case 'nature':
-          return '<path d="M15 18V9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="15" cy="8" r="4" fill="currentColor"/><circle cx="11.5" cy="11.5" r="3.5" fill="currentColor"/><circle cx="18.5" cy="11.5" r="3.5" fill="currentColor"/>';
+          return '<path d="M21 6.5c-7.2.1-11.2 3.8-10.4 10.4C17 17.7 20.9 13.7 21 6.5ZM10.8 18c2-3.1 4.5-5.7 7.7-7.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>';
         case 'shop':
-          return '<path d="M9 10h12l-1 9H10l-1-9Z" fill="currentColor"/><path d="M11 10c0-3 1.5-4.5 4-4.5S19 7 19 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>';
+          return '<path d="M9 10h12l-1 9H10l-1-9ZM12 10V8.5a3 3 0 0 1 6 0V10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>';
         case 'transit':
-          return '<rect x="8" y="5.5" width="14" height="12" rx="2.2" fill="currentColor"/><rect x="10" y="8" width="10" height="4" rx="0.8" fill="#000" opacity="0.22"/><circle cx="12" cy="15" r="1.2" fill="#000" opacity="0.26"/><circle cx="18" cy="15" r="1.2" fill="#000" opacity="0.26"/>';
+          return '<path d="M9 7.5c0-1.1 2.7-2 6-2s6 .9 6 2V16c0 1.1-.9 2-2 2h-8a2 2 0 0 1-2-2V7.5ZM9 12h12M12 18l-2 2M18 18l2 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="15" r="1" fill="currentColor"/><circle cx="18" cy="15" r="1" fill="currentColor"/>';
         case 'warning':
-          return '<path d="M15 5.5 23 19H7L15 5.5Z" fill="currentColor"/><path d="M15 10v4.5" stroke="#000" stroke-width="2" stroke-linecap="round" opacity="0.28"/><circle cx="15" cy="16.8" r="1.1" fill="#000" opacity="0.28"/>';
+          return '<path d="M15 5.5 23 19H7L15 5.5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M15 10v4.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="15" cy="17" r="1" fill="currentColor"/>';
         default:
-          return '<circle cx="15" cy="12" r="4.6" fill="currentColor"/>';
+          return '<circle cx="15" cy="12" r="5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="15" cy="12" r="1.5" fill="currentColor"/>';
       }
     }
 
-    function createPinIcon(color, hasPhoto, icon) {
+    function createPinMarkerSvg(color, icon, ghost, className) {
       const fill = safeColor(color);
-      const innerDetail = '<g color="#fff" opacity="0.92">' + sharedPinIconGlyph(icon || (hasPhoto ? 'photo' : 'default')) + '</g>';
-      const svg = `
-        <svg xmlns="${SHARED_SVG_XMLNS}" width="30" height="46" viewBox="0 0 30 46">
-          <line x1="15" y1="23" x2="15" y2="44" stroke="#4d4d4d" stroke-width="1.6" stroke-linecap="round" opacity="1"/>
-          <circle cx="15" cy="12" r="11.5" fill="${fill}" opacity="0.24"/>
-          <circle cx="15" cy="12" r="10.5" fill="${fill}" opacity="1"/>
-          ${innerDetail}
+      const svgClass = ['pin-marker-svg', String(className || '').trim()].filter(Boolean).join(' ');
+      const opacity = ghost ? '0.62' : '1';
+      const glyphOpacity = ghost ? '0.78' : '1';
+      return `
+        <svg class="${escHtml(svgClass)}" xmlns="http://www.w3.org/2000/svg" width="26" height="36" viewBox="0 0 34 48" aria-hidden="true">
+          <path class="pin-drop" fill="${fill}" stroke="rgba(17,24,39,0.38)" stroke-width="1.2" opacity="${opacity}" d="M17 1.5C8.6 1.5 2 8.1 2 16.4c0 10.7 15 30.1 15 30.1s15-19.4 15-30.1C32 8.1 25.4 1.5 17 1.5Z"/>
+          <g class="pin-category-glyph" transform="translate(2 4)" color="#fff" opacity="${glyphOpacity}">${sharedPinIconGlyph(icon)}</g>
         </svg>`;
-      return L.divIcon({ html: '<div class="pin-icon-visual">' + svg + '</div>', iconSize: [30, 46], iconAnchor: [15, 44], className: '' });
     }
 
-    function createSharedNumberedPinIcon(color, number) {
-      const fill = safeColor(color);
-      const safeNumber = String(number == null ? '' : number);
-      const svg = `
-        <svg xmlns="${SHARED_SVG_XMLNS}" width="30" height="46" viewBox="0 0 30 46">
-          <line x1="15" y1="23" x2="15" y2="44" stroke="#4d4d4d" stroke-width="1.6" stroke-linecap="round" opacity="1"/>
-          <circle cx="15" cy="12" r="11.5" fill="${fill}" opacity="0.24"/>
-          <circle cx="15" cy="12" r="10.5" fill="${fill}" opacity="1"/>
-          <text x="15" y="12.8" text-anchor="middle" dominant-baseline="middle" font-family="Arial, sans-serif" font-size="${String(safeNumber).length > 2 ? 9 : 12}" font-weight="800" fill="#fff">${escHtml(safeNumber)}</text>
-        </svg>`;
-      return L.divIcon({ html: '<div class="pin-icon-visual">' + svg + '</div>', iconSize: [30, 46], iconAnchor: [15, 44], className: '' });
+    function createRouteNumberBadge(number, className, color) {
+      if (number == null) return '';
+      const modifier = String(className || '').trim();
+      const classes = 'route-number-badge' + (modifier ? ' ' + modifier : '');
+      const background = safeColor(color);
+      const style = '--route-badge-color: ' + background + '; --route-badge-foreground: ' + getReadableTextColor(background);
+      return '<span class="' + escHtml(classes) + '" style="' + escHtml(style) + '" aria-hidden="true">' + escHtml(String(number)) + '</span>';
+    }
+
+    function sharedPinListIconMarkup(pin, className) {
+      return createPinMarkerSvg(pin && pin.color, pin && pin.icon, false, className || 'list-thumb-icon');
+    }
+
+    function sharedPinListThumbMarkup(pin) {
+      return '<div class="list-thumb">' + sharedPinListIconMarkup(pin, 'list-thumb-icon') + '</div>';
+    }
+
+    function createPinIcon(color, ghost, hasPhoto, icon, routeNumber, routeColor) {
+      const resolvedIcon = icon || (hasPhoto ? 'photo' : 'default');
+      const html = '<div class="pin-icon-visual">'
+        + createPinMarkerSvg(color, resolvedIcon, ghost, 'map-pin-svg')
+        + createRouteNumberBadge(routeNumber, 'map-route-number-badge', routeColor)
+        + '</div>';
+      return L.divIcon({ html: html, iconSize: [43, 38], iconAnchor: [30, 37], className: 'pin-marker-root' });
+    }
+
+    function createSharedNumberedPinIcon(color, number, ghost, hasPhoto, icon, routeColor) {
+      return createPinIcon(color, ghost, hasPhoto, icon, number, routeColor);
     }
 
     function createSharedPinIconForDisplay(pin) {
       const display = getSharedRouteNumberDisplayForPin(pin.id);
-      if (display) return createSharedNumberedPinIcon(display.color || pin.color, display.number);
-      return createPinIcon(pin.color, !!pin.imageUrl, pin.icon);
+      if (display && display.number != null) {
+        return createSharedNumberedPinIcon(pin.color, display.number, false, !!pin.imageUrl, pin.icon, display.color);
+      }
+      return createPinIcon(pin.color, false, !!pin.imageUrl, pin.icon);
     }
 
     const EXEC_URL = <?!= JSON.stringify(execUrl || '') ?>;
     const SHARED_TOKEN = <?!= JSON.stringify(token || '') ?>;
     const SHARED_ROUTE_NONE_SENTINEL = '__share_no_routes__';
+    const SHARED_ROUTE_DOCK_SPLIT_STORAGE_KEY = 'dropThePin.sharedRouteDockSplitPx.v1';
+    function sharedMatchesMedia(query, fallback) {
+      return typeof window.matchMedia === 'function' ? window.matchMedia(query).matches : fallback === true;
+    }
     // 共有ビューは読み取り専用。編集・追加・削除・D&D・ルート編集は持たない。
     // ルート情報は表示制御・ルート線・番号表示のために読むだけ。
     const state = {
       token: SHARED_TOKEN || new URLSearchParams(window.location.search).get('token') || '',
       pins: [],
       routeGroups: [],
+      routes: [],
       allowedTags: [],
       allowedColors: [],
       allowedRouteIds: [],
@@ -900,17 +1425,24 @@
       initialTagMode: 'or',
       shareLabel: '',
       status: 'loading',
-      panelVisible: true,
+      panelVisible: sharedMatchesMedia('(max-width: 640px)', false) || sharedMatchesMedia('(min-width: 900px)', true),
+      narrowView: sharedMatchesMedia('(max-width: 640px)', false),
       sort: 'newest',
       searchExpanded: false,
       tagFilterExpanded: false,
-      colorFilterExpanded: false
+      colorFilterExpanded: false,
+      mobileSheetTab: 'pins',
+      routeDockExpanded: false,
+      routeDockPinHeightPx: readSharedRouteDockStoredPinHeight(),
+      routeDockResize: null,
+      routeUiOpenKey: null
     };
 
     let sharedMap = null;
     let sharedMarkers = {};
     let sharedRouteLayers = {};
     let sharedRouteRenderVersion = 0;
+    let sharedRoadRoutePendingRequests = Object.create(null);
     let sharedLinkedCardHighlightPinId = null;
     let sharedLinkedCardHighlightTimer = null;
 
@@ -938,7 +1470,7 @@
 
     function isCardVisible(pinId) {
       const card = getCardElementByPinId(pinId);
-      const panel = document.getElementById('shared-list-panel');
+      const panel = document.getElementById('shared-side-panel');
       return isElementVisibleInContainer(card, panel);
     }
 
@@ -1027,14 +1559,432 @@
       } catch (_error) {}
     }
 
-    function openSharedHelpOverlay() {
-      const overlay = document.getElementById('shared-help-overlay');
+    const SHARED_DISMISSIBLE_SURFACE_IDS = Object.freeze([
+      'shared-help-overlay', 'shared-detail-overlay', 'shared-photo-viewer-overlay'
+    ]);
+    const SHARED_SURFACE_FOCUSABLE_SELECTOR = [
+      'a[href]', 'button', 'input:not([type="hidden"])', 'select', 'textarea',
+      'summary', '[contenteditable="true"]', '[tabindex]'
+    ].join(',');
+    const sharedSurfaceOpenRecords = [];
+    const sharedBackgroundInteractionStateRecords = new Map();
+    const sharedPhotoViewerState = {
+      sourceTrigger: null,
+      sourceUrl: '',
+      requestToken: 0,
+      loadHandler: null,
+      errorHandler: null
+    };
+
+    function setSharedInteractionAttribute(element, name, value) {
+      if (!element) return;
+      if (name === 'inert') {
+        element.inert = value === true;
+        if (value === true && typeof element.setAttribute === 'function') element.setAttribute('inert', '');
+        if (value !== true && typeof element.removeAttribute === 'function') element.removeAttribute('inert');
+        return;
+      }
+      if (value === null || typeof value === 'undefined') {
+        if (typeof element.removeAttribute === 'function') element.removeAttribute(name);
+        return;
+      }
+      if (typeof element.setAttribute === 'function') element.setAttribute(name, value);
+    }
+
+    function captureSharedInteractionState(element) {
+      const getAttribute = element && typeof element.getAttribute === 'function'
+        ? function(name) { return element.getAttribute(name); }
+        : function() { return null; };
+      return {
+        inert: !!(element && element.inert),
+        inertAttribute: getAttribute('inert'),
+        ariaHidden: getAttribute('aria-hidden'),
+        ariaModal: getAttribute('aria-modal')
+      };
+    }
+
+    function restoreSharedInteractionState(element, interactionState) {
+      if (!element || !interactionState) return;
+      setSharedInteractionAttribute(element, 'inert', interactionState.inert);
+      if (interactionState.inertAttribute !== null && typeof element.setAttribute === 'function') {
+        element.setAttribute('inert', interactionState.inertAttribute);
+      }
+      setSharedInteractionAttribute(element, 'aria-hidden', interactionState.ariaHidden);
+      setSharedInteractionAttribute(element, 'aria-modal', interactionState.ariaModal);
+    }
+
+    function removeSharedSurfaceRecord(id) {
+      for (let index = sharedSurfaceOpenRecords.length - 1; index >= 0; index -= 1) {
+        if (sharedSurfaceOpenRecords[index].id === id) sharedSurfaceOpenRecords.splice(index, 1);
+      }
+    }
+
+    function getSharedSurfaceRecord(id) {
+      for (let index = sharedSurfaceOpenRecords.length - 1; index >= 0; index -= 1) {
+        if (sharedSurfaceOpenRecords[index].id === id) return sharedSurfaceOpenRecords[index];
+      }
+      return null;
+    }
+
+    function isSharedDockedPinDetailOverlay(overlay) {
+      if (!overlay || overlay.id !== 'shared-detail-overlay') return false;
+      const desktop = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+        && window.matchMedia('(min-width: 900px)').matches;
+      const panelVisible = document.body && document.body.classList
+        && document.body.classList.contains('shared-panel-visible');
+      return Boolean(desktop && panelVisible);
+    }
+
+    function getOpenSharedSurfaceRecords() {
+      const records = [];
+      for (let index = 0; index < sharedSurfaceOpenRecords.length; index += 1) {
+        const record = sharedSurfaceOpenRecords[index];
+        const overlay = document.getElementById(record.id);
+        if (!overlay || !overlay.classList.contains('open')) {
+          if (overlay) restoreSharedInteractionState(overlay, record.interactionState);
+          sharedSurfaceOpenRecords.splice(index, 1);
+          index -= 1;
+          continue;
+        }
+        records.push(record);
+      }
+      return records;
+    }
+
+    function restoreSharedBackgroundInteractionState() {
+      sharedBackgroundInteractionStateRecords.forEach(function(interactionState, element) {
+        restoreSharedInteractionState(element, interactionState);
+      });
+      sharedBackgroundInteractionStateRecords.clear();
+    }
+
+    function syncSharedSurfaceInteractionState() {
+      const openRecords = getOpenSharedSurfaceRecords();
+      const modalRecords = openRecords.filter(function(record) {
+        return !isSharedDockedPinDetailOverlay(document.getElementById(record.id));
+      });
+      const topModalRecord = modalRecords.length ? modalRecords[modalRecords.length - 1] : null;
+      if (!topModalRecord) {
+        restoreSharedBackgroundInteractionState();
+      }
+      if (topModalRecord && document.body && document.body.children) {
+        const openOverlays = openRecords.map(function(record) {
+          return document.getElementById(record.id);
+        });
+        Array.prototype.forEach.call(document.body.children, function(element) {
+          if (openOverlays.indexOf(element) !== -1) return;
+          if (!sharedBackgroundInteractionStateRecords.has(element)) {
+            sharedBackgroundInteractionStateRecords.set(element, captureSharedInteractionState(element));
+          }
+          setSharedInteractionAttribute(element, 'inert', true);
+          setSharedInteractionAttribute(element, 'aria-hidden', 'true');
+          if (element.classList && element.classList.contains('sheet-overlay')) {
+            setSharedInteractionAttribute(element, 'aria-modal', 'false');
+          }
+        });
+      }
+      openRecords.forEach(function(record) {
+        const overlay = document.getElementById(record.id);
+        const active = record === topModalRecord;
+        const docked = isSharedDockedPinDetailOverlay(overlay);
+        if (active || (!topModalRecord && docked)) {
+          setSharedInteractionAttribute(overlay, 'inert', false);
+          setSharedInteractionAttribute(overlay, 'aria-hidden', null);
+          setSharedInteractionAttribute(overlay, 'aria-modal', active ? 'true' : 'false');
+        } else {
+          setSharedInteractionAttribute(overlay, 'inert', true);
+          setSharedInteractionAttribute(overlay, 'aria-hidden', 'true');
+          setSharedInteractionAttribute(overlay, 'aria-modal', 'false');
+        }
+      });
+    }
+
+    function isSharedSurfaceFocusable(element) {
+      if (!element || typeof element.focus !== 'function' || element.hidden || element.disabled) return false;
+      if (typeof element.matches === 'function' && element.matches(':disabled')) return false;
+      const getAttribute = typeof element.getAttribute === 'function'
+        ? function(name) { return element.getAttribute(name); }
+        : function() { return null; };
+      if (getAttribute('aria-disabled') === 'true' || getAttribute('aria-hidden') === 'true') return false;
+      const tabIndex = getAttribute('tabindex');
+      if (tabIndex !== null && Number(tabIndex) < 0) return false;
+      const tagName = String(element.tagName || '').toUpperCase();
+      if (tagName === 'A') return !!getAttribute('href');
+      if (['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'SUMMARY'].indexOf(tagName) !== -1) return true;
+      if (getAttribute('contenteditable') === 'true') return true;
+      return tabIndex !== null;
+    }
+
+    function getSharedSurfaceFocusableElements(overlay) {
+      if (!overlay || typeof overlay.querySelectorAll !== 'function') return [];
+      return Array.prototype.filter.call(
+        overlay.querySelectorAll(SHARED_SURFACE_FOCUSABLE_SELECTOR),
+        isSharedSurfaceFocusable
+      );
+    }
+
+    function focusSharedSurfaceInitial(overlay) {
+      if (!overlay || typeof overlay.querySelectorAll !== 'function') return false;
+      const marked = Array.prototype.filter.call(
+        overlay.querySelectorAll('[data-shared-initial-focus]'),
+        isSharedSurfaceFocusable
+      );
+      const focusable = getSharedSurfaceFocusableElements(overlay);
+      const target = marked[0] || focusable[0] || null;
+      if (!target) return false;
+      try {
+        target.focus();
+        return true;
+      } catch (_error) {
+        return false;
+      }
+    }
+
+    function openSharedSurface(id) {
+      const overlay = document.getElementById(id);
+      if (!overlay) return false;
+      const existingRecord = getSharedSurfaceRecord(id);
+      const backgroundInteractionState = sharedBackgroundInteractionStateRecords.get(overlay) || null;
+      const record = {
+        id: id,
+        opener: existingRecord ? existingRecord.opener : (document.activeElement || null),
+        interactionState: existingRecord
+          ? existingRecord.interactionState
+          : (backgroundInteractionState || captureSharedInteractionState(overlay))
+      };
+      if (backgroundInteractionState) sharedBackgroundInteractionStateRecords.delete(overlay);
+      removeSharedSurfaceRecord(id);
+      sharedSurfaceOpenRecords.push(record);
       overlay.classList.add('open');
+      syncSharedSurfaceInteractionState();
+      focusSharedSurfaceInitial(overlay);
+      return true;
+    }
+
+    function canRestoreSharedSurfaceFocus(opener) {
+      if (!opener || typeof opener.focus !== 'function') return false;
+      if (typeof document.contains === 'function' && !document.contains(opener)) return false;
+      if (opener.disabled || opener.hidden) return false;
+      if (typeof opener.getAttribute === 'function'
+          && (opener.getAttribute('aria-disabled') === 'true'
+            || opener.getAttribute('aria-hidden') === 'true'
+            || opener.getAttribute('tabindex') === '-1')) {
+        return false;
+      }
+      if (typeof opener.closest === 'function') {
+        const ownerOverlay = opener.closest('.sheet-overlay');
+        if (ownerOverlay && !ownerOverlay.classList.contains('open')) return false;
+      }
+      return true;
+    }
+
+    function restoreSharedSurfaceFocus(opener) {
+      if (!canRestoreSharedSurfaceFocus(opener)) return false;
+      try {
+        opener.focus();
+        return true;
+      } catch (_error) {
+        return false;
+      }
+    }
+
+    function getTopSharedSurfaceRecord() {
+      const records = getOpenSharedSurfaceRecords();
+      for (let index = records.length - 1; index >= 0; index -= 1) {
+        if (SHARED_DISMISSIBLE_SURFACE_IDS.indexOf(records[index].id) !== -1) return records[index];
+      }
+      return null;
+    }
+
+    function getTopSharedModalSurfaceRecord() {
+      const records = getOpenSharedSurfaceRecords();
+      for (let index = records.length - 1; index >= 0; index -= 1) {
+        const overlay = document.getElementById(records[index].id);
+        if (!isSharedDockedPinDetailOverlay(overlay)) return records[index];
+      }
+      return null;
+    }
+
+    function closeSharedSurface(id, options) {
+      const overlay = document.getElementById(id);
+      const record = getSharedSurfaceRecord(id);
+      const wasTop = getTopSharedSurfaceRecord() === record;
+      if (!overlay) return false;
+      overlay.classList.remove('open');
+      removeSharedSurfaceRecord(id);
+      restoreSharedInteractionState(overlay, record && record.interactionState);
+      syncSharedSurfaceInteractionState();
+      if (wasTop && (!options || options.restoreFocus !== false)) {
+        restoreSharedSurfaceFocus(record && record.opener);
+      }
+      return true;
+    }
+
+    function trapSharedSurfaceFocus(event) {
+      if (!event || event.key !== 'Tab') return false;
+      const record = getTopSharedModalSurfaceRecord();
+      if (!record) return false;
+      const overlay = document.getElementById(record.id);
+      const focusable = getSharedSurfaceFocusableElements(overlay);
+      let target = null;
+      if (!focusable.length) {
+        focusSharedSurfaceInitial(overlay);
+      } else if (focusable.length === 1) {
+        target = focusable[0];
+      } else {
+        const activeIndex = focusable.indexOf(document.activeElement);
+        const focusIsInside = typeof overlay.contains === 'function' && overlay.contains(document.activeElement);
+        if (!focusIsInside || activeIndex === -1) {
+          target = event.shiftKey ? focusable[focusable.length - 1] : focusable[0];
+        } else if (event.shiftKey && activeIndex === 0) {
+          target = focusable[focusable.length - 1];
+        } else if (!event.shiftKey && activeIndex === focusable.length - 1) {
+          target = focusable[0];
+        } else {
+          return false;
+        }
+      }
+      if (target) {
+        try { target.focus(); } catch (_error) {}
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      return true;
+    }
+
+    function getSharedPhotoViewerSourceUrl(trigger) {
+      const image = trigger && typeof trigger.querySelector === 'function' ? trigger.querySelector('img') : null;
+      if (!image) return '';
+      const attributeUrl = typeof image.getAttribute === 'function' ? image.getAttribute('src') : '';
+      return String(attributeUrl || image.currentSrc || image.src || '').trim();
+    }
+
+    function setSharedPhotoViewerStatus(message) {
+      const status = document.getElementById('shared-photo-viewer-status');
+      if (status) status.textContent = String(message || '');
+    }
+
+    function removeSharedPhotoViewerImageListeners() {
+      const image = document.getElementById('shared-photo-viewer-image');
+      if (!image) return;
+      if (sharedPhotoViewerState.loadHandler) image.removeEventListener('load', sharedPhotoViewerState.loadHandler);
+      if (sharedPhotoViewerState.errorHandler) image.removeEventListener('error', sharedPhotoViewerState.errorHandler);
+      sharedPhotoViewerState.loadHandler = null;
+      sharedPhotoViewerState.errorHandler = null;
+    }
+
+    function updateSharedPhotoViewerTrigger(trigger, image, options) {
+      if (!trigger || !image) return false;
+      const config = options || {};
+      const sourceUrl = String(config.sourceUrl || '').trim();
+      const title = String(config.title || '').trim() || '写真';
+      if (sharedPhotoViewerState.sourceTrigger === trigger && sharedPhotoViewerState.sourceUrl !== sourceUrl) {
+        closeSharedPhotoViewer({ restoreFocus: false });
+      }
+      if (sourceUrl) {
+        image.setAttribute('src', sourceUrl);
+        image.alt = String(config.alt || title + 'の写真');
+        image.style.display = 'block';
+        trigger.hidden = false;
+        trigger.disabled = false;
+        trigger.setAttribute('aria-label', '「' + title + '」の写真を全体表示');
+        trigger.setAttribute('data-photo-viewer-title', title);
+        if (sharedPhotoViewerState.sourceTrigger === trigger) {
+          const heading = document.getElementById('shared-photo-viewer-title');
+          if (heading) heading.textContent = title;
+        }
+        return true;
+      }
+      image.removeAttribute('src');
+      image.alt = String(config.alt || '写真');
+      image.style.display = 'none';
+      trigger.hidden = true;
+      trigger.disabled = true;
+      trigger.removeAttribute('aria-label');
+      trigger.removeAttribute('data-photo-viewer-title');
+      return false;
+    }
+
+    function openSharedPhotoViewer(sourceUrl, title, sourceTrigger) {
+      const normalizedUrl = String(sourceUrl || '').trim();
+      if (!normalizedUrl || !sourceTrigger || sourceTrigger.disabled || sourceTrigger.hidden) return false;
+      const overlay = document.getElementById('shared-photo-viewer-overlay');
+      const image = document.getElementById('shared-photo-viewer-image');
+      const heading = document.getElementById('shared-photo-viewer-title');
+      if (!overlay || !image || !heading) return false;
+
+      removeSharedPhotoViewerImageListeners();
+      const requestToken = sharedPhotoViewerState.requestToken + 1;
+      sharedPhotoViewerState.requestToken = requestToken;
+      sharedPhotoViewerState.sourceTrigger = sourceTrigger;
+      sharedPhotoViewerState.sourceUrl = normalizedUrl;
+      heading.textContent = String(title || '').trim() || '写真を全体表示';
+      image.alt = heading.textContent;
+      setSharedPhotoViewerStatus('写真を読み込み中...');
+
+      sharedPhotoViewerState.loadHandler = function() {
+        if (sharedPhotoViewerState.requestToken !== requestToken || sharedPhotoViewerState.sourceUrl !== normalizedUrl) return;
+        setSharedPhotoViewerStatus('');
+      };
+      sharedPhotoViewerState.errorHandler = function() {
+        if (sharedPhotoViewerState.requestToken !== requestToken || sharedPhotoViewerState.sourceUrl !== normalizedUrl) return;
+        setSharedPhotoViewerStatus('写真を表示できませんでした');
+      };
+      image.addEventListener('load', sharedPhotoViewerState.loadHandler);
+      image.addEventListener('error', sharedPhotoViewerState.errorHandler);
+      image.setAttribute('src', normalizedUrl);
+
+      if (!overlay.classList.contains('open')) {
+        try { sourceTrigger.focus(); } catch (_error) {}
+        openSharedSurface('shared-photo-viewer-overlay');
+      }
+      return true;
+    }
+
+    function openSharedPhotoViewerFromTrigger(trigger) {
+      if (!trigger || trigger.disabled || trigger.hidden) return false;
+      const sourceUrl = getSharedPhotoViewerSourceUrl(trigger);
+      const title = typeof trigger.getAttribute === 'function'
+        ? trigger.getAttribute('data-photo-viewer-title') : '';
+      return openSharedPhotoViewer(sourceUrl, title, trigger);
+    }
+
+    function closeSharedPhotoViewer(options) {
+      const overlay = document.getElementById('shared-photo-viewer-overlay');
+      const image = document.getElementById('shared-photo-viewer-image');
+      const wasOpen = !!(overlay && overlay.classList.contains('open'));
+      sharedPhotoViewerState.requestToken += 1;
+      removeSharedPhotoViewerImageListeners();
+      if (image) {
+        image.removeAttribute('src');
+        image.alt = '';
+      }
+      setSharedPhotoViewerStatus('');
+      sharedPhotoViewerState.sourceTrigger = null;
+      sharedPhotoViewerState.sourceUrl = '';
+      if (wasOpen) closeSharedSurface('shared-photo-viewer-overlay', options);
+      return wasOpen;
+    }
+
+    function closeSharedPhotoViewerForTrigger(trigger, options) {
+      if (!trigger || sharedPhotoViewerState.sourceTrigger !== trigger) return false;
+      return closeSharedPhotoViewer(options);
+    }
+
+    function bindSharedPhotoViewerTrigger(trigger) {
+      if (!trigger || trigger.getAttribute('data-photo-viewer-bound') === 'true') return false;
+      trigger.setAttribute('data-photo-viewer-bound', 'true');
+      trigger.addEventListener('click', function() { openSharedPhotoViewerFromTrigger(trigger); });
+      return true;
+    }
+
+    function openSharedHelpOverlay() {
+      openSharedSurface('shared-help-overlay');
     }
 
     function closeSharedHelpPanel() {
-      const overlay = document.getElementById('shared-help-overlay');
-      overlay.classList.remove('open');
+      closeSharedSurface('shared-help-overlay');
+      return true;
     }
 
     function openSharedHelpPanel() {
@@ -1049,10 +1999,13 @@
     function setTheme(theme) {
       document.documentElement.setAttribute('data-theme', theme);
       rememberTheme(theme);
-      document.getElementById('shared-theme-toggle').textContent = theme === 'dark' ? '☀️' : '🌙';
+      const toggle = document.getElementById('shared-theme-toggle');
+      const label = theme === 'dark' ? 'ライトモードに切替' : 'ダークモードに切替';
+      toggle.title = label;
+      toggle.setAttribute('aria-label', label);
     }
 
-    (function initTheme() {
+    (function() {
       const saved = readStoredTheme();
       setTheme(saved || getPreferredTheme());
     })();
@@ -1092,44 +2045,76 @@
 
     installProtectedPhotoGuards();
 
-    function closeSharedDetail() {
-      const overlay = document.getElementById('shared-detail-overlay');
-      overlay.classList.remove('open');
-      overlay.style.display = 'none';
-      overlay.innerHTML = '';
+    function closeSharedDetail(options) {
+      const trigger = document.getElementById('shared-detail-image-trigger');
+      const image = document.getElementById('shared-detail-image');
+      closeSharedPhotoViewerForTrigger(trigger, { restoreFocus: false });
+      updateSharedPhotoViewerTrigger(trigger, image, { alt: 'ピン画像' });
+      closeSharedSurface('shared-detail-overlay', options);
+      return true;
+    }
+
+    function getSharedPinRouteLabels(pinId) {
+      const normalizedPinId = String(pinId || '');
+      if (!normalizedPinId) return [];
+      return getSharedRouteGroups().filter(function(group) {
+        return getSharedRoutePinIdsForDisplay(group).indexOf(normalizedPinId) !== -1;
+      }).map(function(group) {
+        return String(group.name || '').trim() || '名称未設定のルート';
+      });
+    }
+
+    function renderSharedPinTimeRows(pin) {
+      const rows = [
+        ['イベント時刻', pin && pin.eventAt || '未設定'],
+        ['作成時刻', pin && pin.timestamp || '']
+      ];
+      if (pin && pin.updatedAt && pin.updatedAt !== pin.eventAt) {
+        rows.splice(1, 0, ['更新時刻', pin.updatedAt]);
+      }
+      return rows.map(function(row) {
+        return '<div><strong>' + escHtml(row[0]) + ':</strong> ' + escHtml(row[1]) + '</div>';
+      }).join('');
     }
 
     function openSharedDetail(pin) {
-      const overlay = document.getElementById('shared-detail-overlay');
-      const links = (pin.links || []).filter(Boolean).map(function(url) {
-        return '<a class="detail-link" href="' + escHtml(url) + '" target="_blank" rel="noopener noreferrer">' + escHtml(url) + '</a>';
-      }).join('');
-      overlay.innerHTML = [
-        '<div class="detail-card">',
-          '<div class="detail-header">',
-            '<div>',
-              '<div class="detail-title">' + escHtml(pin.title || '(無題)') + '</div>',
-              '<div class="muted" style="margin-top:6px;">' + escHtml(getSharedDisplayTime(pin)) + '</div>',
-            '</div>',
-            '<button class="detail-close" type="button" data-action="close">閉じる</button>',
-          '</div>',
-          pin.imageUrl ? '<img class="detail-image protected-photo" draggable="false" src="' + escHtml(pin.imageUrl) + '" alt="">' : '',
-          '<div class="detail-body">',
-            '<div>',
-              '<div class="detail-section-title">Description</div>',
-              '<div style="margin-top:6px;white-space:pre-wrap;line-height:1.7;">' + escHtml(pin.description || '説明はありません。') + '</div>',
-            '</div>',
-            (pin.tags && pin.tags.length)
-              ? '<div><div class="detail-section-title">Tags</div>' + renderTagChips(pin.tags) + '</div>'
-              : '',
-            links
-              ? '<div><div class="detail-section-title">Links</div><div class="detail-links" style="margin-top:8px;">' + links + '</div></div>'
-              : '',
-          '</div>',
-        '</div>'
-      ].join('');
-      overlay.style.display = '';
-      overlay.classList.add('open');
+      const routeLabels = getSharedPinRouteLabels(pin.id);
+      const statusLabel = String(pin.status || '').trim() || '未設定';
+      document.getElementById('shared-detail-title').textContent = pin.title || '(無題)';
+      document.getElementById('shared-detail-description').textContent = pin.description || '説明はありません。';
+      document.getElementById('shared-detail-time').innerHTML = renderSharedPinTimeRows(pin);
+
+      const status = document.getElementById('shared-detail-status');
+      status.innerHTML = '<span class="status-badge">' + escHtml(statusLabel) + '</span>';
+      status.style.display = 'block';
+      document.getElementById('shared-detail-tags').innerHTML = renderTagChips(pin.tags);
+      document.getElementById('shared-detail-routes').innerHTML = routeLabels.length
+        ? '<div class="tag-chips">' + routeLabels.map(function(label) {
+          return '<span class="tag-chip">' + escHtml(label) + '</span>';
+        }).join('') + '</div>'
+        : '';
+
+      const imageTrigger = document.getElementById('shared-detail-image-trigger');
+      const image = document.getElementById('shared-detail-image');
+      closeSharedPhotoViewerForTrigger(imageTrigger, { restoreFocus: false });
+      updateSharedPhotoViewerTrigger(imageTrigger, image, {
+        sourceUrl: pin.imageUrl,
+        title: pin.title || 'ピン',
+        alt: (pin.title || 'ピン') + 'の写真'
+      });
+
+      const links = document.getElementById('shared-detail-links');
+      links.innerHTML = '';
+      (pin.links || []).filter(Boolean).forEach(function(url) {
+        const anchor = document.createElement('a');
+        anchor.className = 'pin-link';
+        anchor.href = url;
+        anchor.target = '_blank';
+        anchor.rel = 'noopener noreferrer';
+        anchor.textContent = url;
+        links.appendChild(anchor);
+      });
+      openSharedSurface('shared-detail-overlay');
     }
 
     function ensureSharedMap() {
@@ -1277,6 +2262,35 @@
       return String(group && (group.routeId || group.id) || '').trim();
     }
 
+    function getSharedRouteType(route) {
+      const type = String(route && route.type || 'pin-route');
+      return type === 'gpx-route' || type === 'geojson-route' ? type : 'pin-route';
+    }
+
+    function getSharedTypedRouteKey(route) {
+      return getSharedRouteType(route) + '\0' + getSharedRouteId(route);
+    }
+
+    function normalizeSharedTrackRoute(route) {
+      return {
+        type: getSharedRouteType(route),
+        id: getSharedRouteId(route),
+        name: String(route && route.name || ''),
+        description: String(route && route.description || ''),
+        color: safeRouteColor(route && route.color),
+        visible: !(route && route.visible === false),
+        lineStyle: normalizeSharedRouteLineStyle(route && route.lineStyle),
+        lineWidth: 4,
+        distanceMeters: Math.max(0, Number(route && route.distanceMeters) || 0),
+        bounds: route && route.bounds || null,
+        segments: (Array.isArray(route && route.segments) ? route.segments : []).map(function(segment) {
+          return (Array.isArray(segment) ? segment : []).map(function(point) {
+            return { lat: Number(point && point.lat), lng: Number(point && point.lng) };
+          }).filter(function(point) { return Number.isFinite(point.lat) && Number.isFinite(point.lng); });
+        }).filter(function(segment) { return segment.length > 0; })
+      };
+    }
+
     function getSharedRoutePinIdsForState(group) {
       if (!group || !Array.isArray(group.pinIds)) return [];
       const seen = {};
@@ -1316,6 +2330,36 @@
 
     function getSharedRouteGroups() {
       return Array.isArray(state.routeGroups) ? state.routeGroups.slice() : [];
+    }
+
+    function getSharedTrackRoutes() {
+      return (Array.isArray(state.routes) ? state.routes : []).filter(function(route) {
+        return getSharedRouteType(route) !== 'pin-route';
+      });
+    }
+
+    function isSharedTypedRouteVisible(route) {
+      return state.routeVisibility[getSharedTypedRouteKey(route)] !== false;
+    }
+
+    function toggleSharedTypedRoute(route) {
+      const key = getSharedTypedRouteKey(route);
+      state.routeVisibility[key] = !isSharedTypedRouteVisible(route);
+      renderSharedRouteList();
+      renderSharedRouteLayers();
+    }
+
+    function formatSharedDistance(distanceMeters) {
+      const meters = Math.max(0, Number(distanceMeters) || 0);
+      return meters >= 1000 ? (meters / 1000).toFixed(meters >= 10000 ? 0 : 1) + ' km' : Math.round(meters) + ' m';
+    }
+
+    function fitSharedMapToTrackRoute(route) {
+      const latLngs = [];
+      (Array.isArray(route.segments) ? route.segments : []).forEach(function(segment) {
+        (Array.isArray(segment) ? segment : []).forEach(function(point) { latLngs.push([point.lat, point.lng]); });
+      });
+      if (latLngs.length && sharedMap) sharedMap.fitBounds(L.latLngBounds(latLngs), { padding: [32, 32] });
     }
 
     function isSharedRouteVisible(group) {
@@ -1383,15 +2427,6 @@
       });
     }
 
-    function hasSharedRouteRestriction() {
-      if (isSharedRouteSelectionNone(state.allowedRouteIds)) return false;
-      return Array.isArray(state.allowedRouteIds) && state.allowedRouteIds.length > 0;
-    }
-
-    function isPinAllowedByRoutes(pin) {
-      return true;
-    }
-
     function getSharedRoutePinIdsForDisplay(group, filteredPinIdSet) {
       if (!group || !Array.isArray(group.pinIds)) return [];
       const basePinIds = group.pinIds.map(function(pinId) {
@@ -1452,10 +2487,6 @@
       return getSharedRoutePinIdsForDisplay(group).map(function(pinId) {
         return pinById[pinId] || null;
       }).filter(Boolean);
-    }
-
-    function getSharedRouteDistanceMeters(group) {
-      return sumLatLngDistanceMeters(getSharedRouteLatLngsForDisplay(group));
     }
 
     function fitSharedMapToRoute(group) {
@@ -1608,11 +2639,24 @@
     }
 
     function requestSharedRoadRouteCache(routeId) {
-      const cachedCoords = getSharedCachedRoadRouteCoords(routeId);
+      const key = String(routeId || '').trim();
+      if (!key) return Promise.resolve(null);
+      const cachedCoords = getSharedCachedRoadRouteCoords(key);
       if (cachedCoords) return Promise.resolve(cachedCoords);
-      return withGAS('getSharedRoadRouteCache', { token: state.token, routeId: routeId }).then(function(result) {
+      if (sharedRoadRoutePendingRequests[key]) return sharedRoadRoutePendingRequests[key];
+      const request = Promise.resolve().then(function() {
+        return withGAS('getSharedRoadRouteCache', { token: state.token, routeId: key });
+      }).then(function(result) {
         return result && result.ok ? normalizeSharedRoadRouteCoords(result.coords) : null;
       });
+      sharedRoadRoutePendingRequests[key] = request.then(function(coords) {
+        delete sharedRoadRoutePendingRequests[key];
+        return coords;
+      }, function(error) {
+        delete sharedRoadRoutePendingRequests[key];
+        throw error;
+      });
+      return sharedRoadRoutePendingRequests[key];
     }
 
     function getSharedRouteLayerGroup(routeId) {
@@ -1642,7 +2686,8 @@
       sharedRouteRenderVersion += 1;
       const version = sharedRouteRenderVersion;
       const routeGroups = getSharedRouteGroups();
-      if (!routeGroups.length) {
+      const trackRoutes = getSharedTrackRoutes();
+      if (!routeGroups.length && !trackRoutes.length) {
         clearSharedRouteLayers();
         return;
       }
@@ -1691,6 +2736,28 @@
           return;
         }
         drawSharedStraightRouteLine(layerGroup, latLngs, group);
+      });
+      trackRoutes.forEach(function(route) {
+        const routeKey = getSharedTypedRouteKey(route);
+        activeRouteIds[routeKey] = true;
+        const layerGroup = getSharedRouteLayerGroup(routeKey);
+        if (!layerGroup) return;
+        layerGroup.clearLayers();
+        if (!isSharedTypedRouteVisible(route)) return;
+        route.segments.forEach(function(segment) {
+          const latLngs = segment.map(function(point) { return [point.lat, point.lng]; });
+          if (latLngs.length < 2) return;
+          const line = L.polyline(latLngs, {
+            color: safeRouteColor(route.color),
+            weight: 4,
+            opacity: 0.86,
+            dashArray: getSharedRouteLineDashArray(route),
+            lineCap: 'round',
+            lineJoin: 'round'
+          }).addTo(layerGroup);
+          line.bindPopup('<strong>' + escHtml(route.name || '名称未設定のルート') + '</strong><br>'
+            + escHtml(route.type === 'gpx-route' ? 'GPX' : 'GeoJSON') + '・' + escHtml(formatSharedDistance(route.distanceMeters)));
+        });
       });
       Object.keys(sharedRouteLayers).forEach(function(routeId) {
         if (activeRouteIds[routeId]) return;
@@ -1743,10 +2810,12 @@
       state.activeColors = [];
       state.tagMode = state.initialTagMode || 'or';
       const input = document.getElementById('shared-search-input');
+      const searchBar = document.getElementById('shared-map-search-bar');
       if (input) input.value = '';
       renderSharedTagChips();
       renderSharedColorFilter();
       renderSharedSearchUi();
+      if (searchBar) searchBar.scrollTop = 0;
       renderSharedPins();
       renderSharedMap();
     }
@@ -1769,15 +2838,19 @@
       }
       container.innerHTML = '';
       tags.forEach(function(tag) {
+        const pressed = state.activeTags.includes(tag);
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'filter-tag-chip' + (state.activeTags.includes(tag) ? ' active' : '');
+        btn.className = 'filter-tag-chip' + (pressed ? ' active' : '');
         btn.textContent = '#' + tag;
+        btn.setAttribute('aria-pressed', pressed ? 'true' : 'false');
+        btn.setAttribute('aria-label', 'タグ「' + tag + '」で絞り込む');
         btn.addEventListener('click', function() {
           const idx = state.activeTags.indexOf(tag);
           if (idx === -1) state.activeTags.push(tag);
           else state.activeTags.splice(idx, 1);
           renderSharedTagChips();
+          renderSharedSearchUi();
           renderSharedPins();
           renderSharedMap();
         });
@@ -1794,17 +2867,20 @@
       }
       container.innerHTML = '';
       colors.forEach(function(color) {
+        const pressed = state.activeColors.includes(color);
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'shared-color-swatch' + (state.activeColors.includes(color) ? ' active' : '');
+        btn.className = 'shared-color-swatch' + (pressed ? ' active' : '');
         btn.style.backgroundColor = color;
-        btn.title = 'この色で検索';
-        btn.setAttribute('aria-label', 'この色で検索');
+        btn.title = color + ' で検索';
+        btn.setAttribute('aria-pressed', pressed ? 'true' : 'false');
+        btn.setAttribute('aria-label', '色 ' + color + ' で絞り込む');
         btn.addEventListener('click', function() {
           const idx = state.activeColors.indexOf(color);
           if (idx === -1) state.activeColors.push(color);
           else state.activeColors.splice(idx, 1);
           renderSharedColorFilter();
+          renderSharedSearchUi();
           renderSharedPins();
           renderSharedMap();
         });
@@ -1825,19 +2901,25 @@
         expanded.style.display = state.searchExpanded ? '' : 'none';
       }
       if (searchToggle) {
-        searchToggle.textContent = state.searchExpanded ? '▲' : '▼';
+        searchToggle.setAttribute('aria-expanded', state.searchExpanded ? 'true' : 'false');
       }
       if (sort) {
         sort.value = state.sort;
       }
       if (tagBtn) {
-        tagBtn.className = 'shared-control-btn filter-toggle-btn' + (state.tagFilterExpanded ? ' active' : '');
+        const tagFilterActive = state.activeTags.length > 0;
+        tagBtn.className = 'shared-control-btn shared-text-btn filter-toggle-btn' + (tagFilterActive ? ' active' : '');
+        tagBtn.setAttribute('aria-pressed', tagFilterActive ? 'true' : 'false');
+        tagBtn.setAttribute('aria-expanded', state.tagFilterExpanded ? 'true' : 'false');
       }
       if (tagDetail) {
         tagDetail.style.display = state.tagFilterExpanded ? '' : 'none';
       }
       if (colorBtn) {
-        colorBtn.className = 'shared-control-btn filter-toggle-btn' + (state.colorFilterExpanded ? ' active' : '');
+        const colorFilterActive = state.activeColors.length > 0;
+        colorBtn.className = 'shared-control-btn shared-text-btn filter-toggle-btn' + (colorFilterActive ? ' active' : '');
+        colorBtn.setAttribute('aria-pressed', colorFilterActive ? 'true' : 'false');
+        colorBtn.setAttribute('aria-expanded', state.colorFilterExpanded ? 'true' : 'false');
       }
       if (colorDetail) {
         colorDetail.style.display = state.colorFilterExpanded ? '' : 'none';
@@ -1858,7 +2940,21 @@
       note.style.display = '';
     }
 
+    function syncSharedDisplayName() {
+      const container = document.getElementById('shared-display-name');
+      const title = document.getElementById('shared-title');
+      const label = state.status === 'ready' ? String(state.shareLabel || '').trim() : '';
+      const visible = Boolean(label) && label !== 'Drop the Pin!';
+      title.textContent = visible ? label : '';
+      container.hidden = !visible;
+    }
+
     function renderSharedStatusNote() {
+      syncSharedDisplayName();
+      if (state.status === 'shared_payload_too_large') {
+        setSharedStatusNote('共有データが大きすぎるため表示できません。共有対象を減らしてください。');
+        return;
+      }
       if (state.status === 'revoked_share_link') {
         setSharedStatusNote('この共有リンクは無効です');
         return;
@@ -1878,118 +2974,528 @@
       setSharedStatusNote('');
     }
 
+
+    function createSharedRouteTypeBadge(kind) {
+      const normalizedKind = kind === 'gpx' ? 'gpx' : (kind === 'geojson' ? 'geojson' : 'pin');
+      const badge = document.createElement('span');
+      badge.className = 'route-type-badge type-' + normalizedKind;
+      badge.textContent = normalizedKind === 'gpx' ? 'GPX' : (normalizedKind === 'geojson' ? 'GeoJSON' : 'ピンで作成');
+      return badge;
+    }
+
+    function sharedRouteToggleIconMarkup(isOpen) {
+      return isOpen
+        ? '<svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>'
+        : '<svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>';
+    }
+
+    function sharedRouteFitIconMarkup() {
+      return '<svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"></path></svg>';
+    }
+
+    function buildSharedRoutePinList(group) {
+      const list = document.createElement('div');
+      list.className = 'route-pin-list';
+      getSharedRouteVisiblePins(group).forEach(function(pin, index) {
+        const row = document.createElement('div');
+        row.className = 'route-pin-row';
+        row.dataset.pinId = String(pin.id || '');
+
+        const order = document.createElement('span');
+        order.className = 'route-pin-order';
+        order.textContent = String(index + 1);
+        order.setAttribute('aria-hidden', 'true');
+        row.appendChild(order);
+
+        const action = document.createElement('button');
+        action.type = 'button';
+        action.className = 'shared-route-pin-action';
+        action.textContent = pin.title || '(無題)';
+        action.title = action.textContent;
+        action.setAttribute('aria-label', action.textContent + 'の詳細を表示');
+        action.addEventListener('click', function() {
+          openSharedDetail(pin);
+          highlightLinkedMarker(pin.id);
+        });
+        row.appendChild(action);
+        list.appendChild(row);
+      });
+      return list;
+    }
+
+    function buildSharedPinRouteCard(group) {
+      const routeId = getSharedRouteId(group);
+      const routeKey = 'pin:' + routeId;
+      const isOpen = state.routeUiOpenKey === routeKey;
+      const isVisible = isSharedRouteVisible(group);
+      const routeName = String(group && group.name || '').trim() || '名称未設定のルート';
+      const routeColor = safeRouteColor(group && group.color);
+      const routePins = getSharedRouteVisiblePins(group);
+      const item = document.createElement('div');
+      item.className = 'unified-route-card route-item';
+      if (isOpen) item.classList.add('is-open');
+      if (!isVisible) item.classList.add('is-hidden');
+      item.dataset.routeId = routeId;
+      item.dataset.routeKind = 'pin';
+      item.dataset.routeKey = routeKey;
+
+      const header = document.createElement('div');
+      header.className = 'route-card-header';
+      const summary = document.createElement('button');
+      summary.type = 'button';
+      summary.className = 'route-summary';
+      summary.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      summary.setAttribute('aria-label', routeName + 'の詳細を' + (isOpen ? '閉じる' : '開く'));
+      summary.addEventListener('click', function() {
+        state.routeUiOpenKey = isOpen ? null : routeKey;
+        setSharedRouteDockExpanded(true);
+        renderSharedRouteList();
+      });
+
+      const toggle = document.createElement('span');
+      toggle.className = 'route-toggle';
+      toggle.innerHTML = sharedRouteToggleIconMarkup(isOpen);
+      summary.appendChild(toggle);
+      const swatch = document.createElement('span');
+      swatch.className = 'route-color-swatch';
+      swatch.style.background = routeColor;
+      summary.appendChild(swatch);
+      const main = document.createElement('span');
+      main.className = 'route-main';
+      const name = document.createElement('span');
+      name.className = 'route-name';
+      name.textContent = routeName;
+      name.title = routeName;
+      const meta = document.createElement('span');
+      meta.className = 'route-meta';
+      meta.textContent = getSharedRouteMetaText(group, routePins);
+      main.appendChild(name);
+      main.appendChild(meta);
+      main.appendChild(createSharedRouteTypeBadge('pin'));
+      summary.appendChild(main);
+
+      const fitButton = document.createElement('button');
+      fitButton.type = 'button';
+      fitButton.className = 'route-fit';
+      fitButton.innerHTML = sharedRouteFitIconMarkup();
+      fitButton.title = routeName + 'を地図で全体表示';
+      fitButton.setAttribute('aria-label', fitButton.title);
+      fitButton.addEventListener('click', function() { fitSharedMapToRoute(group); });
+
+      const visibility = document.createElement('button');
+      visibility.type = 'button';
+      visibility.className = 'route-visibility';
+      if (isVisible) visibility.classList.add('is-visible');
+      visibility.textContent = getSharedRouteDisplayModeButtonText(routeId);
+      visibility.setAttribute('aria-pressed', isVisible ? 'true' : 'false');
+      visibility.setAttribute('aria-label', 'ルート表示: ' + getSharedRouteDisplayModeLabel(routeId));
+      visibility.title = visibility.getAttribute('aria-label');
+      visibility.addEventListener('click', function() {
+        cycleSharedRouteDisplayMode(routeId);
+        renderSharedRouteList();
+        renderSharedPins();
+        renderSharedMap();
+        renderSharedRouteLayers();
+      });
+
+      header.appendChild(summary);
+      header.appendChild(fitButton);
+      header.appendChild(visibility);
+      item.appendChild(header);
+      const detail = document.createElement('div');
+      detail.className = 'route-detail';
+      const detailRow = document.createElement('div');
+      detailRow.className = 'route-detail-row';
+      const detailTitle = document.createElement('div');
+      detailTitle.className = 'route-detail-title';
+      detailTitle.textContent = '所属ピン';
+      detailRow.appendChild(detailTitle);
+      detail.appendChild(detailRow);
+      detail.appendChild(buildSharedRoutePinList(group));
+      item.appendChild(detail);
+      return item;
+    }
+
+    function buildSharedTrackRouteCard(route) {
+      const routeKey = getSharedRouteType(route) + ':' + getSharedRouteId(route);
+      const isOpen = state.routeUiOpenKey === routeKey;
+      const isVisible = isSharedTypedRouteVisible(route);
+      const routeName = String(route && route.name || '').trim() || '名称未設定のルート';
+      const routeColor = safeRouteColor(route && route.color);
+      const pointCount = route.segments.reduce(function(total, segment) { return total + segment.length; }, 0);
+      const item = document.createElement('div');
+      item.className = 'unified-route-card imported-route-item';
+      if (isOpen) item.classList.add('is-open');
+      if (!isVisible) item.classList.add('is-hidden');
+      item.dataset.routeId = getSharedRouteId(route);
+      item.dataset.routeKind = route.type;
+      item.dataset.routeKey = routeKey;
+
+      const header = document.createElement('div');
+      header.className = 'route-card-header';
+      const summary = document.createElement('button');
+      summary.type = 'button';
+      summary.className = 'route-summary';
+      summary.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      summary.setAttribute('aria-label', routeName + 'の詳細を' + (isOpen ? '閉じる' : '開く'));
+      summary.addEventListener('click', function() {
+        state.routeUiOpenKey = isOpen ? null : routeKey;
+        setSharedRouteDockExpanded(true);
+        renderSharedRouteList();
+      });
+
+      const toggle = document.createElement('span');
+      toggle.className = 'route-toggle';
+      toggle.innerHTML = sharedRouteToggleIconMarkup(isOpen);
+      summary.appendChild(toggle);
+      const swatch = document.createElement('span');
+      swatch.className = 'route-color-swatch';
+      swatch.style.background = routeColor;
+      summary.appendChild(swatch);
+      const main = document.createElement('span');
+      main.className = 'route-main';
+      const name = document.createElement('span');
+      name.className = 'route-name';
+      name.textContent = routeName;
+      name.title = routeName;
+      const meta = document.createElement('span');
+      meta.className = 'route-meta';
+      meta.textContent = route.segments.length + '区間・' + pointCount + '点・' + formatSharedDistance(route.distanceMeters);
+      main.appendChild(name);
+      main.appendChild(meta);
+      main.appendChild(createSharedRouteTypeBadge(route.type === 'gpx-route' ? 'gpx' : 'geojson'));
+      summary.appendChild(main);
+
+      const fitButton = document.createElement('button');
+      fitButton.type = 'button';
+      fitButton.className = 'route-fit';
+      fitButton.innerHTML = sharedRouteFitIconMarkup();
+      fitButton.title = routeName + 'を地図で全体表示';
+      fitButton.setAttribute('aria-label', fitButton.title);
+      fitButton.addEventListener('click', function() { fitSharedMapToTrackRoute(route); });
+
+      const visibility = document.createElement('button');
+      visibility.type = 'button';
+      visibility.className = 'route-visibility';
+      if (isVisible) visibility.classList.add('is-visible');
+      visibility.textContent = isVisible ? '表示' : '非表示';
+      visibility.setAttribute('aria-pressed', isVisible ? 'true' : 'false');
+      visibility.setAttribute('aria-label', isVisible ? 'ルートを非表示にする' : 'ルートを表示する');
+      visibility.title = visibility.getAttribute('aria-label');
+      visibility.addEventListener('click', function() { toggleSharedTypedRoute(route); });
+
+      header.appendChild(summary);
+      header.appendChild(fitButton);
+      header.appendChild(visibility);
+      item.appendChild(header);
+      const detail = document.createElement('div');
+      detail.className = 'route-detail imported-route-detail';
+      const detailRow = document.createElement('div');
+      detailRow.className = 'route-detail-row';
+      const detailTitle = document.createElement('div');
+      detailTitle.className = 'route-detail-title';
+      detailTitle.textContent = route.description || (pointCount + '点の表示ルート');
+      detailRow.appendChild(detailTitle);
+      detail.appendChild(detailRow);
+      item.appendChild(detail);
+      return item;
+    }
+
+    function getSharedRouteDockCssNumber(name, fallback) {
+      try {
+        const panel = document.getElementById('shared-side-panel');
+        const raw = window.getComputedStyle(panel).getPropertyValue(name);
+        const parsed = Number.parseFloat(raw);
+        return Number.isFinite(parsed) ? parsed : fallback;
+      } catch (_error) {
+        return fallback;
+      }
+    }
+
+    function getSharedRouteDockSplitBounds(panelHeight, resizerHeight, pinMinimum, routeMinimum) {
+      const safePanelHeight = Number.isFinite(panelHeight) ? Math.max(2, panelHeight) : 2;
+      const safeResizerHeight = Number.isFinite(resizerHeight)
+        ? Math.max(0, Math.min(resizerHeight, safePanelHeight - 2)) : 0;
+      const available = Math.max(2, safePanelHeight - safeResizerHeight);
+      const safePinMinimum = Number.isFinite(pinMinimum) ? Math.max(1, pinMinimum) : 1;
+      const safeRouteMinimum = Number.isFinite(routeMinimum) ? Math.max(1, routeMinimum) : 1;
+      if (available >= safePinMinimum + safeRouteMinimum) {
+        return { min: safePinMinimum, max: available - safeRouteMinimum };
+      }
+      const proportionalPinHeight = Math.round(
+        available * safePinMinimum / (safePinMinimum + safeRouteMinimum)
+      );
+      const fixedPinHeight = Math.max(1, Math.min(available - 1, proportionalPinHeight));
+      return { min: fixedPinHeight, max: fixedPinHeight };
+    }
+
+    function clampSharedRouteDockPinHeight(value, bounds) {
+      const minimum = bounds && Number.isFinite(bounds.min) ? bounds.min : 1;
+      const maximum = bounds && Number.isFinite(bounds.max) ? Math.max(minimum, bounds.max) : minimum;
+      const numeric = Number(value);
+      return Math.min(maximum, Math.max(minimum, Number.isFinite(numeric) ? numeric : minimum));
+    }
+
+    function readSharedRouteDockStoredPinHeight(storage) {
+      try {
+        const source = storage || window.localStorage;
+        const raw = source && source.getItem(SHARED_ROUTE_DOCK_SPLIT_STORAGE_KEY);
+        if ((typeof raw !== 'string' && typeof raw !== 'number') || String(raw).trim() === '') return null;
+        const value = Number(raw);
+        return Number.isFinite(value) && value > 0 ? value : null;
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    function persistSharedRouteDockPinHeight(value, storage) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric) || numeric <= 0) return false;
+      try {
+        const target = storage || window.localStorage;
+        if (!target || typeof target.setItem !== 'function') return false;
+        target.setItem(SHARED_ROUTE_DOCK_SPLIT_STORAGE_KEY, String(numeric));
+        return true;
+      } catch (_error) {
+        return false;
+      }
+    }
+
+    function isSharedDesktopRouteDock() {
+      return !!(sharedDesktopViewMedia && sharedDesktopViewMedia.matches
+        && state.narrowView !== true && state.panelVisible !== false);
+    }
+
+    function getSharedRouteDockSplitMetrics() {
+      const panel = document.getElementById('shared-side-panel');
+      const resizer = document.getElementById('shared-route-resizer');
+      const panelRect = panel && panel.getBoundingClientRect ? panel.getBoundingClientRect() : { height: 0 };
+      const resizerRect = resizer && resizer.getBoundingClientRect ? resizer.getBoundingClientRect() : { height: 0 };
+      const panelHeight = Number(panelRect && panelRect.height) || 0;
+      const resizerSize = Number(resizerRect && resizerRect.height)
+        || getSharedRouteDockCssNumber('--dock-route-resizer-size', 12);
+      const pinMinimum = getSharedRouteDockCssNumber('--dock-pin-region-min-height', 200);
+      const routeMinimum = getSharedRouteDockCssNumber('--dock-route-region-min-height', 160);
+      const bounds = getSharedRouteDockSplitBounds(panelHeight, resizerSize, pinMinimum, routeMinimum);
+      const available = Math.max(2, panelHeight - resizerSize);
+      return {
+        panelHeight: panelHeight,
+        resizerSize: resizerSize,
+        pinMinimum: pinMinimum,
+        routeMinimum: routeMinimum,
+        effectivePinMinimum: bounds.min,
+        effectiveRouteMinimum: Math.max(1, available - bounds.max),
+        bounds: bounds
+      };
+    }
+
+    function updateSharedRouteDockResizerAria(metrics, pinHeight) {
+      const resizer = document.getElementById('shared-route-resizer');
+      if (!resizer) return false;
+      if (!metrics || !metrics.bounds || !Number.isFinite(pinHeight)) {
+        resizer.setAttribute('aria-valuemin', '0');
+        resizer.setAttribute('aria-valuemax', '0');
+        resizer.setAttribute('aria-valuenow', '0');
+        return false;
+      }
+      resizer.setAttribute('aria-valuemin', String(Math.round(metrics.bounds.min)));
+      resizer.setAttribute('aria-valuemax', String(Math.round(metrics.bounds.max)));
+      resizer.setAttribute('aria-valuenow', String(Math.round(pinHeight)));
+      return true;
+    }
+
+    function setSharedRouteDockPinHeight(value, options) {
+      if (!isSharedDesktopRouteDock()) return null;
+      const panel = document.getElementById('shared-side-panel');
+      if (!panel) return null;
+      const metrics = options && options.metrics ? options.metrics : getSharedRouteDockSplitMetrics();
+      const nextHeight = clampSharedRouteDockPinHeight(value, metrics.bounds);
+      state.routeDockPinHeightPx = nextHeight;
+      panel.style.setProperty('--shared-dock-pin-region-effective-min-height', metrics.effectivePinMinimum + 'px');
+      panel.style.setProperty('--shared-dock-route-region-effective-min-height', metrics.effectiveRouteMinimum + 'px');
+      panel.style.setProperty('--shared-dock-pin-region-height', nextHeight + 'px');
+      updateSharedRouteDockResizerAria(metrics, nextHeight);
+      if (options && options.persist) persistSharedRouteDockPinHeight(nextHeight);
+      return nextHeight;
+    }
+
+    function syncSharedRouteDockSplit(options) {
+      const panel = document.getElementById('shared-side-panel');
+      if (!panel) return null;
+      if (!isSharedDesktopRouteDock()) {
+        panel.style.removeProperty('--shared-dock-pin-region-height');
+        panel.style.removeProperty('--shared-dock-pin-region-effective-min-height');
+        panel.style.removeProperty('--shared-dock-route-region-effective-min-height');
+        updateSharedRouteDockResizerAria(null, null);
+        return null;
+      }
+      const metrics = getSharedRouteDockSplitMetrics();
+      let candidate = Number(state.routeDockPinHeightPx);
+      if (!Number.isFinite(candidate) || candidate <= 0) {
+        const preferredPercent = getSharedRouteDockCssNumber('--dock-pin-region-preferred-height', 64);
+        const preferredMaximum = getSharedRouteDockCssNumber('--dock-pin-region-max-height', 450);
+        candidate = Math.min(preferredMaximum, metrics.panelHeight * preferredPercent / 100);
+      }
+      return setSharedRouteDockPinHeight(candidate, {
+        metrics: metrics,
+        persist: !!(options && options.persist)
+      });
+    }
+
+    function handleSharedRouteDockResizeMove(event) {
+      const drag = state.routeDockResize;
+      if (!drag || !event || event.pointerId !== drag.pointerId) return false;
+      const nextHeight = drag.startPinHeight + (Number(event.clientY) - drag.startClientY);
+      setSharedRouteDockPinHeight(nextHeight);
+      event.preventDefault();
+      event.stopPropagation();
+      return true;
+    }
+
+    function finishSharedRouteDockResize(event, cancelled) {
+      const drag = state.routeDockResize;
+      if (!drag || (event && Number.isFinite(event.pointerId) && event.pointerId !== drag.pointerId)) return false;
+      const resizer = document.getElementById('shared-route-resizer');
+      if (resizer) {
+        resizer.removeEventListener('pointermove', drag.move);
+        resizer.removeEventListener('pointerup', drag.up);
+        resizer.removeEventListener('pointercancel', drag.cancel);
+        resizer.classList.remove('is-resizing');
+        try { resizer.releasePointerCapture(drag.pointerId); } catch (_error) {}
+      }
+      window.removeEventListener('blur', drag.blur);
+      document.body.classList.remove('shared-route-dock-resizing');
+      state.routeDockResize = null;
+      if (cancelled) {
+        state.routeDockPinHeightPx = drag.startPinHeight;
+        setSharedRouteDockPinHeight(drag.startPinHeight);
+      } else {
+        setSharedRouteDockPinHeight(state.routeDockPinHeightPx, { persist: true });
+      }
+      if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      return true;
+    }
+
+    function cancelSharedRouteDockResize() {
+      const drag = state.routeDockResize;
+      if (!drag) return false;
+      return finishSharedRouteDockResize({
+        pointerId: drag.pointerId,
+        preventDefault: function() {},
+        stopPropagation: function() {}
+      }, true);
+    }
+
+    function beginSharedRouteDockResize(event) {
+      if (!event || !isSharedDesktopRouteDock() || state.routeDockExpanded !== true) return false;
+      if (event.isPrimary === false || (event.pointerType === 'mouse' && event.button !== 0)) return false;
+      cancelSharedRouteDockResize();
+      const resizer = document.getElementById('shared-route-resizer');
+      if (!resizer) return false;
+      const startPinHeight = syncSharedRouteDockSplit();
+      if (!Number.isFinite(startPinHeight)) return false;
+      const drag = {
+        pointerId: event.pointerId,
+        startClientY: Number(event.clientY),
+        startPinHeight: startPinHeight,
+        move: handleSharedRouteDockResizeMove,
+        up: null,
+        cancel: null,
+        blur: null
+      };
+      drag.up = function(pointerEvent) { finishSharedRouteDockResize(pointerEvent, false); };
+      drag.cancel = function(pointerEvent) { finishSharedRouteDockResize(pointerEvent, true); };
+      drag.blur = function() { cancelSharedRouteDockResize(); };
+      try {
+        resizer.setPointerCapture(event.pointerId);
+      } catch (_error) {
+        return false;
+      }
+      state.routeDockResize = drag;
+      resizer.addEventListener('pointermove', drag.move);
+      resizer.addEventListener('pointerup', drag.up);
+      resizer.addEventListener('pointercancel', drag.cancel);
+      window.addEventListener('blur', drag.blur);
+      resizer.classList.add('is-resizing');
+      document.body.classList.add('shared-route-dock-resizing');
+      event.preventDefault();
+      event.stopPropagation();
+      return true;
+    }
+
+    function handleSharedRouteDockResizerKeydown(event) {
+      if (!event || !isSharedDesktopRouteDock() || state.routeDockExpanded !== true) return false;
+      const metrics = getSharedRouteDockSplitMetrics();
+      const current = syncSharedRouteDockSplit();
+      let next = null;
+      if (event.key === 'ArrowUp') next = current - (event.shiftKey ? 32 : 16);
+      else if (event.key === 'ArrowDown') next = current + (event.shiftKey ? 32 : 16);
+      else if (event.key === 'Home') next = metrics.bounds.min;
+      else if (event.key === 'End') next = metrics.bounds.max;
+      else return false;
+      setSharedRouteDockPinHeight(next, { metrics: metrics, persist: true });
+      event.preventDefault();
+      event.stopPropagation();
+      return true;
+    }
+
+    function renderSharedRouteDockState() {
+      const panel = document.getElementById('shared-side-panel');
+      const list = document.getElementById('shared-route-list');
+      const toggle = document.getElementById('shared-route-dock-toggle');
+      const expanded = state.routeDockExpanded === true;
+      if (panel) panel.classList.toggle('shared-route-dock-expanded', expanded);
+      if (list) list.hidden = !expanded;
+      if (expanded) syncSharedRouteDockSplit();
+      else cancelSharedRouteDockResize();
+      if (toggle) {
+        toggle.setAttribute('aria-expanded', String(expanded));
+        toggle.setAttribute('aria-label', expanded ? 'ルート領域を最小化' : 'ルート領域を展開');
+        toggle.title = expanded ? 'ルート領域を最小化' : 'ルート領域を展開';
+      }
+    }
+
+    function setSharedRouteDockExpanded(expanded) {
+      state.routeDockExpanded = expanded === true;
+      renderSharedRouteDockState();
+    }
+
     function renderSharedRouteList() {
       const routeSection = document.getElementById('shared-route-section');
       const routeList = document.getElementById('shared-route-list');
       const resetRoutesButton = document.getElementById('shared-reset-routes');
       if (!routeSection || !routeList) return;
+      renderSharedRouteDockState();
       const routeGroups = getSharedRouteGroups();
-      if (!routeGroups.length) {
-        routeSection.style.display = 'none';
-        routeList.innerHTML = '';
+      const trackRoutes = getSharedTrackRoutes();
+      routeSection.style.display = '';
+      if (!routeGroups.length && !trackRoutes.length) {
+        const routeMessage = state.status === 'loading'
+          ? '共有リンクを読み込んでいます...'
+          : (state.status === 'ready' ? '公開されているルートはありません。' : 'ルートを表示できません。');
+        routeList.innerHTML = '<div class="empty-note">' + routeMessage + '</div>';
         if (resetRoutesButton) resetRoutesButton.style.display = 'none';
         return;
       }
-      routeSection.style.display = '';
       if (resetRoutesButton) resetRoutesButton.style.display = '';
       routeList.innerHTML = '';
       routeGroups.forEach(function(group) {
-        const routeId = getSharedRouteId(group);
-        if (!routeId) return;
-        const routePins = getSharedRouteVisiblePins(group);
-        const routeName = String(group.name || '').trim() || '名称未設定のルート';
-        const card = document.createElement('div');
-        card.className = 'shared-route-card';
-        card.dataset.routeId = routeId;
-        card.tabIndex = 0;
-        card.setAttribute('role', 'button');
-        card.setAttribute('aria-label', routeName);
-
-        const header = document.createElement('div');
-        header.className = 'shared-route-card-header';
-
-        const dot = document.createElement('span');
-        dot.className = 'shared-route-color-dot';
-        dot.style.backgroundColor = safeRouteColor(group.color);
-        header.appendChild(dot);
-
-        const name = document.createElement('div');
-        name.className = 'shared-route-name';
-        name.textContent = routeName;
-        name.title = routeName;
-        header.appendChild(name);
-
-        const displayModeButton = document.createElement('button');
-        displayModeButton.type = 'button';
-        displayModeButton.className = 'shared-route-display-mode' + (isSharedRouteVisible(group) ? '' : ' is-off');
-        displayModeButton.textContent = getSharedRouteDisplayModeButtonText(routeId);
-        displayModeButton.setAttribute('aria-label', 'ルート表示: ' + getSharedRouteDisplayModeLabel(routeId));
-        displayModeButton.setAttribute('aria-pressed', isSharedRouteVisible(group) ? 'true' : 'false');
-        header.appendChild(displayModeButton);
-
-        const meta = document.createElement('div');
-        meta.className = 'shared-route-meta';
-        meta.textContent = getSharedRouteMetaText(group, routePins);
-
-        const pinList = document.createElement('ul');
-        pinList.className = 'shared-route-pin-list';
-        routePins.forEach(function(pin, index) {
-          const item = document.createElement('li');
-          item.className = 'shared-route-pin-item';
-          item.dataset.pinId = String(pin.id || '');
-
-          const num = document.createElement('span');
-          num.className = 'shared-route-pin-num';
-          num.textContent = String(index + 1);
-          item.appendChild(num);
-
-          const title = document.createElement('span');
-          title.className = 'shared-route-pin-title';
-          title.textContent = pin.title || '(無題)';
-          title.title = pin.title || '(無題)';
-          item.appendChild(title);
-
-          item.addEventListener('click', function(event) {
-            event.stopPropagation();
-            openSharedDetail(pin);
-            highlightLinkedMarker(pin.id);
-          });
-          pinList.appendChild(item);
-        });
-
-        displayModeButton.addEventListener('click', function(event) {
-          event.stopPropagation();
-          cycleSharedRouteDisplayMode(routeId);
-          renderSharedRouteList();
-          renderSharedPins();
-          renderSharedMap();
-          renderSharedRouteLayers();
-        });
-
-        card.addEventListener('click', function(event) {
-          const target = event.target;
-          if (target && target.closest && target.closest('.shared-route-display-mode, .shared-route-pin-item')) return;
-          fitSharedMapToRoute(group);
-        });
-        card.addEventListener('keydown', function(event) {
-          const target = event.target;
-          if (target && target.closest && target.closest('.shared-route-display-mode, .shared-route-pin-item')) return;
-          if (event.key !== 'Enter' && event.key !== ' ') return;
-          event.preventDefault();
-          fitSharedMapToRoute(group);
-        });
-
-        card.appendChild(header);
-        card.appendChild(meta);
-        card.appendChild(pinList);
-        routeList.appendChild(card);
+        if (getSharedRouteId(group)) routeList.appendChild(buildSharedPinRouteCard(group));
+      });
+      trackRoutes.forEach(function(route) {
+        if (getSharedRouteId(route)) routeList.appendChild(buildSharedTrackRouteCard(route));
       });
     }
 
     function renderSharedPins() {
       const list = document.getElementById('shared-list');
       if (state.status !== 'ready') {
-        list.innerHTML = '';
+        list.innerHTML = '<div class="empty-note">'
+          + (state.status === 'loading' ? '共有リンクを読み込んでいます...' : 'ピンを表示できません。')
+          + '</div>';
         renderSharedStatusNote();
         return;
       }
@@ -2001,11 +3507,23 @@
       }
       list.innerHTML = entries.map(function(entry) {
         const pin = entry.pin;
-        return '<button type="button" class="list-item" data-pin-id="' + escHtml(pin.id) + '">' +
-          '<div class="list-title">' + escHtml(pin.title || '(無題)') + '</div>' +
-          '<div class="list-subtitle">' + escHtml(getSharedDisplayTime(pin)) + '</div>' +
-          renderTagChips(pin.tags) +
-          '</button>';
+        const title = pin.title || '(無題)';
+        const routeNumberDisplay = getSharedRouteNumberDisplayForPin(pin.id);
+        const routeNumberMarkup = routeNumberDisplay
+          ? createRouteNumberBadge(routeNumberDisplay.number, 'list-route-number-badge', routeNumberDisplay.color)
+          : '<span class="list-route-number-spacer" aria-hidden="true"></span>';
+        const thumbMarkup = sharedPinListThumbMarkup(pin);
+        return '<button type="button" class="list-item" data-pin-id="' + escHtml(pin.id)
+          + '" aria-label="' + escHtml(title) + 'の詳細を表示">'
+          + routeNumberMarkup
+          + thumbMarkup
+          + '<div class="list-meta">'
+          + '<div class="list-title">' + escHtml(title) + '</div>'
+          + '<div class="list-subtitle">' + escHtml(getSharedDisplayTime(pin)) + '</div>'
+          + renderTagChips(pin.tags)
+          + '</div>'
+          + '<span class="view-card-chevron" aria-hidden="true"><svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg></span>'
+          + '</button>';
       }).join('');
       Array.prototype.forEach.call(list.querySelectorAll('[data-pin-id]'), function(button) {
         const pinId = button.getAttribute('data-pin-id');
@@ -2019,18 +3537,53 @@
         button.addEventListener('mouseleave', clearLinkedMarkerHighlight);
         button.addEventListener('focus', function() { highlightLinkedMarker(pin.id); });
         button.addEventListener('blur', clearLinkedMarkerHighlight);
+        button.addEventListener('touchend', clearLinkedMarkerHighlight);
+        button.addEventListener('touchcancel', clearLinkedMarkerHighlight);
       });
       renderSharedStatusNote();
     }
 
     function renderSharedPanelUi() {
       const toggle = document.getElementById('shared-panel-toggle');
+      const panel = document.getElementById('shared-side-panel');
       document.body.classList.toggle('shared-panel-hidden', !state.panelVisible);
       document.body.classList.toggle('shared-panel-visible', state.panelVisible);
-      if (toggle) {
-        toggle.textContent = state.panelVisible ? '🗺️' : '📋';
-        toggle.title = state.panelVisible ? 'リストを隠す' : 'リストを表示';
+      document.body.classList.toggle('shared-narrow-view', state.narrowView === true);
+      if (!state.panelVisible) {
+        cancelSharedRouteDockResize();
+        syncSharedRouteDockSplit();
+      } else if (state.routeDockExpanded) {
+        syncSharedRouteDockSplit();
       }
+      if (panel) panel.setAttribute('aria-hidden', state.panelVisible ? 'false' : 'true');
+      if (toggle) {
+        toggle.title = state.panelVisible ? '一覧を閉じる' : '一覧を開く';
+        toggle.setAttribute('aria-label', toggle.title);
+        toggle.setAttribute('aria-expanded', state.panelVisible ? 'true' : 'false');
+      }
+      const detailOverlay = document.getElementById('shared-detail-overlay');
+      if (detailOverlay && detailOverlay.classList.contains('open')) syncSharedSurfaceInteractionState();
+    }
+
+    function invalidateSharedMapAfterPanelTransition() {
+      const mapElement = document.getElementById('shared-map');
+      let completed = false;
+      function finish() {
+        if (completed) return;
+        completed = true;
+        mapElement.removeEventListener('transitionend', onTransitionEnd);
+        if (sharedMap) sharedMap.invalidateSize();
+      }
+      function onTransitionEnd(event) {
+        if (event.target !== mapElement || event.propertyName !== 'right') return;
+        finish();
+      }
+      if (sharedMatchesMedia('(prefers-reduced-motion: reduce)', false)) {
+        requestAnimationFrame(finish);
+        return;
+      }
+      mapElement.addEventListener('transitionend', onTransitionEnd);
+      setTimeout(finish, 240);
     }
 
     function renderSharedMap() {
@@ -2093,8 +3646,11 @@
         var name = r.name || parts[0];
         var address = parts.slice(1).join(', ');
 
-        var item = document.createElement('div');
+        var item = document.createElement('button');
+        item.type = 'button';
         item.className = 'geocode-result-item';
+        item.setAttribute('aria-label', name + '、' + address);
+        item.setAttribute('aria-selected', 'false');
 
         var nameEl = document.createElement('div');
         nameEl.className = 'geocode-result-name';
@@ -2107,6 +3663,7 @@
         item.appendChild(nameEl);
         item.appendChild(addrEl);
         item.addEventListener('click', function() {
+          item.setAttribute('aria-selected', 'true');
           getMapFn().flyTo([parseFloat(r.lat), parseFloat(r.lon)], 15);
           closeGeocodePanel(panelEl);
         });
@@ -2151,7 +3708,11 @@
       }
       inputEl.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
-          closeCurrentPanel();
+          if (panelEl.style.display !== 'none') {
+            closeCurrentPanel();
+            e.preventDefault();
+            e.stopPropagation();
+          }
           return;
         }
         if (e.key !== 'Enter') return;
@@ -2187,6 +3748,7 @@
       if (!state.token) {
         state.status = 'invalid_share_link';
         state.routeGroups = [];
+        state.routes = [];
         state.allowedRouteIds = [];
         state.routeVisibility = {};
         state.routeDisplayMode = {};
@@ -2204,8 +3766,11 @@
       try {
         const result = await withGAS('getSharedViewData', state.token);
         if (!result || !result.ok) {
-          state.status = result && result.error ? result.error : 'invalid_share_link';
+          state.status = result && result.errorCode === 'SHARED_PAYLOAD_TOO_LARGE'
+            ? 'shared_payload_too_large'
+            : (result && result.error ? result.error : 'invalid_share_link');
           state.routeGroups = [];
+          state.routes = [];
           state.allowedRouteIds = [];
           state.routeVisibility = {};
           state.routeDisplayMode = {};
@@ -2221,13 +3786,20 @@
           return;
         }
         state.pins = Array.isArray(result.pins) ? result.pins : [];
-        state.routeGroups = Array.isArray(result.routeGroups) ? result.routeGroups.map(normalizeSharedRouteGroup) : [];
+        const sharedRouteSource = Array.isArray(result.routes) ? result.routes : result.routeGroups;
+        state.routes = (Array.isArray(sharedRouteSource) ? sharedRouteSource : []).map(function(route) {
+          return getSharedRouteType(route) === 'pin-route' ? normalizeSharedRouteGroup(route) : normalizeSharedTrackRoute(route);
+        });
+        state.routeGroups = state.routes.filter(function(route) { return getSharedRouteType(route) === 'pin-route'; });
         state.allowedRouteIds = normalizeSharedAllowedRouteIds(result.allowedRouteIds);
         state.routeVisibility = {};
         state.routeDisplayMode = {};
         state.routeGroups.forEach(function(group) {
           state.routeVisibility[group.routeId] = group.visible !== false;
           state.routeDisplayMode[group.routeId] = group.routeMode === 'road' ? 'road' : 'straight';
+        });
+        getSharedTrackRoutes().forEach(function(route) {
+          state.routeVisibility[getSharedTypedRouteKey(route)] = route.visible !== false;
         });
         state.initialRouteVisibility = Object.assign({}, state.routeVisibility);
         state.initialRouteDisplayMode = Object.assign({}, state.routeDisplayMode);
@@ -2240,7 +3812,7 @@
         state.tagMode = state.initialTagMode;
         state.shareLabel = result.shareLink && result.shareLink.label || 'Drop the Pin!';
         state.status = 'ready';
-        document.getElementById('shared-title').textContent = state.shareLabel;
+        syncSharedDisplayName();
         renderSharedTagChips();
         renderSharedColorFilter();
         renderSharedSearchUi();
@@ -2250,6 +3822,7 @@
       } catch (_error) {
         state.status = 'invalid_share_link';
         state.routeGroups = [];
+        state.routes = [];
         state.allowedRouteIds = [];
         state.routeVisibility = {};
         state.routeDisplayMode = {};
@@ -2310,11 +3883,14 @@
       overlay.addEventListener('pointerdown', function(event) {
         if (gesture && gesture.pointerId !== event.pointerId) return;
         resetGesture();
+        if (isSharedDockedPinDetailOverlay(overlay)) return;
         if (event.target !== overlay) return;
+        if (typeof event.preventDefault === 'function') event.preventDefault();
         gesture = {
           pointerId: event.pointerId,
           startX: event.clientX,
           startY: event.clientY,
+          focusedElement: document.activeElement || null,
           moved: false
         };
       });
@@ -2330,10 +3906,11 @@
 
       overlay.addEventListener('pointerup', function(event) {
         if (!gesture || gesture.pointerId !== event.pointerId) return;
-        const shouldDismiss = !gesture.moved && event.target === overlay
+        const shouldDismiss = !isSharedDockedPinDetailOverlay(overlay) && !gesture.moved && event.target === overlay
           && document.elementFromPoint(event.clientX, event.clientY) === overlay;
+        const focusedElement = gesture.focusedElement;
         resetGesture();
-        if (shouldDismiss) onDismiss();
+        if (shouldDismiss && onDismiss() === false) restoreSharedSurfaceFocus(focusedElement);
       });
 
       overlay.addEventListener('pointercancel', function(event) {
@@ -2344,21 +3921,131 @@
 
     document.getElementById('shared-help-open-btn').addEventListener('click', openSharedHelpPanel);
     document.getElementById('shared-help-close').addEventListener('click', closeSharedHelpPanel);
+    document.getElementById('shared-detail-close').addEventListener('click', closeSharedDetail);
+    bindSharedPhotoViewerTrigger(document.getElementById('shared-detail-image-trigger'));
+    document.getElementById('shared-photo-viewer-close').addEventListener('click', closeSharedPhotoViewer);
     setupSharedOverlayBackdropDismissal(document.getElementById('shared-help-overlay'), closeSharedHelpPanel);
-    document.addEventListener('keydown', function(event) {
-      if (event.key === 'Escape' && document.getElementById('shared-help-overlay').classList.contains('open')) {
-        closeSharedHelpPanel();
+    setupSharedOverlayBackdropDismissal(document.getElementById('shared-detail-overlay'), closeSharedDetail);
+    setupSharedOverlayBackdropDismissal(document.getElementById('shared-photo-viewer-overlay'), closeSharedPhotoViewer);
+    window.addEventListener('pagehide', function() { closeSharedPhotoViewer({ restoreFocus: false }); });
+
+    function dispatchSharedEscape() {
+      const record = getTopSharedSurfaceRecord();
+      if (!record) return false;
+      if (record.id === 'shared-photo-viewer-overlay') closeSharedPhotoViewer();
+      else if (record.id === 'shared-detail-overlay') closeSharedDetail();
+      else if (record.id === 'shared-help-overlay') closeSharedHelpPanel();
+      else return false;
+      return true;
+    }
+
+    function handleSharedGlobalKeydown(event) {
+      if (!event) return;
+      if (event.key === 'Tab') {
+        trapSharedSurfaceFocus(event);
+        return;
       }
+      if (event.key !== 'Escape') return;
+      if (!dispatchSharedEscape()) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
+    document.addEventListener('keydown', handleSharedGlobalKeydown);
+
+    const sharedNarrowViewMedia = typeof window.matchMedia === 'function'
+      ? window.matchMedia('(max-width: 640px)')
+      : null;
+    const sharedDesktopViewMedia = typeof window.matchMedia === 'function'
+      ? window.matchMedia('(min-width: 900px)')
+      : null;
+
+    function addSharedMediaListener(media, listener) {
+      if (!media) return;
+      if (typeof media.addEventListener === 'function') media.addEventListener('change', listener);
+      else if (typeof media.addListener === 'function') media.addListener(listener);
+    }
+
+    addSharedMediaListener(sharedNarrowViewMedia, function(event) {
+      cancelSharedRouteDockResize();
+      state.narrowView = event.matches === true;
+      state.panelVisible = state.narrowView || Boolean(sharedDesktopViewMedia && sharedDesktopViewMedia.matches);
+      if (!state.narrowView) document.body.classList.remove('shared-mobile-sheet-expanded');
+      renderSharedPanelUi();
+      invalidateSharedMapAfterPanelTransition();
+    });
+    addSharedMediaListener(sharedDesktopViewMedia, function(event) {
+      cancelSharedRouteDockResize();
+      if (state.narrowView) return;
+      state.panelVisible = event.matches === true;
+      renderSharedPanelUi();
+      invalidateSharedMapAfterPanelTransition();
     });
 
     document.getElementById('shared-panel-toggle').addEventListener('click', function() {
       state.panelVisible = !state.panelVisible;
       renderSharedPanelUi();
+      invalidateSharedMapAfterPanelTransition();
     });
+    document.getElementById('shared-route-dock-toggle').addEventListener('click', function() {
+      setSharedRouteDockExpanded(!state.routeDockExpanded);
+    });
+    document.getElementById('shared-route-resizer').addEventListener('pointerdown', beginSharedRouteDockResize);
+    document.getElementById('shared-route-resizer').addEventListener('keydown', handleSharedRouteDockResizerKeydown);
+    document.getElementById('shared-pin-list').addEventListener('pointerdown', function(event) {
+      event.stopPropagation();
+    });
+    document.getElementById('shared-pin-list').addEventListener('wheel', function(event) {
+      event.stopPropagation();
+    }, { passive: true });
+    document.getElementById('shared-route-list').addEventListener('pointerdown', function(event) {
+      event.stopPropagation();
+    });
+    document.getElementById('shared-route-list').addEventListener('wheel', function(event) {
+      event.stopPropagation();
+    }, { passive: true });
+    window.addEventListener('resize', function() {
+      cancelSharedRouteDockResize();
+      if (state.routeDockExpanded) {
+        syncSharedRouteDockSplit({ persist: Number.isFinite(state.routeDockPinHeightPx) });
+      }
+    });
+
+    function setSharedMobileSheetTab(tab) {
+      state.mobileSheetTab = tab === 'routes' ? 'routes' : 'pins';
+      state.panelVisible = true;
+      document.body.classList.add('shared-mobile-sheet-expanded');
+      document.body.classList.toggle('shared-mobile-routes', state.mobileSheetTab === 'routes');
+      if (state.mobileSheetTab === 'routes') setSharedRouteDockExpanded(true);
+      const pinsTab = document.getElementById('shared-mobile-pins-tab');
+      const routesTab = document.getElementById('shared-mobile-routes-tab');
+      pinsTab.setAttribute('aria-selected', state.mobileSheetTab === 'pins' ? 'true' : 'false');
+      routesTab.setAttribute('aria-selected', state.mobileSheetTab === 'routes' ? 'true' : 'false');
+      pinsTab.tabIndex = state.mobileSheetTab === 'pins' ? 0 : -1;
+      routesTab.tabIndex = state.mobileSheetTab === 'routes' ? 0 : -1;
+      renderSharedPanelUi();
+      invalidateSharedMapAfterPanelTransition();
+    }
+    function handleSharedMobileSheetTabKeydown(event) {
+      const pinsTab = document.getElementById('shared-mobile-pins-tab');
+      const routesTab = document.getElementById('shared-mobile-routes-tab');
+      if (event.target !== pinsTab && event.target !== routesTab) return;
+      let nextTab = null;
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowUp' || event.key === 'Home') nextTab = 'pins';
+      if (event.key === 'ArrowRight' || event.key === 'ArrowDown' || event.key === 'End') nextTab = 'routes';
+      if (!nextTab) return;
+      event.preventDefault();
+      setSharedMobileSheetTab(nextTab);
+      (nextTab === 'routes' ? routesTab : pinsTab).focus();
+    }
+    document.getElementById('shared-mobile-pins-tab').addEventListener('click', function() { setSharedMobileSheetTab('pins'); });
+    document.getElementById('shared-mobile-routes-tab').addEventListener('click', function() { setSharedMobileSheetTab('routes'); });
+    document.getElementById('shared-mobile-sheet-tabs').addEventListener('keydown', handleSharedMobileSheetTabKeydown);
 
     document.getElementById('shared-filter-tag-btn').addEventListener('click', function() {
       state.searchExpanded = true;
       state.tagFilterExpanded = !state.tagFilterExpanded;
+      state.colorFilterExpanded = false;
       renderSharedSearchUi();
     });
 
@@ -2373,6 +4060,7 @@
     document.getElementById('shared-filter-color-btn').addEventListener('click', function() {
       state.searchExpanded = true;
       state.colorFilterExpanded = !state.colorFilterExpanded;
+      state.tagFilterExpanded = false;
       renderSharedSearchUi();
     });
 
@@ -2381,12 +4069,6 @@
       renderSharedSearchUi();
       renderSharedPins();
       renderSharedMap();
-    });
-
-    document.getElementById('shared-detail-overlay').addEventListener('click', function(event) {
-      if (event.target === this || event.target.getAttribute('data-action') === 'close') {
-        closeSharedDetail();
-      }
     });
 
     initializeSharedView();

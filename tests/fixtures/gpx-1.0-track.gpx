@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.0" creator="Synthetic" xmlns="http://www.topografix.com/GPX/1/0">
+  <name>架空の散歩</name>
+  <desc>GPX 1.0 fixture</desc>
+  <trk>
+    <name>下位の名前</name>
+    <trkseg>
+      <trkpt lat="35.0000" lon="139.0000"><ele>10.5</ele><time>2026-07-11T01:02:03Z</time></trkpt>
+      <trkpt lat="35.0010" lon="139.0010"/>
+    </trkseg>
+  </trk>
+</gpx>

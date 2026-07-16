@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..');
 const indexHtml = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
@@ -61,13 +62,59 @@ test('edit-only controls are hidden unless an edit token is available', () => {
     'body:not(.has-edit-token) #edit-toggle',
     'body:not(.has-edit-token) #settings-toggle',
     'body:not(.has-edit-token) #share-open-btn',
-    'body:not(.has-edit-token) #fab',
+    'body:not(.has-edit-token) #pin-add-btn',
     'body:not(.has-edit-token) #bulk-action-bar',
     'body:not(.has-edit-token) #route-add-btn',
     'body:not(.has-edit-token) #pin-detail-drive',
-    'body:not(.has-edit-token) #pin-detail-route-add'
+    'body:not(.has-edit-token) #pin-detail-route-add',
+    'body:not(.has-edit-token) #multi-photo-button',
+    'body:not(.edit-mode) #multi-photo-button'
   ].forEach((needle) => assertIncludes(indexHtml, needle));
   assertIncludes(indexHtml, "document.body.classList.toggle('has-edit-token', hasEditToken);");
+});
+
+test('initial data loading blocks edit entry and canEdit until the snapshot settles', () => {
+  const canEdit = vm.runInNewContext(
+    `(function() {${sourceFunctionBody(indexHtml, 'canEdit')}})`,
+    { hasEditToken: true, state: { initializing: true, editMode: true, shareMode: false } }
+  );
+  assert.equal(canEdit(), false);
+
+  const notices = [];
+  const state = { initializing: true, editMode: false, shareMode: false };
+  const setEditMode = vm.runInNewContext(
+    `(function(next) {${sourceFunctionBody(indexHtml, 'setEditMode')}})`,
+    {
+      state,
+      hasEditToken: true,
+      showHint(message) { notices.push(message); },
+      isProductionImportBusy: () => false,
+      isInputPresetManagerBusy: () => false
+    }
+  );
+  assert.doesNotThrow(() => setEditMode(true));
+  assert.equal(state.editMode, false);
+  assert.match(notices.at(-1), /読み込|初期/);
+});
+
+test('beforeunload protection is registered before initialization awaits external data', () => {
+  const body = sourceFunctionBody(indexHtml, 'initializeApp');
+  const listenerIndex = body.indexOf("window.addEventListener('beforeunload'");
+  const firstAwaitIndex = body.indexOf('await loadAppSettings()');
+  assert.notEqual(listenerIndex, -1);
+  assert.notEqual(firstAwaitIndex, -1);
+  assert.ok(listenerIndex < firstAwaitIndex);
+  assert.match(indexHtml, /initializing:\s*true/);
+  assert.match(body, /state\.initializing\s*=\s*false/);
+});
+
+test('multi-photo launch and edit-mode exit have all production-import runtime guards', () => {
+  const launchBody = sourceFunctionBody(indexHtml, 'handleMultiPhotoButtonClick');
+  assertIncludes(launchBody, 'canStartMultiPhotoImport()');
+  const setEditModeBody = sourceFunctionBody(indexHtml, 'setEditMode');
+  assertIncludes(setEditModeBody, '完了またはキャンセル');
+  assertIncludes(setEditModeBody, 'isProductionImportBusy()');
+  assertIncludes(setEditModeBody, '進行中の取込');
 });
 
 test('shared view remains read-only and independent from edit token injection', () => {

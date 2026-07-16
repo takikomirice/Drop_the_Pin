@@ -50,8 +50,8 @@ test('index help panel is available from the topbar and explains core concepts',
 
 test('index share route wording describes visible routes without changing filtering behavior', () => {
   assertIncludes(indexHtml, '<div class="form-label">表示するルート</div>');
-  assertIncludes(indexHtml, '選んだルート線だけを共有ビューに表示します。ピンはタグ・色の条件で絞り込まれます。');
-  assertIncludes(indexHtml, '表示するルートはルート線の表示対象です。ピンの絞り込みはタグ・色で行います。');
+  assertIncludes(indexHtml, 'ルート選択は線の表示対象。ピンの絞り込みはタグと色');
+  assertIncludes(indexHtml, "target.type === 'gpx-route' ? 'GPX' : 'GeoJSON'");
   assertIncludes(indexHtml, "if (isShareRouteSelectionNone(routeIds)) return '表示するルート: なし';");
   assertIncludes(indexHtml, "if (!ids.length) return '表示するルート: すべて';");
   assertIncludes(indexHtml, "return '表示するルート: ' + names.join('、');");
@@ -61,10 +61,10 @@ test('index share route wording describes visible routes without changing filter
 test('shared help panel is read-only focused and available from the topbar', () => {
   assertIncludes(sharedHtml, '<button id="shared-help-open-btn"');
   assertIncludes(sharedHtml, '<div id="shared-help-overlay" class="sheet-overlay"');
-  assertIncludes(sharedHtml, '<button id="shared-help-close" class="shared-control-btn" type="button">閉じる</button>');
+  assertIncludes(sharedHtml, '<button id="shared-help-close" class="ghost-btn" type="button" title="閉じる" data-shared-initial-focus>閉じる</button>');
   assertIncludes(sharedHtml, 'dtp-shared-help-seen-v112');
 
-  ['このページは閲覧専用', 'ピン', '検索・絞り込み', 'ルート', '注意'].forEach((heading) => {
+  ['このページは閲覧専用', 'ピン', '検索・絞り込み', 'ルート', 'キーボード操作', '注意'].forEach((heading) => {
     assertIncludes(sharedHtml, `<h3>${heading}</h3>`);
   });
   assertIncludes(sharedHtml, 'ピンの追加・編集・削除はできません。');
@@ -81,10 +81,21 @@ test('shared help panel is read-only focused and available from the topbar', () 
 
 test('help panels and lightweight hints support non-intrusive dismissal', () => {
   assertIncludes(indexHtml, "'help-overlay'");
-  assertIncludes(indexHtml, "if (event.key === 'Escape' && document.getElementById('help-overlay').classList.contains('open'))");
+  const mainEscapeBody = sourceFunctionBody(indexHtml, 'dispatchEscape');
+  assertIncludes(mainEscapeBody, "document.getElementById('help-overlay')");
+  assertIncludes(mainEscapeBody, "dismissOverlayById('help-overlay');");
+  assertIncludes(sourceFunctionBody(indexHtml, 'dismissOverlayById'), "return closeHelpPanel();");
+  const mainKeydownBody = sourceFunctionBody(indexHtml, 'handleGlobalKeydown');
+  assertIncludes(mainKeydownBody, 'dispatchEscape()');
+  assertIncludes(mainKeydownBody, 'event.stopPropagation();');
   assertIncludes(indexHtml, 'ルートの表示/非表示は閲覧中でも切り替えできます。');
 
-  assertIncludes(sharedHtml, "if (event.key === 'Escape' && document.getElementById('shared-help-overlay').classList.contains('open'))");
+  const sharedEscapeBody = sourceFunctionBody(sharedHtml, 'dispatchSharedEscape');
+  assertIncludes(sharedEscapeBody, "record.id === 'shared-help-overlay'");
+  assertIncludes(sharedEscapeBody, 'closeSharedHelpPanel();');
+  const sharedKeydownBody = sourceFunctionBody(sharedHtml, 'handleSharedGlobalKeydown');
+  assertIncludes(sharedKeydownBody, 'dispatchSharedEscape()');
+  assertIncludes(sharedKeydownBody, 'event.stopPropagation();');
   assertIncludes(sharedHtml, 'ピンは検索・タグ・色で絞り込めます。');
   assertIncludes(sharedHtml, 'ルートのボタンで 道路 / 直線 / 非表示 を切り替えできます。');
 });

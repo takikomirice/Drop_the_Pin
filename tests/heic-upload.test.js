@@ -89,6 +89,9 @@ test('Drive filename sync preserves the converted JPEG extension', () => {
   assert.equal(context.__build('旅行 1.2', 'IMG_0001.jpg', true), '旅行 1.2.jpg');
   assert.equal(context.__build('.hidden', 'IMG_0001.jpg', true), '.hidden.jpg');
   assert.equal(context.__build('夏休み', 'IMG_0001.jpg', false), 'IMG_0001.jpg');
+  assert.equal(context.__build('危険/\\\u0000名前', 'IMG_0001.PNG', true), '危険__名前.PNG');
+  assert.equal(context.__build('', 'bad/name?.webp', true), 'bad_name_.webp');
+  assert.equal(context.__build('x'.repeat(300), 'photo.jpg', true).length, 180);
 });
 
 test('normalizes numeric, rational, and DMS GPS values with correct hemispheres', () => {
@@ -338,17 +341,17 @@ test('save path uses the prepared JPEG and never invokes HEIC conversion', () =>
   const getDraftSource = extractFunction(indexHtml, 'getUploadDraft');
   const saveSource = extractFunction(indexHtml, 'saveNewPin');
   const submitSource = extractFunction(indexHtml, 'handleUploadSubmit');
-  const selectionStart = indexHtml.indexOf("document.getElementById('file-input').addEventListener('change'");
-  const selectionEnd = indexHtml.indexOf("document.getElementById('upload-title').addEventListener", selectionStart);
-  const selectionSource = indexHtml.slice(selectionStart, selectionEnd);
+  const selectionSource = extractFunction(indexHtml, 'handleUploadPhotoSelected');
 
   assert.match(getDraftSource, /file:\s*state\.upload\.uploadFile/);
   assert.match(getDraftSource, /filename:\s*state\.upload\.uploadFile/);
   assert.match(getDraftSource, /state\.upload\.conversionError/);
   assert.match(saveSource, /resizeWithOrientation\(draft\.file,\s*1920\)/);
   assert.match(saveSource, /filename:\s*draft\.filename/);
+  assert.match(saveSource, /withGAS\('saveImportPhotoItem'/);
   assert.doesNotMatch(saveSource, /HeicTo|convertHeic|prepareUploadPhoto/);
-  assert.match(submitSource, /openLocationChoice\(locationMessageForMetadataStatus\(state\.upload\.metadataStatus\)/);
+  assert.match(submitSource, /state\.upload\.positionMode === 'map'/);
+  assert.match(submitSource, /hasUsableUploadGps\(\)/);
   assert.match(selectionSource, /URL\.createObjectURL\(prepared\.uploadFile\)/);
   assert.match(selectionSource, /selectionToken !== state\.upload\.selectionToken/);
 });
@@ -359,7 +362,14 @@ test('save sends the prepared JPEG filename and GPS payload without reconversion
   const context = {
     Promise,
     Date,
-    state: { pins: [] },
+    state: {
+      pins: [],
+      upload: {
+        saving: false, saveError: '', photoSaveIdentity: null,
+        submittedPhotoPayload: null, savePromise: null
+      }
+    },
+    window: { crypto: { randomUUID: () => 'heic-photo-selection' } },
     document: { getElementById: () => ({ disabled: false }) },
     resizeWithOrientation: async (file, maxSize) => {
       assert.equal(file, preparedJpeg);
@@ -369,7 +379,16 @@ test('save sends the prepared JPEG filename and GPS payload without reconversion
     withEditToken: (payload) => payload,
     withGAS: async (method, payload) => {
       calls.push({ method, payload });
-      return { ok: true, id: 'pin-1', imageUrl: 'image', fileId: 'file-1', folderUrl: 'folder' };
+      return {
+        ok: true, deduplicated: false,
+        pin: {
+          id: 'pin-1', title: payload.title, description: payload.description,
+          lat: payload.lat, lng: payload.lng, color: payload.color, icon: payload.icon,
+          imageUrl: 'image', fileId: 'file-1', timestamp: 'saved', eventAt: payload.eventAt,
+          updatedAt: '', links: payload.links, folderUrl: 'folder', status: payload.status,
+          tags: payload.tags
+        }
+      };
     },
     currentFolderIdOrRoot: () => 'target-folder',
     clonePin: (pin) => pin,
@@ -378,13 +397,19 @@ test('save sends the prepared JPEG filename and GPS payload without reconversion
     closeOverlay() {},
     renderPins() {},
     renderSidePanel() {},
-    updateUnplacedBadge() {},
     renderColorFilterUI() {},
     renderIconFilterUI() {},
-    renderTagFilterUI() {}
+    renderTagFilterUI() {},
+    upsertImportedPin(pin) { context.state.pins.push(pin); }
   };
-  const source = extractFunction(indexHtml, 'saveNewPin');
-  vm.runInNewContext(`${source}; globalThis.__save = saveNewPin;`, context);
+  const names = [
+    'createSinglePhotoSaveIdentity', 'ensureSinglePhotoSaveIdentity',
+    'createSinglePhotoSavePayload', 'saveNewPin'
+  ];
+  vm.runInNewContext(
+    `${names.map((name) => extractFunction(indexHtml, name)).join('\n')}; globalThis.__save = saveNewPin;`,
+    context
+  );
   await context.__save({
     file: preparedJpeg,
     filename: 'IMG_0001.jpg',
@@ -393,11 +418,54 @@ test('save sends the prepared JPEG filename and GPS payload without reconversion
   }, { lat: 35.25, lng: 139.5 });
 
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].method, 'saveMapData');
+  assert.equal(calls[0].method, 'saveImportPhotoItem');
   assert.equal(calls[0].payload.filename, 'IMG_0001.jpg');
   assert.equal(calls[0].payload.lat, 35.25);
   assert.equal(calls[0].payload.lng, 139.5);
   assert.match(calls[0].payload.base64, /^data:image\/jpeg/);
+});
+
+test('save preserves an explicit blank status and defaults only legacy drafts without status', async () => {
+  const calls = [];
+  const state = { pins: [] };
+  const context = {
+    Promise,
+    Date,
+    Object,
+    state,
+    document: { getElementById: () => ({ disabled: false }) },
+    resizeWithOrientation: async () => null,
+    withEditToken: (payload) => payload,
+    withGAS: async (_method, payload) => {
+      calls.push(payload);
+      return { ok: true, id: `pin-${calls.length}`, imageUrl: '', fileId: '', folderUrl: '' };
+    },
+    currentFolderIdOrRoot: () => '',
+    clonePin: (pin) => pin,
+    cachePinFolderUrl_() {},
+    clearUploadPhotoState() {},
+    closeOverlay() {},
+    renderPins() {},
+    renderSidePanel() {},
+    renderColorFilterUI() {},
+    renderIconFilterUI() {},
+    renderTagFilterUI() {}
+  };
+  const source = extractFunction(indexHtml, 'saveNewPin');
+  vm.runInNewContext(`${source}; globalThis.__save = saveNewPin;`, context);
+  const draft = {
+    file: null, filename: '', title: 'Blank', description: '', eventAt: '',
+    color: '#e53935', icon: 'default', links: [], status: '', tags: []
+  };
+  await context.__save(draft, null);
+  const legacyDraft = { ...draft };
+  delete legacyDraft.status;
+  await context.__save(legacyDraft, null);
+
+  assert.equal(calls[0].status, '');
+  assert.equal(state.pins[0].status, '');
+  assert.equal(calls[1].status, '未対応');
+  assert.equal(state.pins[1].status, '未対応');
 });
 
 test('clearing a photo revokes the preview URL and resets every image-derived field', () => {
@@ -405,7 +473,10 @@ test('clearing a photo revokes the preview URL and resets every image-derived fi
   const revoked = [];
   const elements = {
     'file-input': { value: 'selected' },
-    'upload-preview': { src: 'blob:preview', style: { display: 'block' } },
+    'upload-preview': {
+      src: 'blob:preview', style: { display: 'block' },
+      removeAttribute(name) { if (name === 'src') this.src = ''; }
+    },
     'upload-event-at': { value: '2026-07-10T12:34' },
     'file-drop': { textContent: '', classList: { remove() {} } },
     'upload-photo-status': { textContent: 'old', className: 'old', style: {} },
@@ -426,7 +497,7 @@ test('clearing a photo revokes the preview URL and resets every image-derived fi
     refreshUploadSubmitState() {},
     refreshRenameNotes() {}
   };
-  vm.runInNewContext(`${source}; globalThis.clearUploadPhotoState();`, context);
+  vm.runInNewContext(`${extractFunction(indexHtml, 'setActionButtonLabel')}\n${source}; globalThis.clearUploadPhotoState();`, context);
 
   assert.deepEqual(revoked, ['blob:preview']);
   assert.equal(context.state.upload.originalFile, null);
@@ -444,6 +515,10 @@ test('clearing a photo revokes the preview URL and resets every image-derived fi
 });
 
 test('backdrop dismissal releases upload preview resources', () => {
-  const source = extractFunction(indexHtml, 'closeOverlayFromBackdrop');
-  assert.match(source, /id === 'upload-overlay'[\s\S]*clearUploadPhotoState\(\)/);
+  const source = extractFunction(indexHtml, 'dismissOverlayById');
+  const backdropSource = extractFunction(indexHtml, 'closeOverlayFromBackdrop');
+  const cancelSource = extractFunction(indexHtml, 'cancelUpload');
+  assert.match(source, /id === 'upload-overlay'[\s\S]*cancelUpload\(\)/);
+  assert.match(backdropSource, /dismissOverlayById\(record\.id\)/);
+  assert.match(cancelSource, /clearUploadPhotoState\(\)/);
 });

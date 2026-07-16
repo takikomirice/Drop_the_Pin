@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<p:gpx version="1.1" xmlns:p="http://www.topografix.com/GPX/1/1">
+  <!-- The document order is intentionally route, track, route. -->
+  <p:rte><p:rtept lat="30" lon="130"/></p:rte>
+  <p:wpt lat="31" lon="131"/>
+  <p:trk>
+    <p:name><![CDATA[最初に採用する名前]]></p:name>
+    <p:trkseg/>
+    <p:trkseg><p:trkpt lat="32" lon="132"><p:extensions><p:time>1999-01-01T00:00:00Z</p:time></p:extensions></p:trkpt></p:trkseg>
+  </p:trk>
+  <p:rte><p:rtept lat="33" lon="133"/></p:rte>
+</p:gpx>

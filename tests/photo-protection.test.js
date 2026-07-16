@@ -59,13 +59,13 @@ function loadPhotoGuards(source, selection, photos) {
 }
 
 test('normal detail image is marked as a non-draggable protected photo', () => {
-  assertIncludes(indexHtml, 'id="pin-detail-image" class="protected-photo" draggable="false"');
+  assertIncludes(indexHtml, 'id="pin-detail-image" class="photo-fit-cover protected-photo" draggable="false"');
   assertIncludes(indexHtml, '.protected-photo');
 });
 
-test('shared detail creates protected non-draggable photos dynamically', () => {
-  assertIncludes(sharedHtml, 'class="detail-image protected-photo"');
-  assertIncludes(sharedHtml, 'draggable="false"');
+test('shared detail keeps the index static protected non-draggable photo slot', () => {
+  assertIncludes(sharedHtml, 'id="shared-detail-image" class="photo-fit-cover protected-photo" draggable="false"');
+  assertIncludes(sourceFunction(sharedHtml, 'openSharedDetail'), "getElementById('shared-detail-image')");
   assertIncludes(sharedHtml, '.protected-photo');
 });
 

@@ -9,6 +9,8 @@ const indexHtml = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const sharedHtml = fs.readFileSync(path.join(root, 'shared.html'), 'utf8');
 
 const guardedServerFunctions = [
+  'listDrivePhotoImportFolder',
+  'readDrivePhotoImportFile',
   'navigateToFolder',
   'getRootFolderContents',
   'getPinDriveMeta',
@@ -25,15 +27,22 @@ const guardedServerFunctions = [
   'deleteShareLink',
   'revokeShareLink',
   'saveMapData',
+  'saveImportPhotoItem',
+  'saveImportPinItem',
   'duplicatePin',
   'updatePinDetails',
   'movePin',
   'unplacePin',
+  'bulkUpdatePinMetadata',
   'bulkUpdatePinStatus',
   'deletePin',
   'bulkDeletePins',
   'updateAppSettings',
-  'updatePin'
+  'updatePin',
+  'saveTrackBundle',
+  'updateTrackDisplaySettings',
+  'deleteTrack',
+  'updateTracksOrder'
 ];
 
 const unguardedReadOnlyFunctions = [
@@ -42,6 +51,7 @@ const unguardedReadOnlyFunctions = [
   'getAppSettings',
   'getRouteGroups',
   'getRouteCache',
+  'getTracks',
   'getSharedViewData',
   'getSharedRoadRouteCache'
 ];
@@ -51,6 +61,8 @@ const clientMutationCalls = [
   'putRouteCache',
   'setRoutePins',
   'updateRoutesOrder',
+  'updateTracksOrder',
+  'updateTrackDisplaySettings',
   'updateAppSettings',
   'createShareLink',
   'setShareLinkEnabled',
@@ -62,6 +74,7 @@ const clientMutationCalls = [
   'movePin',
   'saveRouteGroup',
   'deleteRouteGroup',
+  'bulkUpdatePinMetadata',
   'bulkUpdatePinStatus',
   'getRootFolderContents',
   'navigateToFolder',
@@ -147,7 +160,7 @@ test('index read-only calls are not forced through edit token', () => {
 
 test('shared view keeps read-only GAS calls without edit token dependency', () => {
   assertIncludes(sharedHtml, "withGAS('getSharedViewData', state.token)");
-  assertIncludes(sharedHtml, "withGAS('getSharedRoadRouteCache', { token: state.token, routeId: routeId })");
+  assertIncludes(sharedHtml, "withGAS('getSharedRoadRouteCache', { token: state.token, routeId: key })");
   assert.equal(sharedHtml.includes('withEditToken'), false);
   assert.equal(sharedHtml.includes('__EDIT_TOKEN__'), false);
 });

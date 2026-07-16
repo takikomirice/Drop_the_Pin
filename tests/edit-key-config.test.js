@@ -8,14 +8,25 @@ const root = path.resolve(__dirname, '..');
 const codeJs = fs.readFileSync(path.join(root, 'Code.js'), 'utf8');
 const indexHtml = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 
-function createSheet(rows = []) {
+function createSheet(rows = [], name = '') {
   return {
+    sheetName: name,
     rows: rows.map((row) => row.slice()),
     activated: false,
     activatedRanges: [],
     hyperlinkRows: [],
     getLastRow() {
       return this.rows.length;
+    },
+    getLastColumn() {
+      return this.rows.reduce((maximum, row) => Math.max(maximum, row.length), 0);
+    },
+    getName() {
+      return this.sheetName;
+    },
+    setName(nextName) {
+      this.sheetName = nextName;
+      return this;
     },
     getRange(row, column, numRows = 1, numColumns = 1) {
       if (typeof row === 'string') {
@@ -93,9 +104,14 @@ function createSheet(rows = []) {
 }
 
 function loadApi(configRows = [['設定項目', '値', '説明']], options = {}) {
-  const sheets = {
-    config: createSheet(configRows)
-  };
+  const sheets = {};
+  const sheetOrder = [];
+  const initialSheets = options.initialSheets || [{ name: 'config', rows: configRows }];
+  initialSheets.forEach((definition) => {
+    const sheet = createSheet(definition.rows || [], definition.name);
+    sheets[definition.name] = sheet;
+    sheetOrder.push(sheet);
+  });
   const menuItems = [];
   const cache = {};
   const templates = [];
@@ -122,6 +138,28 @@ function loadApi(configRows = [['設定項目', '値', '説明']], options = {})
       getResponseText: () => options.promptText || ''
     })
   };
+  let activeSheet = sheetOrder[0] || null;
+  const spreadsheet = {
+    getSheetByName: (name) => sheetOrder.find((sheet) => sheet.getName() === name) || null,
+    getSheets: () => sheetOrder.slice(),
+    insertSheet: (name) => {
+      const sheet = createSheet([], name);
+      sheets[name] = sheet;
+      sheetOrder.push(sheet);
+      return sheet;
+    },
+    getActiveSheet: () => activeSheet,
+    setActiveSheet: (sheet) => {
+      activeSheet = sheet;
+      return sheet;
+    },
+    moveActiveSheet: (position) => {
+      const currentIndex = sheetOrder.indexOf(activeSheet);
+      if (currentIndex === -1) return;
+      sheetOrder.splice(currentIndex, 1);
+      sheetOrder.splice(Math.max(0, Math.min(position - 1, sheetOrder.length)), 0, activeSheet);
+    }
+  };
   const context = {
     Logger: { log() {} },
     Utilities: { getUuid: () => '11111111-2222-4333-8444-555555555555' },
@@ -135,13 +173,7 @@ function loadApi(configRows = [['設定項目', '値', '説明']], options = {})
     }) },
     SpreadsheetApp: {
       getUi: () => ui,
-      getActiveSpreadsheet: () => ({
-        getSheetByName: (name) => sheets[name] || null,
-        insertSheet: (name) => {
-          sheets[name] = createSheet();
-          return sheets[name];
-        }
-      })
+      getActiveSpreadsheet: () => spreadsheet
     },
     HtmlService: {
       createTemplateFromFile: (name) => {
@@ -199,7 +231,7 @@ globalThis.__editKeyApi = {
   refreshAndOpenEditUrl: refreshAndOpenEditUrl,
   showEditUrlDialog: showEditUrlDialog
 };`, context);
-  return { api: context.__editKeyApi, sheets, menuItems, cache, templates, ui };
+  return { api: context.__editKeyApi, sheets, sheetOrder, menuItems, cache, templates, ui };
 }
 
 function rowByKey(sheet, key) {
@@ -329,10 +361,59 @@ test('spreadsheet menu exposes edit URL operations', () => {
 
   assert.deepEqual(menuItems.map((item) => item.label), [
     '初期設定',
-    'WebアプリURLを設定',
     '編集URLを更新・開く',
     '編集キーを再生成'
   ]);
+});
+
+test('setupSheet puts config first without disturbing existing data or other sheet order', () => {
+  const loaded = loadApi([], {
+    initialSheets: [
+      { name: 'notes', rows: [['keep-notes']] },
+      { name: 'config', rows: [
+        ['設定項目', '値', '説明'],
+        ['CUSTOM_FORMULA', '=1+1', '維持する説明'],
+        ['EDIT_KEY', 'existing-key', '既存説明'],
+        ['EDIT_URL', '=HYPERLINK("https://example.com","編集")', '式を維持する説明']
+      ] },
+      { name: 'archive', rows: [['keep-archive']] }
+    ]
+  });
+
+  loaded.api.setupSheet();
+  assert.equal(loaded.sheetOrder[0].getName(), 'config');
+  assert.deepEqual(
+    loaded.sheetOrder.filter((sheet) => ['notes', 'archive'].includes(sheet.getName())).map((sheet) => sheet.getName()),
+    ['notes', 'archive']
+  );
+  assert.deepEqual(rowByKey(loaded.sheets.config, 'CUSTOM_FORMULA'), [
+    'CUSTOM_FORMULA', '=1+1', '維持する説明'
+  ]);
+  assert.deepEqual(rowByKey(loaded.sheets.config, 'EDIT_URL'), [
+    'EDIT_URL', '=HYPERLINK("https://example.com","編集")', '式を維持する説明'
+  ]);
+
+  loaded.api.setupSheet();
+  assert.equal(loaded.sheetOrder.filter((sheet) => sheet.getName() === 'config').length, 1);
+  assert.equal(loaded.sheetOrder.filter((sheet) => sheet.getName() === 'map_info').length, 1);
+  assert.deepEqual(rowByKey(loaded.sheets.config, 'CUSTOM_FORMULA'), [
+    'CUSTOM_FORMULA', '=1+1', '維持する説明'
+  ]);
+  assert.deepEqual(rowByKey(loaded.sheets.config, 'EDIT_URL'), [
+    'EDIT_URL', '=HYPERLINK("https://example.com","編集")', '式を維持する説明'
+  ]);
+});
+
+test('setupSheet safely renames a sole blank initial sheet to config before creating map_info', () => {
+  const loaded = loadApi([], {
+    initialSheets: [{ name: 'シート1', rows: [] }]
+  });
+
+  loaded.api.setupSheet();
+  assert.equal(loaded.sheetOrder[0].getName(), 'config');
+  assert.equal(loaded.sheetOrder.filter((sheet) => sheet.getName() === 'config').length, 1);
+  assert.equal(loaded.sheetOrder[1].getName(), 'map_info');
+  assert.deepEqual(loaded.sheetOrder[0].rows[0].slice(0, 3), ['設定項目', '値', '説明']);
 });
 
 test('menu edit URL operation and its compatibility wrapper select EDIT_URL without a modal', () => {

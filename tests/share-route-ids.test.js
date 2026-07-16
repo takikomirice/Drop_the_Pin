@@ -110,7 +110,8 @@ globalThis.__shareRouteIdsApi = {
   shareRowToLink_: shareRowToLink_,
   createShareLink: createShareLink,
   listShareLinks: listShareLinks,
-  getSharedViewData: getSharedViewData
+  getSharedViewData: getSharedViewData,
+  encodeSpreadsheetLiteral_: typeof encodeSpreadsheetLiteral_ === 'undefined' ? null : encodeSpreadsheetLiteral_
   ,
   getSharedRoadRouteCache_: getSharedRoadRouteCache_
 };`;
@@ -141,7 +142,7 @@ test('ensureShareLinksSheet_ appends missing routeIds without moving existing co
 
   assert.deepEqual(
     sameRealm(sheets.share_links.rows[0]),
-    ['createdAt', 'label', 'token', 'tags', 'tagMode', 'enabled', 'revokedAt', 'colors', 'routeIds']
+    ['createdAt', 'label', 'token', 'tags', 'tagMode', 'enabled', 'revokedAt', 'colors', 'routeIds', 'routeTargetsJson']
   );
   assert.equal(sheets.share_links.rows[1][7], '#e53935|#1e88e5');
   assert.equal(sheets.share_links.rows[1][8], undefined);
@@ -216,6 +217,27 @@ test('getSharedViewData uses selected routeIds only for route groups and keeps m
   assert.deepEqual(sameRealm(shared.pins.map((pin) => pin.id)), ['p1', 'p2', 'p3', 'p4']);
   assert.deepEqual(sameRealm(shared.routeGroups.map((group) => group.routeId)), ['route-a']);
   assert.deepEqual(sameRealm(shared.routeGroups[0].pinIds), ['p1', 'p2']);
+});
+
+test('getSharedViewData never exposes spreadsheet literal markers', () => {
+  const initial = loadApi({
+    shareRows: [
+      ['createdAt', 'label', 'token', 'tags', 'tagMode', 'enabled', 'revokedAt', 'colors', 'routeIds'],
+      ['2026-04-01T00:00:00.000Z', 'Formula-safe', 'tok-safe', '', 'or', true, '', '', '']
+    ]
+  });
+  const encode = initial.api.encodeSpreadsheetLiteral_;
+  initial.sheets.map_info.rows.push([
+    '', encode('=shared title'), encode('+shared description'), 35, 139, '#e53935', '', '', 'shared-pin', '', '',
+    encode('@shared-tag|-10+20'), '', '', 'default'
+  ]);
+
+  const shared = initial.api.getSharedViewData('tok-safe');
+  assert.equal(shared.ok, true);
+  assert.equal(shared.pins[0].title, '=shared title');
+  assert.equal(shared.pins[0].description, '+shared description');
+  assert.deepEqual(sameRealm(shared.pins[0].tags), ['@shared-tag', '-10+20']);
+  assert.equal(JSON.stringify(shared).includes('dtp-sheet:v1:'), false);
 });
 
 test('getSharedViewData keeps legacy all-route behavior when routeIds is empty', () => {

@@ -93,7 +93,6 @@ function createHarness(options = {}) {
     closeOverlay() {},
     renderPins() {},
     renderSidePanel() {},
-    updateUnplacedBadge() {},
     renderColorFilterUI() {},
     renderIconFilterUI() {},
     renderTagFilterUI() {},
@@ -221,11 +220,13 @@ test('a stale pin A response never overwrites pin B detail DOM', async () => {
 
 test('the map goto action clears the shown pin before closing its detail overlay', () => {
   const openPinDetailSource = extractFunction(indexHtml, 'openPinDetail');
+  const closePinDetailSource = extractFunction(indexHtml, 'closePinDetail');
   const gotoHandlerStart = openPinDetailSource.indexOf('gotoBtn.onclick');
   const gotoHandlerEnd = openPinDetailSource.indexOf('};', gotoHandlerStart);
   const gotoHandler = openPinDetailSource.slice(gotoHandlerStart, gotoHandlerEnd);
 
-  assert.match(gotoHandler, /state\.shownPinId = null;[\s\S]*closeOverlay\('pin-detail-overlay'\)/);
+  assert.match(gotoHandler, /closePinDetail\(\)/);
+  assert.match(closePinDetailSource, /state\.shownPinId = null;[\s\S]*closeOverlay\('pin-detail-overlay'/);
 });
 
 test('a new pin cache seed displays its known folder without another Drive request', async () => {
