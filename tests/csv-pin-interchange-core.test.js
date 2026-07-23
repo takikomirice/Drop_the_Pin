@@ -110,13 +110,18 @@ test('pin serialization uses the fixed schema, preserves order, and round trips 
     id: 'pin-1', title: '東京,「観察」', description: '一行目\n二行目"引用"',
     lat: -35.5, lng: 139.75, color: '#2196F3', icon: 'photo', status: '',
     tags: ['植物', '観察'], eventAt: '2026-07-11T10:30:15',
-    links: ['https://example.com', 'https://example.org']
+    links: ['https://example.com', 'https://example.org'], hasAudio: true,
+    audioId: 'managed_audio_secret', audioBase64: 'SUQz-secret',
+    sourceDriveFileId: 'source_audio_secret'
   }, {
     id: 'pin-2', title: '未配置🙂', description: '', lat: null, lng: null,
     color: '#e53935', icon: 'default', status: '完了', tags: [], eventAt: '', links: []
   }];
   const output = csv.serializePins(pins);
   assert.equal(output.startsWith('\uFEFFschemaVersion,sourceId,title,description,lat,lng,color,icon,status,tags,eventAt,links\r\n'), true);
+  assert.equal(output.includes('managed_audio_secret'), false);
+  assert.equal(output.includes('SUQz-secret'), false);
+  assert.equal(output.includes('source_audio_secret'), false);
   const job = csv.buildImportJob(output, { jobId: 'job-1', generateId: (() => {
     let value = 0;
     return () => `item-${++value}`;
@@ -138,6 +143,10 @@ test('pin serialization uses the fixed schema, preserves order, and round trips 
     }
   ]);
   assert.equal(job.sourceType, 'csv');
+  assert.equal(job.items.some((item) => (
+    Object.hasOwn(item, 'audioId') || Object.hasOwn(item, 'hasAudio')
+      || Object.hasOwn(item, 'audioBase64') || Object.hasOwn(item, 'sourceDriveFileId')
+  )), false);
 });
 
 test('all standard colors export as fixed English names and re-import to the same lowercase hex', () => {

@@ -9,16 +9,19 @@ const indexHtml = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf
 const READ_METHODS = [
   'getAppSettings',
   'getMapData',
+  'getPinAudioData',
   'getPinDriveMeta',
   'getRootFolderContents',
   'getRouteCache',
   'getRouteGroups',
   'getTracks',
+  'listDriveMediaInbox',
   'listDrivePhotoImportFolder',
   'listInputPresets',
   'listShareLinks',
   'navigateToFolder',
-  'readDrivePhotoImportFile'
+  'readDrivePhotoImportFile',
+  'readDriveAudioImportFile'
 ];
 
 const MUTATION_METHODS = [
@@ -32,9 +35,12 @@ const MUTATION_METHODS = [
   'deleteShareLink',
   'deleteTrack',
   'duplicatePin',
+  'ensureMediaDriveStructure',
   'movePin',
   'putRouteCache',
+  'removePinAudio',
   'saveImportPhotoItem',
+  'saveImportAudioItem',
   'saveImportPinItem',
   'saveInputPreset',
   'saveMapData',

@@ -11,7 +11,7 @@ const TEST_EDIT_TOKEN = 'test-edit-token';
 const MAP_INFO_HEADERS = [
   'タイムスタンプ', 'タイトル', '説明', '緯度', '経度', 'ピンの色',
   'ファイルID', '画像URL', 'ID', '参考URL一覧', '状態', 'タグ',
-  'イベント時刻', '更新時刻', 'アイコン'
+  'イベント時刻', '更新時刻', 'アイコン', '音声ID'
 ];
 const ROUTES_HEADERS = [
   'routeId', 'name', 'color', 'routeMode', 'closed', 'startPinId', 'endPinId',
@@ -22,7 +22,8 @@ const ROUTE_CACHE_HEADERS = ['cacheKey', 'routeId', 'coordsJson', 'provider', 'c
 const IMPORT_RECEIPT_HEADERS = [
   'idempotencyKey', 'jobId', 'itemId', 'payloadHash', 'state', 'leaseOwner',
   'leaseUntil', 'pinId', 'targetFolderId', 'tempFileName', 'fileId', 'imageUrl',
-  'folderUrl', 'createdAt', 'updatedAt', 'lastErrorCode', 'sourceDriveFileId'
+  'folderUrl', 'createdAt', 'updatedAt', 'lastErrorCode', 'sourceDriveFileId',
+  'mediaKind', 'operationMode', 'targetPinId', 'cleanupFileId'
 ];
 
 function importReceiptRow({ pinId, fileId, sourceDriveFileId, targetFolderId = 'managed-folder' }) {
@@ -98,6 +99,9 @@ function createSheet(name, rows, formulas, audit) {
     getLastColumn() {
       return this.rows.reduce((max, row) => Math.max(max, row.length), 0);
     },
+    getMaxColumns() {
+      return Math.max(26, this.getLastColumn());
+    },
     getDataRange() {
       audit.dataRangeCalls.push({ sheet: name, lockHeld: audit.lock.held });
       return createRange(this, 1, 1, Math.max(1, this.getLastRow()), Math.max(1, this.getLastColumn()), audit);
@@ -152,7 +156,8 @@ function createSheet(name, rows, formulas, audit) {
       this.rows.splice(startRow - 1, howMany);
       this.formulas.splice(startRow - 1, howMany);
       this.maxRows = Math.max(0, this.maxRows - howMany);
-    }
+    },
+    setFrozenRows() {}
   };
   return sheet;
 }
@@ -212,6 +217,15 @@ function createRange(sheet, row, column, numRows, numColumns, audit) {
       });
       return this;
     },
+    setBackground() {
+      return this;
+    },
+    setFontColor() {
+      return this;
+    },
+    setFontWeight() {
+      return this;
+    },
     clearContent() {
       audit.writes.push({ sheet: sheet.name, method: 'clearContent', row, column, numRows, numColumns, lockHeld: audit.lock.held });
       for (let rowOffset = 0; rowOffset < numRows; rowOffset += 1) {
@@ -240,7 +254,8 @@ function mapRow(overrides = {}) {
     Object.prototype.hasOwnProperty.call(overrides, 'tags') ? overrides.tags : 'alpha|beta',
     Object.prototype.hasOwnProperty.call(overrides, 'eventAt') ? overrides.eventAt : '2026-07-10T12:00',
     overrides.updatedAt || '2026-07-10T01:00:00.000Z',
-    Object.prototype.hasOwnProperty.call(overrides, 'icon') ? overrides.icon : 'food'
+    Object.prototype.hasOwnProperty.call(overrides, 'icon') ? overrides.icon : 'food',
+    overrides.audioId || ''
   ];
 }
 
@@ -305,6 +320,11 @@ function createHarness(options = {}) {
   const spreadsheet = {
     getSheetByName(name) {
       return sheets[name] || null;
+    },
+    insertSheet(name) {
+      const sheet = createSheet(name, [], null, audit);
+      sheets[name] = sheet;
+      return sheet;
     }
   };
   const lock = {
@@ -357,7 +377,10 @@ function createHarness(options = {}) {
       getScriptCache: () => ({ get: (key) => key === `EDIT_TOKEN_${TEST_EDIT_TOKEN}` ? '1' : null })
     },
     LockService: { getScriptLock: () => lock },
-    SpreadsheetApp: { getActiveSpreadsheet: () => spreadsheet },
+    SpreadsheetApp: {
+      getActiveSpreadsheet: () => spreadsheet,
+      flush() {}
+    },
     DriveApp: {
       getFileById(fileId) {
         audit.driveCalls.push({ method: 'getFileById', fileId, lockHeld: audit.lock.held });
@@ -423,10 +446,11 @@ function mapWrites(audit) {
   return audit.writes.filter((write) => write.sheet === 'map_info');
 }
 
-test('updatePinDetails batches a full edit into one formula-preserving A:O write', () => {
-  const formulas = [MAP_INFO_HEADERS.map(() => ''), mapRow().map(() => '')];
+test('updatePinDetails batches a full edit into one formula-preserving A:P write', () => {
+  const existingRow = mapRow({ audioId: 'private-audio-id' });
+  const formulas = [MAP_INFO_HEADERS.map(() => ''), existingRow.map(() => '')];
   formulas[1][7] = '=IMAGE("https://example.com/photo")';
-  const harness = createHarness({ mapFormulas: formulas });
+  const harness = createHarness({ mapRows: [MAP_INFO_HEADERS, existingRow], mapFormulas: formulas });
 
   const result = plain(harness.api.updatePinDetails(withEditToken({
     id: 'pin-1',
@@ -450,12 +474,13 @@ test('updatePinDetails batches a full edit into one formula-preserving A:O write
   assert.equal(harness.sheets.map_info.rows[1][11], '');
   assert.equal(harness.sheets.map_info.rows[1][12], '');
   assert.equal(harness.sheets.map_info.rows[1][14], 'default');
+  assert.equal(harness.sheets.map_info.rows[1][15], 'private-audio-id');
   assert.equal(harness.sheets.map_info.formulas[1][7], '=IMAGE("https://example.com/photo")');
   assert.match(String(harness.sheets.map_info.rows[1][13]), /^\d{4}-\d{2}-\d{2}T/);
   const writes = mapWrites(harness.audit);
   assert.equal(writes.length, 1);
   assert.deepEqual({ method: writes[0].method, row: writes[0].row, column: writes[0].column, numRows: writes[0].numRows, numColumns: writes[0].numColumns }, {
-    method: 'setValues', row: 2, column: 1, numRows: 1, numColumns: 15
+    method: 'setValues', row: 2, column: 1, numRows: 1, numColumns: 16
   });
   assert.equal(writes[0].lockHeld, true);
   assert.equal(harness.audit.reads.every((read) => read.lockHeld), true);

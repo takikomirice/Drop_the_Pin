@@ -10,8 +10,10 @@ const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
 
 function bodyMarkupBeforeScript(source) {
   const bodyStart = source.indexOf('<body');
-  const scriptStart = source.indexOf('<script>', bodyStart);
-  return source.slice(bodyStart, scriptStart);
+  const mainMarker = source === indexHtml ? 'const appStartupStartedAt' : 'const SHARED_DEFAULT_COLOR';
+  const scriptStart = source.lastIndexOf('<script>', source.indexOf(mainMarker));
+  return source.slice(bodyStart, scriptStart)
+    .replace(/<script(?:\s[^>]*)?>[\s\S]*?<\/script>/gi, '');
 }
 
 test('integrated shells retain Pencil foundations and 44px operation targets', () => {

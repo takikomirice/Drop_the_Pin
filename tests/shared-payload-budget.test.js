@@ -16,7 +16,7 @@ const SHARE_HEADERS = [
 ];
 const MAP_HEADERS = [
   'タイムスタンプ', 'タイトル', '説明', '緯度', '経度', 'ピンの色', 'ファイルID',
-  '画像URL', 'ID', '参考URL一覧', '状態', 'タグ', 'イベント時刻', '更新時刻', 'アイコン'
+  '画像URL', 'ID', '参考URL一覧', '状態', 'タグ', 'イベント時刻', '更新時刻', 'アイコン', '音声ID'
 ];
 const ROUTE_HEADERS = [
   'routeId', 'name', 'color', 'routeMode', 'closed', 'startPinId', 'endPinId',
@@ -92,8 +92,8 @@ function createSheet(rows, name, rangeReads) {
   };
 }
 
-function pinRow(id, { title = id, description = `${id} description`, lat = 35, lng = 139 } = {}) {
-  return ['', title, description, lat, lng, '#1e88e5', '', '', id, '', '', '', '', '', 'default'];
+function pinRow(id, { title = id, description = `${id} description`, lat = 35, lng = 139, audioId = '' } = {}) {
+  return ['', title, description, lat, lng, '#1e88e5', '', '', id, '', '', '', '', '', 'default', audioId];
 }
 
 function routeRow(id, orderIndex) {
@@ -286,6 +286,45 @@ test('2000 pins create and read successfully, then one added pin fails closed wi
   assert.equal(sheets.share_links.rows.length, 2);
 });
 
+test('shared payload projects private audio IDs to hasAudio', () => {
+  const { api, sheets } = loadApi({
+    mapRows: [MAP_HEADERS, pinRow('pin-audio', { audioId: 'private-audio-id' })]
+  });
+  sheets.share_links.rows.push(storedShareRow('audio-share', []));
+
+  const result = api.getSharedViewData('audio-share');
+
+  assert.equal(result.ok, true);
+  assert.equal(result.pins[0].hasAudio, true);
+  assert.equal(Object.hasOwn(result.pins[0], 'audioId'), false);
+});
+
+test('100 audio pins keep initial shared payload metadata-only without audio bytes or names', () => {
+  const mapRows = [MAP_HEADERS];
+  for (let index = 0; index < 100; index += 1) {
+    mapRows.push(pinRow(`audio-pin-${index}`, {
+      title: `Audio ${index}`,
+      audioId: `private-audio-${index}`
+    }));
+  }
+  const { api, sheets } = loadApi({ mapRows });
+  sheets.share_links.rows.push(storedShareRow('audio-100-share', []));
+
+  const result = api.getSharedViewData('audio-100-share');
+
+  assert.equal(result.ok, true);
+  assert.equal(result.pins.length, 100);
+  result.pins.forEach((pin) => {
+    assert.equal(pin.hasAudio, true);
+    assert.deepEqual(Object.keys(pin).filter((key) => /audio/i.test(key)), ['hasAudio']);
+  });
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes('private-audio-'), false);
+  for (const forbidden of ['base64', 'audioId', 'audioName', 'audioDuration', 'audioUrl']) {
+    assert.equal(serialized.includes(forbidden), false);
+  }
+});
+
 test('100 actually returned routes succeed while 101 reject creation without append', () => {
   function fixture(routeCount) {
     const routeRows = [ROUTE_HEADERS];
@@ -395,9 +434,11 @@ test('coordinate overflow stops before rebuilding the crossing and remaining sel
 
 test('create and read use the same DTO builder and clients show the dedicated safe message', () => {
   const createSource = functionSource(codeJs, 'createShareLink');
+  const projectionSource = functionSource(codeJs, 'resolveSharedProjection_');
   const readSource = functionSource(codeJs, 'getSharedViewData');
   assert.match(createSource, /buildSharedViewDataForLink_/);
-  assert.match(readSource, /buildSharedViewDataForLink_/);
+  assert.match(projectionSource, /buildSharedViewDataForLink_/);
+  assert.match(readSource, /resolveSharedProjection_/);
 
   const safeMessage = '共有データが大きすぎるため表示できません。共有対象を減らしてください。';
   assert.match(indexHtml, /SHARED_PAYLOAD_TOO_LARGE/);

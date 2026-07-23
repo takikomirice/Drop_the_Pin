@@ -1230,6 +1230,322 @@
       <div id="shared-detail-status"></div>
       <div id="shared-detail-tags"></div>
       <div id="shared-detail-description" class="sheet-subtitle"></div>
+<template data-dtp-audio-player-boundary="start"></template>
+<style>
+  .pin-audio-player {
+    margin: 0 0 12px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--color-surface-muted);
+  }
+  .pin-audio-player-status {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--text-sub);
+    font-size: 13px;
+  }
+  .pin-audio-player-status:empty {
+    display: none;
+  }
+  .pin-audio-player audio {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+</style>
+
+<section id="pin-audio-player" class="pin-audio-player" aria-label="音声" aria-busy="false" hidden>
+  <span id="pin-audio-player-status" class="pin-audio-player-status" role="status" aria-live="polite"></span>
+  <audio id="pin-audio-runtime" controls controlsList="nodownload" preload="metadata" aria-label="音声を再生" hidden></audio>
+  <button id="pin-audio-player-retry" class="ghost-btn" type="button" hidden>再試行</button>
+</section>
+
+<script>
+  (function(global) {
+    'use strict';
+
+    const MAX_CACHE_ENTRIES = 3;
+    const MAX_CACHE_BYTES = 12 * 1024 * 1024;
+    const MIN_RESPONSE_BYTES = 1024;
+    const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+    const AUDIO_MIME_TYPE = 'audio/mpeg';
+
+    function createRenderer(elements) {
+      const source = elements || {};
+      const container = source.container;
+      const statusElement = source.statusElement;
+      const audioElement = source.audioElement;
+      const retryButton = source.retryButton;
+      if (!container || !statusElement || !audioElement || !retryButton) {
+        throw new Error('Audio player elements are unavailable.');
+      }
+
+      return function render(view) {
+        const status = view && typeof view.status === 'string' ? view.status : 'hidden';
+        const hidden = status === 'hidden';
+        const loading = status === 'loading';
+        const ready = status === 'ready';
+        const failed = status === 'error';
+
+        container.hidden = hidden;
+        container.setAttribute('aria-busy', loading ? 'true' : 'false');
+        statusElement.textContent = loading
+          ? '音声を準備中…'
+          : (failed ? '音声を再生できませんでした' : '');
+        audioElement.hidden = !ready;
+
+        retryButton.hidden = !failed;
+        retryButton.disabled = !failed;
+        retryButton.textContent = '再試行';
+      };
+    }
+
+    function responseToBlob(response) {
+      if (!response || response.ok !== true || response.mimeType !== AUDIO_MIME_TYPE
+          || !Number.isSafeInteger(response.byteLength)
+          || response.byteLength < MIN_RESPONSE_BYTES || response.byteLength > MAX_RESPONSE_BYTES
+          || typeof response.base64 !== 'string' || !response.base64
+          || response.base64.length % 4 !== 0
+          || !/^[A-Za-z0-9+/]*={0,2}$/.test(response.base64)) {
+        throw new Error('Audio response is invalid.');
+      }
+      let binary;
+      try {
+        binary = atob(response.base64);
+      } catch (_error) {
+        throw new Error('Audio response is invalid.');
+      }
+      if (binary.length !== response.byteLength) {
+        throw new Error('Audio response is invalid.');
+      }
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index) & 0xff;
+      }
+      return {
+        blob: new Blob([bytes], { type: AUDIO_MIME_TYPE }),
+        byteLength: response.byteLength
+      };
+    }
+
+    function create(options) {
+      const config = options || {};
+      const audioElement = config.audioElement;
+      const fetchAudio = config.fetchAudio;
+      const renderState = config.renderState;
+      if (!audioElement || typeof fetchAudio !== 'function' || typeof renderState !== 'function') {
+        throw new Error('Audio player configuration is invalid.');
+      }
+
+      const cache = new Map();
+      const inFlightByPin = new Map();
+      let cacheBytes = 0;
+      let generation = 0;
+      let currentPinId = '';
+      let currentStatus = 'hidden';
+      let destroyed = false;
+
+      function render(status) {
+        currentStatus = status;
+        renderState({ status: status, pinId: currentPinId });
+      }
+
+      function pauseAndReset() {
+        try { audioElement.pause(); } catch (_error) {}
+        try { audioElement.currentTime = 0; } catch (_error) {}
+      }
+
+      function detachAudio() {
+        pauseAndReset();
+        try { audioElement.removeAttribute('src'); } catch (_error) { audioElement.src = ''; }
+        try { audioElement.load(); } catch (_error) {}
+      }
+
+      function attachUrl(url) {
+        pauseAndReset();
+        audioElement.src = String(url || '');
+        try { audioElement.load(); } catch (_error) {}
+      }
+
+      function revokeEntry(entry) {
+        if (!entry) return;
+        try { URL.revokeObjectURL(entry.url); } catch (_error) {}
+        cacheBytes -= entry.byteLength;
+        if (cacheBytes < 0) cacheBytes = 0;
+      }
+
+      function touchCache(pinId) {
+        const entry = cache.get(pinId);
+        if (!entry) return null;
+        cache.delete(pinId);
+        cache.set(pinId, entry);
+        return entry;
+      }
+
+      function storeCache(pinId, entry) {
+        const previous = cache.get(pinId);
+        if (previous) {
+          cache.delete(pinId);
+          revokeEntry(previous);
+        }
+        cache.set(pinId, entry);
+        cacheBytes += entry.byteLength;
+        while (cache.size > MAX_CACHE_ENTRIES || cacheBytes > MAX_CACHE_BYTES) {
+          const oldestKey = cache.keys().next().value;
+          const oldest = cache.get(oldestKey);
+          cache.delete(oldestKey);
+          revokeEntry(oldest);
+        }
+      }
+
+      function removeCachedPin(pinId) {
+        const entry = cache.get(pinId);
+        if (!entry) return false;
+        cache.delete(pinId);
+        revokeEntry(entry);
+        return true;
+      }
+
+      function isCurrent(pinId, requestGeneration) {
+        return !destroyed && currentPinId === pinId && generation === requestGeneration;
+      }
+
+      function beginFetch(pinId, force) {
+        if (destroyed || !pinId) return Promise.resolve(false);
+        const existing = inFlightByPin.get(pinId);
+        if (!force && existing && existing.generation === generation) return existing.promise;
+
+        const requestGeneration = generation;
+        render('loading');
+        let request;
+        try {
+          request = fetchAudio(pinId);
+        } catch (error) {
+          request = Promise.reject(error);
+        }
+
+        let pending;
+        pending = Promise.resolve(request).then(function(response) {
+          if (!isCurrent(pinId, requestGeneration)) return false;
+          const decoded = responseToBlob(response);
+          if (!isCurrent(pinId, requestGeneration)) return false;
+          const url = URL.createObjectURL(decoded.blob);
+          if (!isCurrent(pinId, requestGeneration)) {
+            URL.revokeObjectURL(url);
+            return false;
+          }
+          storeCache(pinId, { url: url, byteLength: decoded.byteLength });
+          attachUrl(url);
+          render('ready');
+          return true;
+        }).catch(function() {
+          if (!isCurrent(pinId, requestGeneration)) return false;
+          detachAudio();
+          render('error');
+          return false;
+        }).finally(function() {
+          const active = inFlightByPin.get(pinId);
+          if (active && active.promise === pending) inFlightByPin.delete(pinId);
+        });
+        inFlightByPin.set(pinId, { generation: requestGeneration, promise: pending });
+        return pending;
+      }
+
+      function open(pinId) {
+        const normalizedPinId = String(pinId || '').trim();
+        if (destroyed || !normalizedPinId) return Promise.resolve(false);
+        if (currentPinId === normalizedPinId) {
+          const active = inFlightByPin.get(normalizedPinId);
+          if (currentStatus === 'loading' && active && active.generation === generation) {
+            return active.promise;
+          }
+          if (currentStatus === 'ready') return Promise.resolve(true);
+        }
+
+        generation += 1;
+        pauseAndReset();
+        currentPinId = normalizedPinId;
+        const cached = touchCache(normalizedPinId);
+        if (cached) {
+          attachUrl(cached.url);
+          render('ready');
+          return Promise.resolve(true);
+        }
+        detachAudio();
+        return beginFetch(normalizedPinId, false);
+      }
+
+      function retry() {
+        if (destroyed || !currentPinId) return Promise.resolve(false);
+        const pinId = currentPinId;
+        generation += 1;
+        removeCachedPin(pinId);
+        detachAudio();
+        return beginFetch(pinId, true);
+      }
+
+      function close() {
+        if (destroyed) return false;
+        generation += 1;
+        currentPinId = '';
+        detachAudio();
+        render('hidden');
+        return true;
+      }
+
+      function invalidate(pinId) {
+        const normalizedPinId = String(pinId || '').trim();
+        if (destroyed || !normalizedPinId) return false;
+        const wasCurrent = currentPinId === normalizedPinId;
+        if (wasCurrent) {
+          generation += 1;
+          currentPinId = '';
+          detachAudio();
+          render('hidden');
+        }
+        return removeCachedPin(normalizedPinId) || wasCurrent;
+      }
+
+      function destroy() {
+        if (destroyed) return false;
+        destroyed = true;
+        generation += 1;
+        currentPinId = '';
+        detachAudio();
+        cache.forEach(revokeEntry);
+        cache.clear();
+        cacheBytes = 0;
+        inFlightByPin.clear();
+        if (global && typeof global.removeEventListener === 'function') {
+          global.removeEventListener('pagehide', destroy);
+        }
+        render('hidden');
+        return true;
+      }
+
+      if (global && typeof global.addEventListener === 'function') {
+        global.addEventListener('pagehide', destroy);
+      }
+      render('hidden');
+
+      return Object.freeze({
+        open: open,
+        retry: retry,
+        close: close,
+        invalidate: invalidate,
+        destroy: destroy
+      });
+    }
+
+    global.AudioPinPlayer = Object.freeze({
+      create: create,
+      createRenderer: createRenderer
+    });
+  })(typeof window !== 'undefined' ? window : globalThis);
+</script>
+<template data-dtp-audio-player-boundary="end"></template>
       <div id="shared-detail-routes"></div>
       <div id="shared-detail-links"></div>
       <div id="shared-detail-time" class="muted"></div>
@@ -1534,6 +1850,30 @@
           .withFailureHandler(reject)[name](arg);
       });
     }
+
+    function createSharedPinAudioPlayerController() {
+      const audioElement = document.getElementById('pin-audio-runtime');
+      const retryButton = document.getElementById('pin-audio-player-retry');
+      const controller = AudioPinPlayer.create({
+        audioElement: audioElement,
+        fetchAudio: function(pinId) {
+          return withGAS('getSharedPinAudioData', {
+            shareToken: state.token,
+            pinId: String(pinId || '')
+          });
+        },
+        renderState: AudioPinPlayer.createRenderer({
+          container: document.getElementById('pin-audio-player'),
+          statusElement: document.getElementById('pin-audio-player-status'),
+          audioElement: audioElement,
+          retryButton: retryButton
+        })
+      });
+      retryButton.addEventListener('click', function() { controller.retry(); });
+      return controller;
+    }
+
+    const sharedPinAudioPlayer = createSharedPinAudioPlayerController();
 
     function readStoredTheme() {
       try {
@@ -2046,6 +2386,7 @@
     installProtectedPhotoGuards();
 
     function closeSharedDetail(options) {
+      sharedPinAudioPlayer.close();
       const trigger = document.getElementById('shared-detail-image-trigger');
       const image = document.getElementById('shared-detail-image');
       closeSharedPhotoViewerForTrigger(trigger, { restoreFocus: false });
@@ -2115,6 +2456,11 @@
         links.appendChild(anchor);
       });
       openSharedSurface('shared-detail-overlay');
+      if (pin.hasAudio) {
+        sharedPinAudioPlayer.open(pin.id);
+      } else {
+        sharedPinAudioPlayer.close();
+      }
     }
 
     function ensureSharedMap() {
@@ -3927,7 +4273,10 @@
     setupSharedOverlayBackdropDismissal(document.getElementById('shared-help-overlay'), closeSharedHelpPanel);
     setupSharedOverlayBackdropDismissal(document.getElementById('shared-detail-overlay'), closeSharedDetail);
     setupSharedOverlayBackdropDismissal(document.getElementById('shared-photo-viewer-overlay'), closeSharedPhotoViewer);
-    window.addEventListener('pagehide', function() { closeSharedPhotoViewer({ restoreFocus: false }); });
+    window.addEventListener('pagehide', function() {
+      sharedPinAudioPlayer.destroy();
+      closeSharedPhotoViewer({ restoreFocus: false });
+    });
 
     function dispatchSharedEscape() {
       const record = getTopSharedSurfaceRecord();

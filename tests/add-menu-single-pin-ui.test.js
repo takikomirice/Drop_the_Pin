@@ -36,7 +36,7 @@ function functionBody(name) {
   assert.fail(`Could not parse ${name}`);
 }
 
-test('pin header add button opens the edit-only menu containing exactly the three approved actions', () => {
+test('pin header add button opens the edit-only menu containing exactly the five approved actions', () => {
   assert.equal(countId('fab'), 0);
   assert.equal(countId('pin-add-btn'), 1);
   const pinHeader = indexHtml.match(/<div class="dock-pin-header">([\s\S]*?)<\/div>\s*<div class="dock-pin-tabs"/);
@@ -51,11 +51,13 @@ test('pin header add button opens the edit-only menu containing exactly the thre
   const menu = indexHtml.match(/<div id="add-menu-overlay"[\s\S]*?<div class="add-menu-actions"[^>]*>([\s\S]*?)<\/div>\s*<div id="multi-photo-conflict-message"/);
   assert.ok(menu, 'add menu action list must exist');
   const actions = menu[1].match(/<button\b[^>]*data-add-action=/g) || [];
-  assert.equal(actions.length, 3);
+  assert.equal(actions.length, 5);
   [
     'ピンを追加',
     '端末から写真を取込',
-    'Driveから写真を取込'
+    'Driveから写真を取込',
+    '端末から音声を取込',
+    'Driveから音声を取込'
   ].forEach((label) => assert.ok(menu[1].includes(label), `${label} must be in the add menu`));
   assert.doesNotMatch(menu[1], /CSV|GeoJSON|GPX/);
 

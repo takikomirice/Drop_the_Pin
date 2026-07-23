@@ -578,3 +578,43 @@ test('Drive GPS and no-GPS saves notify onSaved once into placed/map and unplace
   assert.equal(result.managedLinks[0].sourceDriveFileId !== result.managedLinks[0].fileId, true);
   assert.equal(result.managedLinks[1].sourceDriveFileId !== result.managedLinks[1].fileId, true);
 });
+
+test('edit startup bootstraps the media hierarchy after pins render without blocking app initialization', async () => {
+  assert.match(indexHtml, /id="settings-media-drive-banner"[^>]*hidden/);
+  const initialize = sourceFunction(indexHtml, 'initializeApp');
+  const pinsAt = initialize.indexOf('await loadMapData()');
+  const readyAt = initialize.indexOf('state.initializing = false;');
+  const bootstrapAt = initialize.indexOf('bootstrapMediaDriveStructure()');
+  assert.notEqual(pinsAt, -1);
+  assert.notEqual(readyAt, -1);
+  assert.equal(bootstrapAt > pinsAt, true);
+  assert.equal(bootstrapAt > readyAt, true);
+  assert.doesNotMatch(initialize, /await\s+bootstrapMediaDriveStructure\(\)/);
+
+  const calls = [];
+  const banner = { hidden: true, textContent: '' };
+  const context = {
+    canEdit: () => false,
+    withEditToken: (payload) => ({ ...payload, __editToken: 'edit-only' }),
+    withGAS: async (method, payload) => {
+      calls.push([method, payload]);
+      return { ok: false, error: 'Driveを準備できませんでした' };
+    },
+    document: { getElementById: () => banner },
+    console: { error() {} }
+  };
+  vm.createContext(context);
+  vm.runInContext(`${sourceFunction(indexHtml, 'setMediaDriveBootstrapBanner')}
+    async ${sourceFunction(indexHtml, 'bootstrapMediaDriveStructure')}
+    globalThis.__bootstrap = bootstrapMediaDriveStructure;`, context);
+
+  await context.__bootstrap();
+  assert.deepEqual(calls, []);
+  assert.equal(banner.hidden, true);
+
+  context.canEdit = () => true;
+  await context.__bootstrap();
+  assert.deepEqual(calls, [['ensureMediaDriveStructure', { __editToken: 'edit-only' }]]);
+  assert.equal(banner.hidden, false);
+  assert.equal(banner.textContent, 'Driveを準備できませんでした');
+});

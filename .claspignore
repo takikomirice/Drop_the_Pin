@@ -4,7 +4,16 @@ docs/**
 .claude/**
 .vscode/**
 .worktrees/**
+node_modules/**
+scripts/**
+vendor/**
 tests/**
+playwright-report/**
+blob-report/**
+test-results/**
 *.md
 .gitignore
 .clasp.json.example
+package.json
+package-lock.json
+playwright.config.js

@@ -11,7 +11,7 @@ const MAP_INFO_HEADERS = [
   'タイムスタンプ', 'タイトル', '説明',
   '緯度', '経度', 'ピンの色',
   'ファイルID', '画像URL', 'ID', '参考URL一覧',
-  '状態', 'タグ', 'イベント時刻', '更新時刻', 'アイコン'
+  '状態', 'タグ', 'イベント時刻', '更新時刻', 'アイコン', '音声ID'
 ];
 const ROUTE_PINS_HEADERS = ['routeId', 'pinId', 'pinOrder', 'createdAt', 'updatedAt'];
 const TEST_EDIT_TOKEN = 'test-edit-token';
@@ -95,7 +95,8 @@ function sourceRow(overrides = {}) {
     overrides.tags || 'alpha|beta',
     overrides.eventAt || '2026-04-29T12:30',
     overrides.updatedAt || '2026-04-02T00:00:00.000Z',
-    overrides.icon || 'food'
+    overrides.icon || 'food',
+    overrides.audioId || ''
   ];
 }
 
@@ -104,7 +105,10 @@ test('duplicatePin creates an unplaced photo-less pin without route membership',
     ROUTE_PINS_HEADERS,
     ['route-a', 'source-pin-id', 0, '', '']
   ];
-  const { api, sheets } = loadApi([MAP_INFO_HEADERS, sourceRow()], routeRows);
+  const { api, sheets } = loadApi([
+    MAP_INFO_HEADERS,
+    sourceRow({ audioId: 'managed_audio_source_123' })
+  ], routeRows);
 
   const result = api.duplicatePin(withEditToken({ sourcePinId: 'source-pin-id', mode: 'unplaced' }));
 
@@ -117,6 +121,8 @@ test('duplicatePin creates an unplaced photo-less pin without route membership',
   assert.equal(result.pin.fileId, '');
   assert.equal(result.pin.imageUrl, '');
   assert.equal(result.pin.folderUrl, '');
+  assert.equal(result.pin.hasAudio, false);
+  assert.equal(Object.hasOwn(result.pin, 'audioId'), false);
   assert.deepEqual(sameRealm(result.pin.links), ['https://example.com/a', 'https://example.com/b']);
   assert.deepEqual(sameRealm(result.pin.tags), ['alpha', 'beta']);
   assert.equal(result.pin.status, '対応中');
@@ -133,6 +139,7 @@ test('duplicatePin creates an unplaced photo-less pin without route membership',
   assert.equal(appended[6], '');
   assert.equal(appended[7], '');
   assert.equal(appended[8], 'new-pin-id');
+  assert.equal(appended[15], '', 'duplicate must never copy the source audio relation');
 });
 
 test('duplicatePin supports same location and point modes', () => {

@@ -133,5 +133,5 @@ test('track import remains isolated from routes Drive Point API and shared view'
 test('README summarizes GeoJSON track formats, limits, segment behavior, and verification', () => {
   assert.match(readme, /GeoJSONトラック[^\n]*LineString／MultiLineString[^\n]*2MB[^\n]*20 Feature[^\n]*200 segment[^\n]*20,000 point/);
   assert.match(readme, /segment順を維持し[^\n]*segment間を自動接続しません/);
-  assert.match(readme, /Apps Script[^\n]*実ブラウザ[^\n]*確認は未実施/);
+  assert.match(readme, /Nodeテスト[^\n]*Chromiumテスト[^\n]*Apps Script[^\n]*実Drive[^\n]*未実施/);
 });

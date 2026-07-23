@@ -7,7 +7,7 @@ const EDIT_TOKEN = 'bulk-metadata-token';
 const HEADERS = [
   'タイムスタンプ', 'タイトル', '説明', '緯度', '経度', 'ピンの色',
   'ファイルID', '画像URL', 'ID', '参考URL一覧', '状態', 'タグ',
-  'イベント時刻', '更新時刻', 'アイコン'
+  'イベント時刻', '更新時刻', 'アイコン', '音声ID'
 ];
 
 function pinRow(id, overrides = {}) {
@@ -16,7 +16,8 @@ function pinRow(id, overrides = {}) {
     Object.prototype.hasOwnProperty.call(overrides, 'status') ? overrides.status : '未対応',
     Object.prototype.hasOwnProperty.call(overrides, 'tags') ? overrides.tags : 'alpha|beta',
     '', overrides.updatedAt || `updated-${id}`,
-    Object.prototype.hasOwnProperty.call(overrides, 'icon') ? overrides.icon : 'default'
+    Object.prototype.hasOwnProperty.call(overrides, 'icon') ? overrides.icon : 'default',
+    overrides.audioId || ''
   ];
 }
 
@@ -104,7 +105,7 @@ test('bulkUpdatePinMetadata deduplicates string IDs and adds tags in existing or
   ]);
   assert.equal(harness.rows[1][11], 'alpha|Beta|Gamma');
   assert.equal(harness.rows[2][11], 'other|beta|Gamma');
-  assert.deepEqual(harness.audit.reads, [{ row: 1, column: 1, numRows: 3, numColumns: 15 }]);
+  assert.deepEqual(harness.audit.reads, [{ row: 1, column: 1, numRows: 3, numColumns: 16 }]);
 });
 
 test('bulkUpdatePinMetadata removes only requested tags and permits empty replace', () => {
@@ -218,4 +219,26 @@ test('bulkUpdatePinMetadata changes timestamps only for changed rows and returns
 test('bulkUpdatePinStatus remains a compatible public API', () => {
   assert.equal(typeof api.bulkUpdatePinStatus, 'function');
   assert.equal(typeof api.bulkUpdatePinMetadata, 'function');
+});
+
+test('bulk metadata preserves photo and audio attachment columns in all four states', () => {
+  const rows = [
+    pinRow('photo-only', { tags: 'old' }),
+    pinRow('audio-only', { tags: 'old', audioId: 'audio-only-id' }),
+    pinRow('both', { tags: 'old', audioId: 'both-audio-id' }),
+    pinRow('neither', { tags: 'old' })
+  ];
+  rows[0][6] = 'photo-only-id';
+  rows[2][6] = 'both-photo-id';
+  const harness = createHarness(rows);
+  const before = harness.rows.slice(1).map((row) => [row[6], row[15]]);
+
+  const result = plain(api.bulkUpdatePinMetadata(payload({
+    ids: ['photo-only', 'audio-only', 'both', 'neither'],
+    tagMode: 'replace', tags: ['next']
+  })));
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(harness.rows.slice(1).map((row) => [row[6], row[15]]), before);
+  assert.equal(harness.audit.writes.every((write) => write.column !== 7 && write.column !== 16), true);
 });

@@ -9,6 +9,7 @@ const codeJs = fs.readFileSync(path.join(root, 'Code.js'), 'utf8');
 const indexHtml = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 
 function createSheet(rows = [], name = '') {
+  let maxColumns = Math.max(26, rows.reduce((maximum, row) => Math.max(maximum, row.length), 0));
   return {
     sheetName: name,
     rows: rows.map((row) => row.slice()),
@@ -20,6 +21,12 @@ function createSheet(rows = [], name = '') {
     },
     getLastColumn() {
       return this.rows.reduce((maximum, row) => Math.max(maximum, row.length), 0);
+    },
+    getMaxColumns() {
+      return maxColumns;
+    },
+    insertColumnsAfter(_after, count) {
+      maxColumns += count;
     },
     getName() {
       return this.sheetName;
@@ -57,6 +64,10 @@ function createSheet(rows = [], name = '') {
           }
           return values;
         },
+        getFormulas: () => Array.from(
+          { length: numRows },
+          () => Array(numColumns).fill('')
+        ),
         setValues: (values) => {
           for (let r = 0; r < numRows; r += 1) {
             const targetRow = row - 1 + r;
@@ -115,6 +126,8 @@ function loadApi(configRows = [['設定項目', '値', '説明']], options = {})
   const menuItems = [];
   const cache = {};
   const templates = [];
+  const htmlFileReads = [];
+  const templateSources = [];
   const ui = {
     Button: { OK: 'OK', YES: 'YES', NO: 'NO' },
     ButtonSet: { OK: 'OK', YES_NO: 'YES_NO' },
@@ -160,6 +173,32 @@ function loadApi(configRows = [['設定項目', '値', '説明']], options = {})
       sheetOrder.splice(Math.max(0, Math.min(position - 1, sheetOrder.length)), 0, activeSheet);
     }
   };
+  function createTemplateRecord(kind, value) {
+    const template = {
+      kind,
+      name: kind === 'file' ? value : undefined,
+      source: kind === 'source' ? value : undefined,
+      evaluate: () => ({
+        title: '',
+        meta: [],
+        xFrameMode: '',
+        setTitle(title) {
+          this.title = title;
+          return this;
+        },
+        addMetaTag(name, value) {
+          this.meta.push([name, value]);
+          return this;
+        },
+        setXFrameOptionsMode(mode) {
+          this.xFrameMode = mode;
+          return this;
+        }
+      })
+    };
+    templates.push(template);
+    return template;
+  }
   const context = {
     Logger: { log() {} },
     Utilities: { getUuid: () => '11111111-2222-4333-8444-555555555555' },
@@ -176,29 +215,14 @@ function loadApi(configRows = [['設定項目', '値', '説明']], options = {})
       getActiveSpreadsheet: () => spreadsheet
     },
     HtmlService: {
-      createTemplateFromFile: (name) => {
-        const template = {
-          name,
-          evaluate: () => ({
-            title: '',
-            meta: [],
-            xFrameMode: '',
-            setTitle(title) {
-              this.title = title;
-              return this;
-            },
-            addMetaTag(name, value) {
-              this.meta.push([name, value]);
-              return this;
-            },
-            setXFrameOptionsMode(mode) {
-              this.xFrameMode = mode;
-              return this;
-            }
-          })
-        };
-        templates.push(template);
-        return template;
+      createTemplateFromFile: (name) => createTemplateRecord('file', name),
+      createHtmlOutputFromFile: (name) => {
+        htmlFileReads.push(name);
+        return { getContent: () => options.rawIndexContent === undefined ? indexHtml : options.rawIndexContent };
+      },
+      createTemplate: (source) => {
+        templateSources.push(source);
+        return createTemplateRecord('source', source);
       },
       XFrameOptionsMode: { ALLOWALL: 'ALLOWALL' },
       createHtmlOutput: (html) => ({ html, setWidth() { return this; }, setHeight() { return this; } })
@@ -231,7 +255,17 @@ globalThis.__editKeyApi = {
   refreshAndOpenEditUrl: refreshAndOpenEditUrl,
   showEditUrlDialog: showEditUrlDialog
 };`, context);
-  return { api: context.__editKeyApi, sheets, sheetOrder, menuItems, cache, templates, ui };
+  return {
+    api: context.__editKeyApi,
+    sheets,
+    sheetOrder,
+    menuItems,
+    cache,
+    templates,
+    htmlFileReads,
+    templateSources,
+    ui
+  };
 }
 
 function rowByKey(sheet, key) {
@@ -453,6 +487,72 @@ test('prompting for WEB_APP_URL and regenerating EDIT_KEY refresh EDIT_URL witho
   loaded.api.regenerateEditKeyFromMenu();
   assert.notEqual(rowByKey(loaded.sheets.config, 'EDIT_URL')[1], oldUrl);
   assert.match(rowByKey(loaded.sheets.config, 'EDIT_URL')[1], /editKey=ed_/);
+});
+
+test('index doGet strips the raw vendor prefix before creating and assigning the template', () => {
+  const loaded = loadApi([
+    ['設定項目', '値', '説明'],
+    ['EDIT_KEY', 'class-edit-key', ''],
+    ['WEB_APP_URL', 'https://script.google.com/macros/s/deploy/exec', '']
+  ]);
+
+  loaded.api.doGet({ parameter: {
+    mode: 'edit',
+    editKey: 'class-edit-key',
+    token: 'share-token'
+  } });
+
+  assert.deepEqual(loaded.htmlFileReads, ['index']);
+  assert.equal(loaded.templates[0].kind, 'source');
+  assert.equal(loaded.templateSources.length, 1);
+  assert.match(loaded.templateSources[0], /^\s*<!DOCTYPE html>/);
+  assert.equal(loaded.templateSources[0].includes('AUDIO_VENDOR_BUNDLE_START'), false);
+  assert.equal(loaded.templateSources[0].includes('AUDIO_VENDOR_BUNDLE_END'), false);
+  assert.equal(loaded.templateSources[0].includes('globalThis.Mediabunny='), false);
+  assert.equal(loaded.templateSources[0].includes('globalThis.MediabunnyMp3Encoder='), false);
+  assert.equal(loaded.templates[0].execUrl, 'https://script.google.com/macros/s/deploy/exec');
+  assert.equal(loaded.templates[0].token, 'share-token');
+  assert.match(loaded.templates[0].editToken, /^edt_[A-Za-z0-9]+$/);
+});
+
+test('shared doGet keeps createTemplateFromFile and never reads raw index', () => {
+  const loaded = loadApi([
+    ['設定項目', '値', '説明'],
+    ['EDIT_KEY', 'class-edit-key', ''],
+    ['WEB_APP_URL', '', '']
+  ]);
+
+  loaded.api.doGet({ parameter: { view: 'shared', token: 'share-token' } });
+
+  assert.deepEqual(loaded.htmlFileReads, []);
+  assert.deepEqual(loaded.templateSources, []);
+  assert.equal(loaded.templates[0].kind, 'file');
+  assert.equal(loaded.templates[0].name, 'shared');
+  assert.equal(loaded.templates[0].token, 'share-token');
+  assert.equal(loaded.templates[0].editToken, '');
+});
+
+test('index doGet fails closed before template creation for malformed vendor regions', () => {
+  const start = 'AUDIO_VENDOR_BUNDLE_START';
+  const end = 'AUDIO_VENDOR_BUNDLE_END';
+  const malformedIndexes = [
+    `unexpected prefix\n${indexHtml}`,
+    indexHtml.replace(start, `${start}\n${start}`),
+    indexHtml.replace(end, `${end}\n${end}`),
+    `${end}\n<script>\nglobalThis.Mediabunny={};globalThis.MediabunnyMp3Encoder={};\n</script>\n${start}\n<!DOCTYPE html>`
+  ];
+
+  malformedIndexes.forEach((rawIndexContent) => {
+    const loaded = loadApi([
+      ['設定項目', '値', '説明'],
+      ['EDIT_KEY', 'class-edit-key', ''],
+      ['WEB_APP_URL', '', '']
+    ], { rawIndexContent });
+    assert.throws(() => loaded.api.doGet({ parameter: {} }), /vendor|bundle|index/i);
+    assert.deepEqual(loaded.htmlFileReads, ['index']);
+    assert.deepEqual(loaded.templateSources, []);
+    assert.deepEqual(loaded.templates, []);
+  });
 });
 
 test('doGet issues edit tokens only for matching edit mode and key', () => {

@@ -19,11 +19,16 @@ function iterator(values) {
 
 function createHarness(options = {}) {
   const audit = {
-    folderReads: [], fileReads: [], blobReads: 0, byteReads: 0, writes: [], sheetReads: []
+    folderReads: [], fileReads: [], blobReads: 0, byteReads: 0, writes: [], sheetReads: [],
+    locks: { attempts: 0, releases: 0, held: false, maxDepth: 0, queuedRuns: 0 }
   };
   const folders = new Map();
   const files = new Map();
   const rootId = options.rootId || 'root_ABCDEFGHIJKLMNO';
+  let nextFolderId = 0;
+  let nextFileId = 0;
+  let nextFolderCreateHook = null;
+  const concurrentQueue = [];
 
   function mutator(name) {
     return function forbiddenMutation() {
@@ -35,10 +40,10 @@ function createHarness(options = {}) {
   function addFolder(id, name, parentIds = [], extra = {}) {
     const folder = {
       getId: () => id,
-      getName: () => name,
+      getName: () => folder.__name,
       getParents: () => {
         if (extra.parentError) throw new Error('private parent failure ' + id);
-        return iterator(parentIds.map((parentId) => folders.get(parentId)).filter(Boolean));
+        return iterator(folder.__parentIds.map((parentId) => folders.get(parentId)).filter(Boolean));
       },
       getFolders: () => iterator(
         Array.from(folders.values()).filter((candidate) => candidate.__parentIds.includes(id))
@@ -46,17 +51,46 @@ function createHarness(options = {}) {
       getFiles: () => iterator(
         Array.from(files.values()).filter((candidate) => candidate.__parentIds.includes(id))
       ),
+      getFilesByName: (value) => iterator(
+        Array.from(files.values()).filter((candidate) => candidate.__parentIds.includes(id)
+          && candidate.__name === String(value) && !candidate.__trashed)
+      ),
       isTrashed: () => {
         if (extra.trashError) throw new Error('private folder trash failure ' + id);
         return extra.trashed === true;
       },
-      createFile: mutator('createFile'),
-      createFolder: mutator('createFolder'),
-      setName: mutator('setName'),
+      createFile(blob) {
+        const values = blob && typeof blob.getBytes === 'function'
+          ? blob.getBytes() : Array.from(blob && blob.bytes || []);
+        const fileName = blob && typeof blob.getName === 'function'
+          ? blob.getName() : String(blob && blob.name || '');
+        const mimeType = blob && typeof blob.getContentType === 'function'
+          ? blob.getContentType() : String(blob && blob.mime || 'application/octet-stream');
+        const fileId = `created_file_${String(++nextFileId).padStart(12, '0')}`;
+        audit.writes.push({ method: 'createFile', parentId: id, name: fileName });
+        return addFile(fileId, fileName, mimeType, values, [id]);
+      },
+      createFolder(value) {
+        if (nextFolderCreateHook) {
+          const hook = nextFolderCreateHook;
+          nextFolderCreateHook = null;
+          hook();
+        }
+        const childId = `created_folder_${String(++nextFolderId).padStart(12, '0')}`;
+        audit.writes.push({ method: 'createFolder', parentId: id, name: String(value) });
+        return addFolder(childId, String(value), [id]);
+      },
+      setName(value) {
+        audit.writes.push({ method: 'setFolderName', id, name: String(value) });
+        folder.__name = String(value);
+        return folder;
+      },
       setSharing: mutator('setSharing'),
       setTrashed: mutator('setTrashed'),
       moveTo: mutator('moveTo'),
-      __parentIds: parentIds.slice()
+      __name: String(name),
+      __parentIds: parentIds.slice(),
+      __trashed: extra.trashed === true
     };
     folders.set(id, folder);
     return folder;
@@ -66,17 +100,17 @@ function createHarness(options = {}) {
     const values = Array.from(bytes || []);
     const file = {
       getId: () => id,
-      getName: () => name,
-      getMimeType: () => mimeType,
+      getName: () => file.__name,
+      getMimeType: () => file.__mimeType,
       getSize: () => extra.metadataSize == null ? values.length : extra.metadataSize,
       getLastUpdated: () => new Date(extra.modifiedAt || '2026-07-12T01:02:03.000Z'),
       getParents: () => {
         if (extra.parentError) throw new Error('private file parent failure ' + id);
-        return iterator(parentIds.map((parentId) => folders.get(parentId)).filter(Boolean));
+        return iterator(file.__parentIds.map((parentId) => folders.get(parentId)).filter(Boolean));
       },
       isTrashed: () => {
         if (extra.trashError) throw new Error('private file trash failure ' + id);
-        return extra.trashed === true;
+        return file.__trashed;
       },
       getBlob: () => {
         audit.blobReads += 1;
@@ -89,11 +123,28 @@ function createHarness(options = {}) {
         };
       },
       makeCopy: mutator('makeCopy'),
-      moveTo: mutator('moveTo'),
-      setName: mutator('setName'),
+      moveTo(targetFolder) {
+        const targetId = targetFolder && targetFolder.getId();
+        audit.writes.push({ method: 'moveTo', id, parentId: targetId });
+        file.__parentIds = [String(targetId)];
+        return file;
+      },
+      setName(value) {
+        audit.writes.push({ method: 'setFileName', id, name: String(value) });
+        file.__name = String(value);
+        return file;
+      },
       setSharing: mutator('setSharing'),
-      setTrashed: mutator('setTrashed'),
-      __parentIds: parentIds.slice()
+      setTrashed(value) {
+        audit.writes.push({ method: 'setTrashed', id, value: !!value });
+        file.__trashed = !!value;
+        return file;
+      },
+      __name: String(name),
+      __mimeType: String(mimeType),
+      __parentIds: parentIds.slice(),
+      __trashed: extra.trashed === true,
+      __bytes: values
     };
     files.set(id, file);
     return file;
@@ -171,6 +222,26 @@ function createHarness(options = {}) {
         return { get: (key) => key === 'EDIT_TOKEN_valid-token' ? '1' : null };
       }
     },
+    LockService: {
+      getScriptLock() {
+        return {
+          tryLock() {
+            audit.locks.attempts += 1;
+            if (audit.locks.held) return false;
+            audit.locks.held = true;
+            audit.locks.maxDepth = Math.max(audit.locks.maxDepth, 1);
+            return true;
+          },
+          releaseLock() {
+            assert.equal(audit.locks.held, true, 'media structure lock must be held before release');
+            audit.locks.releases += 1;
+            audit.locks.held = false;
+            const queued = concurrentQueue.shift();
+            if (queued) queued();
+          }
+        };
+      }
+    },
     DriveApp: {
       getFolderById(id) {
         audit.folderReads.push(id);
@@ -186,6 +257,17 @@ function createHarness(options = {}) {
       }
     },
     Utilities: {
+      newBlob(bytes, mimeType, name) {
+        const values = Array.from(bytes || []);
+        return {
+          bytes: values,
+          mime: String(mimeType || ''),
+          name: String(name || ''),
+          getBytes: () => values.slice(),
+          getContentType: () => String(mimeType || ''),
+          getName: () => String(name || '')
+        };
+      },
       base64Encode(bytes) {
         return Buffer.from(bytes.map((value) => value < 0 ? value + 256 : value)).toString('base64');
       }
@@ -195,6 +277,10 @@ function createHarness(options = {}) {
   vm.runInContext(
     codeJs + '\n' + [
       'globalThis.__drivePhotoImportApi = {',
+      '  ensureMediaDriveStructure: typeof ensureMediaDriveStructure === "function" ? ensureMediaDriveStructure : null,',
+      '  ensureMediaDriveStructure_: typeof ensureMediaDriveStructure_ === "function" ? ensureMediaDriveStructure_ : null,',
+      '  listDriveMediaInbox: typeof listDriveMediaInbox === "function" ? listDriveMediaInbox : null,',
+      '  readDriveAudioImportFile: typeof readDriveAudioImportFile === "function" ? readDriveAudioImportFile : null,',
       '  listDrivePhotoImportFolder: typeof listDrivePhotoImportFolder === "function" ? listDrivePhotoImportFolder : null,',
       '  readDrivePhotoImportFile: typeof readDrivePhotoImportFile === "function" ? readDrivePhotoImportFile : null,',
       '  isDriveFolderWithinRoot_: typeof isDriveFolderWithinRoot_ === "function" ? isDriveFolderWithinRoot_ : null,',
@@ -212,6 +298,37 @@ function createHarness(options = {}) {
     rootId,
     addFolder,
     addFile,
+    directFolderNames(parentId) {
+      return Array.from(folders.values())
+        .filter((folder) => folder.__parentIds.includes(parentId) && !folder.__trashed)
+        .map((folder) => folder.__name).sort();
+    },
+    directFileNames(parentId) {
+      return Array.from(files.values())
+        .filter((file) => file.__parentIds.includes(parentId) && !file.__trashed)
+        .map((file) => file.__name).sort();
+    },
+    folderId(name, parentId = rootId) {
+      const match = Array.from(folders.values()).find((folder) =>
+        folder.__parentIds.includes(parentId) && !folder.__trashed && folder.__name === name);
+      return match ? match.getId() : '';
+    },
+    fileBytes(name, parentId = rootId) {
+      const match = Array.from(files.values()).find((file) =>
+        file.__parentIds.includes(parentId) && !file.__trashed && file.__name === name);
+      return match ? match.__bytes.slice() : null;
+    },
+    replaceFile(id, name, mimeType, bytes, parentIds, extra) {
+      files.delete(id);
+      return addFile(id, name, mimeType, bytes, parentIds, extra);
+    },
+    onNextFolderCreate(callback) { nextFolderCreateHook = callback; },
+    runConcurrent(callback) {
+      if (!audit.locks.held) return callback();
+      audit.locks.queuedRuns += 1;
+      concurrentQueue.push(callback);
+      return undefined;
+    },
     tokenPayload(value) { return { ...value, __editToken: 'valid-token' }; }
   };
 }

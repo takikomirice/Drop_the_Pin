@@ -172,6 +172,7 @@ const PinData = (function() {
   }
 
   function rowToPin(row) {
+    const audioIdColumnIndex = MAP_INFO_HEADERS.indexOf('音声ID');
     return {
       timestamp: row[0] ? (row[0] instanceof Date ? row[0].toISOString() : String(row[0])) : '',
       title: decodeSpreadsheetLiteral_(row[1]),
@@ -187,7 +188,8 @@ const PinData = (function() {
       tags: deserializeTags(decodeSpreadsheetLiteral_(row[11])),
       eventAt: normalizeEventAt(row[12]),
       updatedAt: row[13] ? String(row[13]) : '',
-      icon: normalizeIcon(row[14])
+      icon: normalizeIcon(row[14]),
+      audioId: audioIdColumnIndex === -1 ? '' : String(row[audioIdColumnIndex] || '')
     };
   }
 
@@ -235,7 +237,7 @@ const MAP_INFO_HEADERS = [
   'タイムスタンプ', 'タイトル', '説明',
   '緯度', '経度', 'ピンの色',
   'ファイルID', '画像URL', 'ID', '参考URL一覧',
-  '状態', 'タグ', 'イベント時刻', '更新時刻', 'アイコン'
+  '状態', 'タグ', 'イベント時刻', '更新時刻', 'アイコン', '音声ID'
 ];
 const MAP_INFO_COLUMN_WIDTHS = [160, 180, 250, 90, 90, 90, 200, 350, 230, 320, 100, 200, 170, 170, 120];
 const MAP_INFO_EVENT_AT_COLUMN = 13;
@@ -286,17 +288,23 @@ const INPUT_PRESET_COLUMN_COUNT = INPUT_PRESET_HEADERS.length;
 const IMPORT_RECEIPT_HEADERS = [
   'idempotencyKey', 'jobId', 'itemId', 'payloadHash', 'state', 'leaseOwner',
   'leaseUntil', 'pinId', 'targetFolderId', 'tempFileName', 'fileId', 'imageUrl',
-  'folderUrl', 'createdAt', 'updatedAt', 'lastErrorCode', 'sourceDriveFileId'
+  'folderUrl', 'createdAt', 'updatedAt', 'lastErrorCode', 'sourceDriveFileId',
+  'mediaKind', 'operationMode', 'targetPinId', 'cleanupFileId'
 ];
-const LEGACY_IMPORT_RECEIPT_HEADERS = IMPORT_RECEIPT_HEADERS.slice(0, -1);
+const LEGACY_IMPORT_RECEIPT_HEADERS = IMPORT_RECEIPT_HEADERS.slice(0, 16);
+const PHOTO_IMPORT_RECEIPT_HEADERS = IMPORT_RECEIPT_HEADERS.slice(0, 17);
 const IMPORT_RECEIPT_COLUMN_COUNT = IMPORT_RECEIPT_HEADERS.length;
 const IMPORT_RECEIPT_STATES = {
   RESERVED: 'reserved',
   FILE_SAVED: 'file_saved',
+  LINKED: 'linked',
   COMPLETED: 'completed',
+  CLEANUP_PENDING: 'cleanup_pending',
   FAILED: 'failed'
 };
 const IMPORT_ITEM_LEASE_MS = 7 * 60 * 1000;
+const IMPORT_AUDIO_MIN_BYTES = 1024;
+const IMPORT_AUDIO_MAX_BYTES = 4 * 1024 * 1024;
 const IMPORT_ITEM_ID_MAX_LENGTH = 128;
 const IMPORT_IDEMPOTENCY_KEY_MAX_LENGTH = IMPORT_ITEM_ID_MAX_LENGTH * 2 + 1;
 const MAX_INPUT_PRESETS = 100;
@@ -337,6 +345,10 @@ function onOpen() {
     .addToUi();
 }
 
+function isTrulyBlankSheetCell_(value, formula) {
+  return (value === '' || value == null) && !formula;
+}
+
 function setupSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const ui = SpreadsheetApp.getUi();
@@ -360,13 +372,21 @@ function setupSheet() {
   if (!looksHeader && sheet.getLastRow() > 0) {
     sheet.insertRowBefore(1);
   }
+  if (sheet.getMaxColumns() < MAP_INFO_COLUMN_COUNT) {
+    sheet.insertColumnsAfter(
+      sheet.getMaxColumns(),
+      MAP_INFO_COLUMN_COUNT - sheet.getMaxColumns()
+    );
+  }
 
   if (!looksHeader) {
     sheet.getRange(1, 1, 1, MAP_INFO_COLUMN_COUNT).setValues([MAP_INFO_HEADERS]);
   } else {
-    const headerValues = sheet.getRange(1, 1, 1, MAP_INFO_COLUMN_COUNT).getValues()[0];
+    const headerRange = sheet.getRange(1, 1, 1, MAP_INFO_COLUMN_COUNT);
+    const headerValues = headerRange.getValues()[0];
+    const headerFormulas = headerRange.getFormulas()[0];
     MAP_INFO_HEADERS.forEach(function(header, index) {
-      if (headerValues[index] === '' || headerValues[index] == null) {
+      if (isTrulyBlankSheetCell_(headerValues[index], headerFormulas[index])) {
         sheet.getRange(1, index + 1).setValue(header);
       }
     });
@@ -451,7 +471,15 @@ function moveSheetToFirst_(ss, sheet) {
 function doGet(e) {
   var params = (e && e.parameter) || {};
   var templateName = params.view === 'shared' ? 'shared' : 'index';
-  var template = HtmlService.createTemplateFromFile(templateName);
+  var template;
+  if (templateName === 'shared') {
+    template = HtmlService.createTemplateFromFile('shared');
+  } else {
+    var rawIndex = HtmlService.createHtmlOutputFromFile('index').getContent();
+    var vendorLocation = locateAudioVendorBundleInIndex_(rawIndex);
+    var strippedIndex = stripAudioVendorBundleFromIndex_(rawIndex, vendorLocation);
+    template = HtmlService.createTemplate(strippedIndex);
+  }
   template.execUrl = getConfiguredWebAppUrl_();
   template.token = params.token || '';
   template.editToken = templateName === 'index' ? issueEditTokenFromRequest_(params) : '';
@@ -459,6 +487,122 @@ function doGet(e) {
     .setTitle('Drop the Pin!')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+const AUDIO_VENDOR_VERSION_ = '1.50.8';
+const AUDIO_VENDOR_START_SENTINEL_ = 'AUDIO_VENDOR_BUNDLE_START';
+const AUDIO_VENDOR_END_SENTINEL_ = 'AUDIO_VENDOR_BUNDLE_END';
+
+function countTextOccurrences_(text, needle) {
+  return String(text || '').split(needle).length - 1;
+}
+
+function locateAudioVendorBundleInIndex_(rawIndex) {
+  const content = String(rawIndex || '');
+  if (countTextOccurrences_(content, AUDIO_VENDOR_START_SENTINEL_) !== 1
+      || countTextOccurrences_(content, AUDIO_VENDOR_END_SENTINEL_) !== 1) {
+    throw new Error('Audio vendor bundle markers are invalid.');
+  }
+
+  const startIndex = content.indexOf(AUDIO_VENDOR_START_SENTINEL_);
+  const endIndex = content.indexOf(AUDIO_VENDOR_END_SENTINEL_);
+  if (startIndex < 0 || endIndex <= startIndex) {
+    throw new Error('Audio vendor bundle markers are out of order.');
+  }
+
+  if (content.slice(0, startIndex).trim()) {
+    throw new Error('Audio vendor bundle is not at the index prefix.');
+  }
+
+  const opening = AUDIO_VENDOR_START_SENTINEL_ + '\n<script>\n';
+  const closing = '\n</script>\n' + AUDIO_VENDOR_END_SENTINEL_;
+  const sourceStartIndex = startIndex + opening.length;
+  const sourceEndIndex = endIndex - '\n</script>\n'.length;
+  if (content.slice(startIndex, sourceStartIndex) !== opening
+      || content.slice(sourceEndIndex, endIndex + AUDIO_VENDOR_END_SENTINEL_.length) !== closing) {
+    throw new Error('Audio vendor script wrapper is invalid.');
+  }
+
+  const source = content.slice(sourceStartIndex, sourceEndIndex);
+  if (!source.trim() || /<\/script/i.test(source)) {
+    throw new Error('Audio vendor source is invalid.');
+  }
+  if (countTextOccurrences_(source, 'globalThis.Mediabunny=') !== 1
+      || countTextOccurrences_(source, 'globalThis.MediabunnyMp3Encoder=') !== 1) {
+    throw new Error('Audio vendor public API is invalid.');
+  }
+
+  const afterEndIndex = endIndex + AUDIO_VENDOR_END_SENTINEL_.length;
+  var documentStartIndex;
+  if (content.slice(afterEndIndex, afterEndIndex + 2) === '\r\n') {
+    documentStartIndex = afterEndIndex + 2;
+  } else if (content.charAt(afterEndIndex) === '\n') {
+    documentStartIndex = afterEndIndex + 1;
+  } else {
+    throw new Error('Audio vendor bundle must precede the index document.');
+  }
+  if (!/^<!DOCTYPE html>/i.test(content.slice(documentStartIndex))) {
+    throw new Error('Audio vendor bundle is not followed by the index document.');
+  }
+
+  return {
+    source: source,
+    startIndex: startIndex,
+    endIndex: endIndex,
+    documentStartIndex: documentStartIndex
+  };
+}
+
+function stripAudioVendorBundleFromIndex_(rawIndex, vendorLocation) {
+  const content = String(rawIndex || '');
+  const location = vendorLocation || locateAudioVendorBundleInIndex_(content);
+  return content.slice(location.documentStartIndex);
+}
+
+function getAudioVendorBundle(payload) {
+  assertEditToken_(payload);
+  const rawIndex = HtmlService.createHtmlOutputFromFile('index').getContent();
+  const vendorLocation = locateAudioVendorBundleInIndex_(rawIndex);
+  return {
+    version: AUDIO_VENDOR_VERSION_,
+    source: vendorLocation.source
+  };
+}
+
+function getPinAudioData(payload) {
+  assertEditToken_(payload);
+  let pinId;
+  try {
+    pinId = normalizeImportIdentifier_(
+      payload && payload.pinId,
+      'pinId',
+      IMPORT_ITEM_ID_MAX_LENGTH
+    );
+  } catch (_error) {
+    throw importItemError_('PIN_AUDIO_NOT_FOUND', 'pin audio is unavailable.', false);
+  }
+  try {
+    return pinAudioDataFromBlob_(readPinAudioBlobByPinId_(pinId));
+  } catch (_error) {
+    throw importItemError_('PIN_AUDIO_NOT_FOUND', 'pin audio is unavailable.', false);
+  }
+}
+
+function pinAudioDataFromBlob_(blob) {
+  if (!blob || String(blob.getContentType()) !== 'audio/mpeg') {
+    throw new Error('pin audio is unavailable.');
+  }
+  const bytes = blob.getBytes();
+  const byteLength = bytes && Number.isSafeInteger(bytes.length) ? bytes.length : -1;
+  if (byteLength < IMPORT_AUDIO_MIN_BYTES || byteLength > IMPORT_AUDIO_MAX_BYTES) {
+    throw new Error('pin audio is unavailable.');
+  }
+  return {
+    ok: true,
+    mimeType: 'audio/mpeg',
+    byteLength: byteLength,
+    base64: Utilities.base64Encode(bytes)
+  };
 }
 
 // ============================================================
@@ -1848,7 +1992,7 @@ function getDrivePhotoImportAssociations_() {
   return associations;
 }
 
-function listDrivePhotoImportFolder(payload) {
+function legacyListDrivePhotoImportFolder_(payload) {
   try {
     try {
       assertEditToken_(payload);
@@ -1964,7 +2108,7 @@ function listDrivePhotoImportFolder(payload) {
   }
 }
 
-function readDrivePhotoImportFile(payload) {
+function legacyReadDrivePhotoImportFile_(payload) {
   try {
     try {
       assertEditToken_(payload);
@@ -2065,6 +2209,70 @@ function readDrivePhotoImportFile(payload) {
   }
 }
 
+function listDrivePhotoImportFolder(payload) {
+  try {
+    try {
+      assertEditToken_(payload);
+    } catch (_error) {
+      throw drivePhotoImportError_('DRIVE_IMPORT_ACCESS_DENIED');
+    }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw drivePhotoImportError_('DRIVE_IMPORT_FOLDER_ID_INVALID');
+    }
+    let inheritedFolderId = false;
+    try {
+      inheritedFolderId = !drivePhotoImportHasOwn_(payload, 'folderId') && 'folderId' in payload;
+    } catch (_error) {
+      inheritedFolderId = true;
+    }
+    if (inheritedFolderId) throw drivePhotoImportError_('DRIVE_IMPORT_FOLDER_ID_INVALID');
+    if (drivePhotoImportHasOwn_(payload, 'folderId') && payload.folderId !== '') {
+      if (!isValidDrivePhotoImportId_(payload.folderId)) {
+        throw drivePhotoImportError_('DRIVE_IMPORT_FOLDER_ID_INVALID');
+      }
+      throw drivePhotoImportError_('DRIVE_IMPORT_FOLDER_OUTSIDE_ROOT');
+    }
+    const inbox = listDriveMediaInbox({
+      __editToken: payload.__editToken,
+      mediaKind: 'photo'
+    });
+    if (!inbox || inbox.ok !== true) {
+      const mediaCode = inbox && String(inbox.errorCode || '');
+      const mappedCode = mediaCode === 'DRIVE_MEDIA_ACCESS_DENIED'
+        ? 'DRIVE_IMPORT_ACCESS_DENIED'
+        : (mediaCode === 'DRIVE_MEDIA_ROOT_MISSING'
+          ? 'DRIVE_IMPORT_ROOT_MISSING'
+          : (mediaCode === 'DRIVE_MEDIA_INBOX_TOO_LARGE'
+            ? 'DRIVE_IMPORT_FOLDER_TOO_LARGE' : 'DRIVE_IMPORT_FOLDER_READ_FAILED'));
+      throw drivePhotoImportError_(mappedCode);
+    }
+    const photos = Array.isArray(inbox.items) ? inbox.items : [];
+    return {
+      ok: true,
+      folder: { id: '', name: '取込Inbox', isRoot: true },
+      parent: null,
+      folders: [],
+      photos: photos,
+      ignoredUnsupportedFileCount: 0,
+      counts: { folders: 0, photos: photos.length }
+    };
+  } catch (error) {
+    return drivePhotoImportFailureFromError_(error, 'DRIVE_IMPORT_FOLDER_READ_FAILED');
+  }
+}
+
+function readDrivePhotoImportFile(payload) {
+  try {
+    assertEditToken_(payload);
+  } catch (_error) {
+    return drivePhotoImportFailureFromError_(
+      drivePhotoImportError_('DRIVE_IMPORT_ACCESS_DENIED'),
+      'DRIVE_IMPORT_FILE_READ_FAILED'
+    );
+  }
+  return readDriveMediaImportFile_(payload, 'photo');
+}
+
 // ============================================================
 //  データ操作
 // ============================================================
@@ -2110,7 +2318,7 @@ function getMapData() {
       return pins.map(function(pin) { return enrichPinWithDriveMeta_(pin); });
     });
     const response = measureStartupGasStage_('getMapData', 'response-build', function() {
-      return enrichedPins;
+      return enrichedPins.map(function(pin) { return toClientPin_(pin); });
     });
     logStartupGasStage_('getMapData', 'total', 'success', totalStartedAt);
     return response;
@@ -2118,6 +2326,12 @@ function getMapData() {
     logStartupGasStage_('getMapData', 'total', 'failure', totalStartedAt);
     throw caught;
   }
+}
+
+function toClientPin_(pin) {
+  const projected = Object.assign({}, pin, { hasAudio: Boolean(pin.audioId) });
+  delete projected.audioId;
+  return projected;
 }
 
 function getPinDriveMeta(payload) {
@@ -4526,6 +4740,7 @@ function filterPinTagsForShare_(pin, allowedTags) {
 }
 
 function toSharedPin_(pin, allowedTags) {
+  const clientPin = toClientPin_(pin);
   return {
     id: pin.id,
     title: pin.title || '',
@@ -4538,7 +4753,8 @@ function toSharedPin_(pin, allowedTags) {
     timestamp: pin.timestamp || '',
     eventAt: PinData.normalizeEventAt(pin.eventAt),
     links: Array.isArray(pin.links) ? pin.links.slice() : [],
-    tags: filterPinTagsForShare_(pin, allowedTags)
+    tags: filterPinTagsForShare_(pin, allowedTags),
+    hasAudio: clientPin.hasAudio
   };
 }
 
@@ -4847,11 +5063,58 @@ function buildSharedViewDataForLink_(shareLink) {
   return dto;
 }
 
+function resolveSharedProjection_(shareToken) {
+  var shareLink = getShareLinkByToken_(shareToken);
+  if (!shareLink) {
+    return { ok: false, result: { ok: false, error: 'invalid_share_link' } };
+  }
+  if (!shareLink.enabled || shareLink.revokedAt) {
+    return { ok: false, result: { ok: false, error: 'revoked_share_link' } };
+  }
+  var data = buildSharedViewDataForLink_(shareLink);
+  if (!data || data.ok !== true) {
+    return { ok: false, result: data || { ok: false, error: 'invalid_share_link' } };
+  }
+  var pinIds = new Set();
+  data.pins.forEach(function(pin) {
+    var pinId = String(pin && pin.id || '').trim();
+    if (pinId) pinIds.add(pinId);
+  });
+  return { ok: true, data: data, pinIds: pinIds };
+}
+
+function createSafeSharedAudioError_() {
+  return importItemError_(
+    'SHARED_PIN_AUDIO_UNAVAILABLE',
+    'shared pin audio is unavailable.',
+    false
+  );
+}
+
+function getSharedPinAudioData(payload) {
+  try {
+    if (!payload || typeof payload !== 'object') throw new Error('invalid payload');
+    var projection = resolveSharedProjection_(payload.shareToken);
+    if (!projection.ok) throw new Error('invalid projection');
+    var pinId = normalizeImportIdentifier_(
+      payload.pinId,
+      'pinId',
+      IMPORT_ITEM_ID_MAX_LENGTH
+    );
+    if (!projection.pinIds.has(pinId)) throw new Error('pin is outside projection');
+    var sharedPin = projection.data.pins.find(function(pin) {
+      return String(pin && pin.id || '') === pinId;
+    });
+    if (!sharedPin || sharedPin.hasAudio !== true) throw new Error('pin audio is unavailable');
+    return pinAudioDataFromBlob_(readPinAudioBlobByPinId_(pinId));
+  } catch (_error) {
+    throw createSafeSharedAudioError_();
+  }
+}
+
 function getSharedViewData(token) {
-  var shareLink = getShareLinkByToken_(token);
-  if (!shareLink) return { ok: false, error: 'invalid_share_link' };
-  if (!shareLink.enabled) return { ok: false, error: 'revoked_share_link' };
-  return buildSharedViewDataForLink_(shareLink);
+  var projection = resolveSharedProjection_(token);
+  return projection.ok ? projection.data : projection.result;
 }
 
 function ensureImportReceiptsSheet_(spreadsheet) {
@@ -4861,7 +5124,41 @@ function ensureImportReceiptsSheet_(spreadsheet) {
   const hasHeader = hasRows
     && String(sheet.getRange(1, 1).getValue() || '') === IMPORT_RECEIPT_HEADERS[0];
   if (hasRows && !hasHeader) sheet.insertRowBefore(1);
-  sheet.getRange(1, 1, 1, IMPORT_RECEIPT_COLUMN_COUNT).setValues([IMPORT_RECEIPT_HEADERS]);
+  if (sheet.getMaxColumns() < IMPORT_RECEIPT_COLUMN_COUNT) {
+    sheet.insertColumnsAfter(
+      sheet.getMaxColumns(),
+      IMPORT_RECEIPT_COLUMN_COUNT - sheet.getMaxColumns()
+    );
+  }
+  if (!hasHeader) {
+    sheet.getRange(1, 1, 1, IMPORT_RECEIPT_COLUMN_COUNT).setValues([IMPORT_RECEIPT_HEADERS]);
+  } else {
+    const headerRange = sheet.getRange(1, 1, 1, IMPORT_RECEIPT_COLUMN_COUNT);
+    const headerValues = headerRange.getValues()[0];
+    const headerFormulas = headerRange.getFormulas()[0];
+    let matchingPrefixLength = 0;
+    while (matchingPrefixLength < IMPORT_RECEIPT_COLUMN_COUNT
+        && headerValues[matchingPrefixLength] === IMPORT_RECEIPT_HEADERS[matchingPrefixLength]) {
+      matchingPrefixLength += 1;
+    }
+    const missingSuffix = headerValues.slice(matchingPrefixLength).every(function(value, index) {
+      return isTrulyBlankSheetCell_(value, headerFormulas[matchingPrefixLength + index]);
+    });
+    if (matchingPrefixLength < IMPORT_RECEIPT_COLUMN_COUNT && missingSuffix) {
+      sheet.getRange(
+        1,
+        matchingPrefixLength + 1,
+        1,
+        IMPORT_RECEIPT_COLUMN_COUNT - matchingPrefixLength
+      ).setValues([IMPORT_RECEIPT_HEADERS.slice(matchingPrefixLength)]);
+    } else {
+      IMPORT_RECEIPT_HEADERS.forEach(function(header, index) {
+        if (headerValues[index] !== header && !headerFormulas[index]) {
+          sheet.getRange(1, index + 1).setValue(header);
+        }
+      });
+    }
+  }
   sheet.getRange(1, 1, 1, IMPORT_RECEIPT_COLUMN_COUNT)
     .setBackground('#1565c0')
     .setFontColor('#ffffff')
@@ -4890,6 +5187,7 @@ function importItemFailureFromError_(error) {
   const code = isImportItemError_(error) ? String(error.code) : 'IMPORT_ITEM_SAVE_FAILED';
   const messages = {
     INVALID_IMPORT_PAYLOAD: 'インポート項目の入力内容を確認してください。',
+    INVALID_AUDIO_PAYLOAD: '音声の入力内容を確認してください。',
     INVALID_IDEMPOTENCY_KEY: 'インポート項目の識別情報が一致しません。',
     IDEMPOTENCY_PAYLOAD_CONFLICT: '同じ項目に異なる内容が送信されました。',
     IMPORT_RECEIPT_SHEET_MISSING: 'import_receipts シートが見つかりません。setupSheet() を実行してください。',
@@ -4905,18 +5203,34 @@ function importItemFailureFromError_(error) {
     DRIVE_LINK_SHARING_FAILED: '管理用写真のリンク共有を確認できませんでした。再試行してください。',
     DRIVE_MANAGED_COPY_CREATE_FAILED: '管理用の写真コピーを作成できませんでした。保存先Driveの作成権限を確認してください。',
     DRIVE_MANAGED_COPY_FINALIZE_FAILED: '管理用の写真コピーを確定できませんでした。再試行してください。',
+    DRIVE_MEDIA_STRUCTURE_AMBIGUOUS: 'Driveメディアの保存先に同名フォルダが複数あります。整理してから再試行してください。',
+    DRIVE_MEDIA_STRUCTURE_NAME_CONFLICT: 'Driveメディアの保存先に同名の項目があります。整理してから再試行してください。',
+    DRIVE_MEDIA_STRUCTURE_PARENT_INVALID: 'Driveメディアの保存先階層を確認してください。',
+    DRIVE_MEDIA_STRUCTURE_FAILED: 'Driveメディアの保存先を準備できませんでした。Driveの作成権限を確認してください。',
     DRIVE_SOURCE_ALREADY_LINKED: 'このDrive写真は既に別のピンへ紐づいています。',
     DRIVE_ORIGINAL_FOLDER_CREATE_FAILED: 'originalフォルダを作成できませんでした。Driveの作成権限を確認してください。',
     DRIVE_ORIGINAL_FOLDER_AMBIGUOUS: 'originalフォルダが複数あります。1つに整理してから再試行してください。',
-    DRIVE_SOURCE_MOVE_FAILED: '元写真をoriginalフォルダへ移動できませんでした。ピンは登録していません。Driveの移動権限を確認してください。',
-    DRIVE_SOURCE_MOVE_VERIFY_FAILED: '元写真の移動結果を確認できませんでした。ピンは登録していません。Driveを確認して再試行してください。',
+    DRIVE_SOURCE_MOVE_FAILED: 'ピンは登録しましたが、元写真をoriginal/photosへ移動できませんでした。Driveの移動権限を確認して再試行してください。',
+    DRIVE_SOURCE_MOVE_VERIFY_FAILED: 'ピンは登録しましたが、元写真のoriginal/photosへの移動結果を確認できませんでした。Driveを確認して再試行してください。',
     IMPORT_MAP_ROW_FAILED_AFTER_SOURCE_MOVE: '元写真の整理は完了しましたが、ピン情報を保存できませんでした。再試行してください。',
     PIN_PHOTO_ATTACH_TARGET_NOT_FOUND: '写真を追加するピンが見つかりません。画面を再読み込みしてください。',
     PIN_PHOTO_ATTACH_ALREADY_HAS_PHOTO: 'このピンには既に写真が登録されています。',
     PIN_PHOTO_ATTACH_CONFLICT: 'ピンが別の操作で更新されました。画面を再読み込みしてから再試行してください。',
     PIN_PHOTO_ATTACH_FILE_CREATE_FAILED: '表示用の写真を作成できませんでした。Driveの保存権限を確認してください。',
-    PIN_PHOTO_ATTACH_SOURCE_MOVE_FAILED: '元写真をoriginalフォルダへ移動できませんでした。写真は追加していません。',
+    PIN_PHOTO_ATTACH_SOURCE_MOVE_FAILED: '写真は追加しましたが、元写真をoriginal/photosへ移動できませんでした。再試行してください。',
     PIN_PHOTO_ATTACH_MAP_UPDATE_FAILED: '写真ファイルは準備できましたが、ピンへ設定できませんでした。再試行してください。',
+    PIN_AUDIO_TARGET_NOT_FOUND: '音声を設定するピンが見つかりません。画面を再読み込みしてください。',
+    PIN_AUDIO_ALREADY_ATTACHED: 'このピンには既に音声が登録されています。',
+    PIN_AUDIO_MISSING: 'このピンには差し替える音声がありません。',
+    PIN_AUDIO_CONFLICT: 'ピンが別の操作で更新されました。画面を再読み込みしてから再試行してください。',
+    IMPORT_AUDIO_SOURCE_INVALID: '選択したDrive音声を確認できませんでした。もう一度選択してください。',
+    IMPORT_AUDIO_SOURCE_CHECK_FAILED: '選択したDrive音声を確認できませんでした。再試行してください。',
+    IMPORT_AUDIO_SOURCE_ARCHIVE_FAILED: '音声は登録しましたが、元ファイルをoriginal/audioへ移動できませんでした。再試行してください。',
+    IMPORT_AUDIO_FILE_INVALID: '管理用音声ファイルを確認できませんでした。管理者へ連絡してください。',
+    IMPORT_AUDIO_FILE_SAVE_FAILED: '管理用音声ファイルを保存できませんでした。再試行してください。',
+    IMPORT_AUDIO_MAP_UPDATE_FAILED: '音声ファイルは準備できましたが、ピンへ設定できませんでした。再試行してください。',
+    IMPORT_AUDIO_CLEANUP_FAILED: '音声は登録しましたが、以前の音声ファイルを整理できませんでした。再試行してください。',
+    PIN_AUDIO_NOT_FOUND: '音声を確認できませんでした。',
     IMPORT_MAP_ROW_FAILED: 'ピン情報を保存できませんでした。再試行してください。',
     IMPORT_ITEM_SAVE_FAILED: 'インポート項目を保存できませんでした。再試行してください。'
   };
@@ -4929,6 +5243,8 @@ function importItemFailureFromError_(error) {
     DRIVE_LINK_SHARING_FAILED: true,
     DRIVE_MANAGED_COPY_CREATE_FAILED: true,
     DRIVE_MANAGED_COPY_FINALIZE_FAILED: true,
+    DRIVE_MEDIA_STRUCTURE_PARENT_INVALID: true,
+    DRIVE_MEDIA_STRUCTURE_FAILED: true,
     DRIVE_ORIGINAL_FOLDER_CREATE_FAILED: true,
     DRIVE_SOURCE_MOVE_FAILED: true,
     DRIVE_SOURCE_MOVE_VERIFY_FAILED: true,
@@ -4936,6 +5252,11 @@ function importItemFailureFromError_(error) {
     PIN_PHOTO_ATTACH_FILE_CREATE_FAILED: true,
     PIN_PHOTO_ATTACH_SOURCE_MOVE_FAILED: true,
     PIN_PHOTO_ATTACH_MAP_UPDATE_FAILED: true,
+    IMPORT_AUDIO_SOURCE_CHECK_FAILED: true,
+    IMPORT_AUDIO_SOURCE_ARCHIVE_FAILED: true,
+    IMPORT_AUDIO_FILE_SAVE_FAILED: true,
+    IMPORT_AUDIO_MAP_UPDATE_FAILED: true,
+    IMPORT_AUDIO_CLEANUP_FAILED: true,
     IMPORT_MAP_ROW_FAILED: true,
     IMPORT_ITEM_SAVE_FAILED: true
   };
@@ -5227,7 +5548,8 @@ function buildMapInfoRow_(normalized, resultMeta) {
     PinData.serializeTags(normalized.tags),
     normalized.eventAt,
     meta.updatedAt || '',
-    normalized.icon
+    normalized.icon,
+    ''
   ];
 }
 
@@ -5246,7 +5568,7 @@ function appendMapInfoRow_(sheet, row) {
 function mapInfoRowToPinResult_(row, folderUrl) {
   const pin = PinData.rowToPin(row || []);
   pin.folderUrl = String(folderUrl || '');
-  return pin;
+  return toClientPin_(pin);
 }
 
 function normalizeImportPhotoPayload_(data) {
@@ -5461,21 +5783,67 @@ function inspectImportReceiptSchemaForSave_(sheet) {
   const maxColumns = sheet.getMaxColumns();
   const lastColumn = sheet.getLastColumn();
   const readColumnCount = Math.max(1, Math.min(maxColumns, Math.max(lastColumn, IMPORT_RECEIPT_COLUMN_COUNT)));
-  const headers = sheet.getRange(1, 1, 1, readColumnCount).getValues()[0].map(function(value) {
+  const headerRange = sheet.getRange(1, 1, 1, readColumnCount);
+  const headers = headerRange.getValues()[0].map(function(value) {
     return String(value == null ? '' : value);
   });
+  const headerFormulas = headerRange.getFormulas()[0];
   while (headers.length < IMPORT_RECEIPT_COLUMN_COUNT) headers.push('');
+  while (headerFormulas.length < IMPORT_RECEIPT_COLUMN_COUNT) headerFormulas.push('');
   if (lastColumn > IMPORT_RECEIPT_COLUMN_COUNT) {
     return { state: 'corrupted', sheet: sheet };
   }
   const current = IMPORT_RECEIPT_HEADERS.every(function(header, index) {
     return headers[index] === header;
   });
-  if (current) return { state: 'current', sheet: sheet };
-  const legacy = LEGACY_IMPORT_RECEIPT_HEADERS.every(function(header, index) {
-    return headers[index] === header;
-  }) && headers[IMPORT_RECEIPT_COLUMN_COUNT - 1] === '';
-  return { state: legacy ? 'legacy' : 'corrupted', sheet: sheet };
+  if (current) return { state: 'current', sheet: sheet, headerCount: IMPORT_RECEIPT_COLUMN_COUNT };
+  const legacyHeaderCounts = [PHOTO_IMPORT_RECEIPT_HEADERS.length, LEGACY_IMPORT_RECEIPT_HEADERS.length];
+  for (var legacyIndex = 0; legacyIndex < legacyHeaderCounts.length; legacyIndex += 1) {
+    const headerCount = legacyHeaderCounts[legacyIndex];
+    const expectedHeaders = IMPORT_RECEIPT_HEADERS.slice(0, headerCount);
+    const prefixMatches = expectedHeaders.every(function(header, index) {
+      return headers[index] === header;
+    });
+    const appendedHeadersEmpty = headers.slice(headerCount, IMPORT_RECEIPT_COLUMN_COUNT).every(function(header, index) {
+      return isTrulyBlankSheetCell_(header, headerFormulas[headerCount + index]);
+    });
+    if (prefixMatches && appendedHeadersEmpty) {
+      return { state: 'legacy', sheet: sheet, headerCount: headerCount };
+    }
+  }
+  return { state: 'corrupted', sheet: sheet };
+}
+
+function findImportReceiptForSavePreflight_(sheet, keyHash, columnCount) {
+  if (!sheet || sheet.getLastRow() < 2) return null;
+  const keys = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
+  const matchingRows = [];
+  keys.forEach(function(row, index) {
+    if (String(row[0] || '') === String(keyHash || '')) matchingRows.push(index + 2);
+  });
+  if (matchingRows.length > 1) {
+    throw importItemError_('IMPORT_RECEIPT_CORRUPTED', 'duplicate receipt keys.', false);
+  }
+  if (!matchingRows.length) return null;
+  const rowNumber = matchingRows[0];
+  const row = sheet.getRange(rowNumber, 1, 1, columnCount).getValues()[0];
+  return importReceiptFromRow_(row, rowNumber);
+}
+
+function inspectExistingImportReceiptForSave_(keyHash) {
+  const spreadsheet = openDataSpreadsheet_();
+  const inspection = inspectImportReceiptSchemaForSave_(
+    spreadsheet.getSheetByName(IMPORT_RECEIPTS_SHEET_NAME)
+  );
+  if (inspection.state === 'corrupted') {
+    throw importItemError_('IMPORT_RECEIPT_CORRUPTED', 'receipt headers are invalid.', false);
+  }
+  if (inspection.state === 'missing') return null;
+  return findImportReceiptForSavePreflight_(
+    inspection.sheet,
+    keyHash,
+    Number(inspection.headerCount || IMPORT_RECEIPT_COLUMN_COUNT)
+  );
 }
 
 function ensureImportReceiptSchemaForSave_() {
@@ -5514,14 +5882,18 @@ function ensureImportReceiptSchemaForSave_() {
       return sheet;
     }
 
+    const legacyHeaderCount = inspection.headerCount;
+    const appendedColumnCount = IMPORT_RECEIPT_COLUMN_COUNT - legacyHeaderCount;
     if (sheet.getMaxColumns() >= IMPORT_RECEIPT_COLUMN_COUNT && sheet.getLastRow() > 1) {
-      const sourceIds = sheet.getRange(
+      const appendedValues = sheet.getRange(
         2,
-        IMPORT_RECEIPT_COLUMN_COUNT,
+        legacyHeaderCount + 1,
         sheet.getLastRow() - 1,
-        1
+        appendedColumnCount
       ).getValues();
-      if (sourceIds.some(function(row) { return String(row[0] || '') !== ''; })) {
+      if (appendedValues.some(function(row) {
+        return row.some(function(value) { return String(value || '') !== ''; });
+      })) {
         throw importItemError_('IMPORT_RECEIPT_CORRUPTED', 'legacy receipt data has an unexpected column.', false);
       }
     }
@@ -5531,10 +5903,10 @@ function ensureImportReceiptSchemaForSave_() {
         IMPORT_RECEIPT_COLUMN_COUNT - sheet.getMaxColumns()
       );
     }
-    sheet.getRange(1, IMPORT_RECEIPT_COLUMN_COUNT).setValue(
-      IMPORT_RECEIPT_HEADERS[IMPORT_RECEIPT_COLUMN_COUNT - 1]
-    );
-    sheet.getRange(1, IMPORT_RECEIPT_COLUMN_COUNT)
+    sheet.getRange(1, legacyHeaderCount + 1, 1, appendedColumnCount).setValues([
+      IMPORT_RECEIPT_HEADERS.slice(legacyHeaderCount)
+    ]);
+    sheet.getRange(1, legacyHeaderCount + 1, 1, appendedColumnCount)
       .setBackground('#1565c0')
       .setFontColor('#ffffff')
       .setFontWeight('bold');
@@ -5546,6 +5918,7 @@ function importReceiptFromRow_(row, rowNumber) {
   const source = row || [];
   const receipt = { rowNumber: rowNumber };
   IMPORT_RECEIPT_HEADERS.forEach(function(header, index) { receipt[header] = source[index] || ''; });
+  if (!receipt.mediaKind) receipt.mediaKind = 'photo';
   return receipt;
 }
 
@@ -5894,7 +6267,8 @@ function claimImportReceipt_(receiptSheet, mapSheet, normalized, payloadHash, le
         tempFileName: importTempFileName_(pinId),
         fileId: '', imageUrl: '', folderUrl: '',
         createdAt: now.toISOString(), updatedAt: now.toISOString(), lastErrorCode: '',
-        sourceDriveFileId: normalized.sourceDriveFileId
+        sourceDriveFileId: normalized.sourceDriveFileId,
+        mediaKind: 'photo', operationMode: 'create-pin', targetPinId: '', cleanupFileId: ''
       };
     }
     receipt.state = receipt.fileId ? IMPORT_RECEIPT_STATES.FILE_SAVED : IMPORT_RECEIPT_STATES.RESERVED;
@@ -6039,7 +6413,9 @@ function claimImportPhotoAttachReceipt_(receiptSheet, mapSheet, normalized, payl
         tempFileName: importPhotoAttachTempFileName_(normalized.idempotencyKeyHash),
         fileId: '', imageUrl: '', folderUrl: '',
         createdAt: now.toISOString(), updatedAt: now.toISOString(), lastErrorCode: '',
-        sourceDriveFileId: normalized.sourceDriveFileId
+        sourceDriveFileId: normalized.sourceDriveFileId,
+        mediaKind: 'photo', operationMode: normalized.operationMode,
+        targetPinId: normalized.targetPinId, cleanupFileId: ''
       };
     }
     receipt.state = receipt.fileId ? IMPORT_RECEIPT_STATES.FILE_SAVED : IMPORT_RECEIPT_STATES.RESERVED;
@@ -6251,13 +6627,17 @@ function isDriveItemWithinRootForImport_(item, rootFolderId, allowRootItem) {
 function getDriveSourceParentForImport_(file, rootFolderId) {
   try {
     const parents = file.getParents();
+    const directParents = [];
     while (parents.hasNext()) {
       const parent = parents.next();
       const parentId = String(parent.getId());
-      if (isValidDrivePhotoImportId_(parentId)
-          && isDriveItemWithinRootForImport_(parent, rootFolderId, true)) {
-        return { folder: parent, folderId: parentId };
+      if (!isValidDrivePhotoImportId_(parentId) || parent.isTrashed()) {
+        throw importItemError_('IMPORT_DRIVE_SOURCE_INVALID', 'Drive source parent is invalid.', false);
       }
+      directParents.push({ folder: parent, folderId: parentId });
+    }
+    if (directParents.length === 1 && directParents[0].folderId === String(rootFolderId)) {
+      return directParents[0];
     }
   } catch (error) {
     if (isImportItemError_(error)) throw error;
@@ -6282,14 +6662,15 @@ function validateDriveSourceForImport_(sourceDriveFileId) {
   let name;
   let mimeType;
   let sizeBytes;
-  let withinRoot;
+  let parent;
+  let trashed;
   try {
     id = String(file.getId());
     name = String(file.getName());
     mimeType = String(file.getMimeType());
     sizeBytes = Number(file.getSize());
-    withinRoot = mimeType !== DRIVE_PHOTO_IMPORT_SHORTCUT_MIME
-      && isDriveItemWithinRootForImport_(file, rootFolderId, false);
+    trashed = file.isTrashed();
+    parent = getDriveSourceParentForImport_(file, rootFolderId);
   } catch (error) {
     if (isImportItemError_(error)) throw error;
     throw driveSourceProviderError_('source-validation', error);
@@ -6299,7 +6680,8 @@ function validateDriveSourceForImport_(sourceDriveFileId) {
     type: mimeType,
     size: sizeBytes
   });
-  if (!withinRoot
+  if (trashed
+      || mimeType === DRIVE_PHOTO_IMPORT_SHORTCUT_MIME
       || id !== String(sourceDriveFileId)
       || !isValidDrivePhotoImportFileName_(name)
       || !classification.supported
@@ -6308,7 +6690,6 @@ function validateDriveSourceForImport_(sourceDriveFileId) {
       || sizeBytes > DRIVE_PHOTO_IMPORT_MAX_FILE_BYTES) {
     throw importItemError_('IMPORT_DRIVE_SOURCE_INVALID', 'Drive source metadata is invalid.', false);
   }
-  const parent = getDriveSourceParentForImport_(file, rootFolderId);
   return {
     file: file,
     fileId: id,
@@ -6318,6 +6699,25 @@ function validateDriveSourceForImport_(sourceDriveFileId) {
     parentFolderId: parent.folderId,
     rootFolderId: rootFolderId
   };
+}
+
+function validateUnownedDriveSourceForImport_(sourceDriveFileId) {
+  try {
+    const associations = getMediaDriveAssociations_();
+    const sourceId = String(sourceDriveFileId || '');
+    if (associations.managedPhotoIds.has(sourceId)
+        || associations.completedSourceIds.has(sourceId)) {
+      throw importItemError_(
+        'DRIVE_SOURCE_ALREADY_LINKED',
+        'Drive source is already managed or completed.',
+        false
+      );
+    }
+  } catch (error) {
+    if (isImportItemError_(error)) throw error;
+    throw driveSourceProviderError_('source-association', error);
+  }
+  return validateDriveSourceForImport_(sourceDriveFileId);
 }
 
 function driveItemDirectParentIds_(item) {
@@ -6416,6 +6816,36 @@ function moveDriveSourceToOriginal_(source, originalFolder) {
     );
   }
   return { moved: parentsBefore.indexOf(originalFolderId) === -1 };
+}
+
+function archiveCompletedDriveSourceIfPending_(sourceDriveFileId, mediaStructure) {
+  const sourceId = String(sourceDriveFileId || '');
+  const rootFolderId = String(mediaStructure && mediaStructure.root || '');
+  const originalPhotosId = String(mediaStructure && mediaStructure.originalPhotos || '');
+  if (!isValidDrivePhotoImportId_(sourceId)
+      || !isValidDrivePhotoImportId_(rootFolderId)
+      || !isValidDrivePhotoImportId_(originalPhotosId)) {
+    throw importItemError_('IMPORT_DRIVE_SOURCE_INVALID', 'completed Drive source archive input is invalid.', false);
+  }
+  let file;
+  let parentIds;
+  try {
+    file = DriveApp.getFileById(sourceId);
+    if (!file || file.isTrashed() || String(file.getId()) !== sourceId) return { moved: false };
+    parentIds = driveItemDirectParentIds_(file);
+  } catch (error) {
+    if (sanitizeProviderMessage_(importProviderErrorField_(error, 'message')) === 'resource_unavailable') {
+      return { moved: false };
+    }
+    throw driveSourceProviderError_('source-archive-replay', error);
+  }
+  if (parentIds.length === 1 && parentIds[0] === originalPhotosId) return { moved: false };
+  if (parentIds.length !== 1 || parentIds[0] !== rootFolderId) return { moved: false };
+  const source = validateDriveSourceForImport_(sourceId);
+  return moveDriveSourceToOriginal_(
+    source,
+    DriveApp.getFolderById(originalPhotosId)
+  );
 }
 
 function finalizeImportDisplayFile_(driveResult, normalized) {
@@ -6616,6 +7046,31 @@ function markImportReceiptFailed_(receiptSheet, expected, errorCode) {
   }
 }
 
+function isImportSourceMoveFailureCode_(errorCode) {
+  return errorCode === 'DRIVE_SOURCE_MOVE_FAILED'
+    || errorCode === 'DRIVE_SOURCE_MOVE_VERIFY_FAILED'
+    || errorCode === 'PIN_PHOTO_ATTACH_SOURCE_MOVE_FAILED';
+}
+
+function markCompletedImportSourceMoveFailed_(receiptSheet, expected, errorCode) {
+  if (!isImportSourceMoveFailureCode_(errorCode)) return;
+  try {
+    withImportReceiptLock_(function() {
+      const receipt = findImportReceipt_(receiptSheet, expected.idempotencyKeyHash);
+      if (!receipt
+          || String(receipt.payloadHash) !== expected.payloadHash
+          || String(receipt.pinId) !== expected.pinId
+          || String(receipt.state) !== IMPORT_RECEIPT_STATES.COMPLETED
+          || String(receipt.sourceDriveFileId || '') !== expected.sourceDriveFileId) return;
+      receipt.updatedAt = getImportNow_().toISOString();
+      receipt.lastErrorCode = String(errorCode);
+      writeImportReceipt_(receiptSheet, receipt);
+    });
+  } catch (_error) {
+    // The completed pin remains authoritative if cleanup journaling is unavailable.
+  }
+}
+
 function claimImportPinReceipt_(receiptSheet, mapSheet, normalized, payloadHash, leaseOwner) {
   return withImportReceiptLock_(function() {
     const now = getImportNow_();
@@ -6678,7 +7133,8 @@ function claimImportPinReceipt_(receiptSheet, mapSheet, normalized, payloadHash,
         pinId: Utilities.getUuid(),
         targetFolderId: '', tempFileName: '', fileId: '', imageUrl: '', folderUrl: '',
         createdAt: now.toISOString(), updatedAt: now.toISOString(), lastErrorCode: '',
-        sourceDriveFileId: ''
+        sourceDriveFileId: '',
+        mediaKind: 'photo', operationMode: 'create-pin', targetPinId: '', cleanupFileId: ''
       };
     }
     receipt.state = IMPORT_RECEIPT_STATES.RESERVED;
@@ -6776,29 +7232,61 @@ function saveImportPhotoItem(data) {
   let unpersistedDriveResult = null;
   let persistedDriveResult = null;
   let sourceMoveCompleted = false;
+  let pinLinked = false;
   let finalized = false;
   try {
     normalized = normalizeImportPhotoPayload_(data);
+    const preflightReceipt = inspectExistingImportReceiptForSave_(
+      normalized.idempotencyKeyHash
+    );
+    let preflightDriveSource = null;
+    if (normalized.sourceDriveFileId
+        && (!preflightReceipt || !String(preflightReceipt.fileId || ''))) {
+      preflightDriveSource = validateUnownedDriveSourceForImport_(
+        normalized.sourceDriveFileId
+      );
+    }
     receiptSheet = ensureImportReceiptSchemaForSave_();
     const existingReceipt = findImportReceipt_(receiptSheet, normalized.idempotencyKeyHash);
-    const rootFolderId = getRootFolderId_();
-    if (normalized.operationMode === 'attach-existing-pin') {
-      normalized.targetFolderId = existingReceipt && String(existingReceipt.targetFolderId || '')
-        ? String(existingReceipt.targetFolderId) : String(rootFolderId || '');
-    } else if (normalized.sourceDriveFileId) {
-      normalized.targetFolderId = existingReceipt && String(existingReceipt.targetFolderId || '')
-        ? String(existingReceipt.targetFolderId) : String(rootFolderId || '');
-    } else {
-      normalized.targetFolderId = normalized.targetFolderId || rootFolderId;
+    let mediaStructure;
+    try {
+      mediaStructure = ensureMediaDriveStructure_();
+    } catch (error) {
+      const structureCode = error && typeof error.code === 'string'
+        ? String(error.code) : 'DRIVE_MEDIA_STRUCTURE_FAILED';
+      const knownStructureCodes = {
+        DRIVE_MEDIA_STRUCTURE_AMBIGUOUS: true,
+        DRIVE_MEDIA_STRUCTURE_NAME_CONFLICT: true,
+        DRIVE_MEDIA_STRUCTURE_PARENT_INVALID: true,
+        DRIVE_MEDIA_STRUCTURE_FAILED: true
+      };
+      throw importItemError_(
+        knownStructureCodes[structureCode] ? structureCode : 'DRIVE_MEDIA_STRUCTURE_FAILED',
+        'media Drive structure is unavailable.',
+        structureCode !== 'DRIVE_MEDIA_STRUCTURE_AMBIGUOUS'
+          && structureCode !== 'DRIVE_MEDIA_STRUCTURE_NAME_CONFLICT'
+      );
+    }
+    const managedPhotosFolderId = String(mediaStructure.photos || '');
+    normalized.targetFolderId = managedPhotosFolderId;
+    if (existingReceipt && String(existingReceipt.targetFolderId || '')) {
+      const receiptTargetFolderId = String(existingReceipt.targetFolderId);
+      if (receiptTargetFolderId !== managedPhotosFolderId) {
+        const managedTargetPayloadHash = hashImportPayload_(normalized);
+        normalized.targetFolderId = receiptTargetFolderId;
+        if (String(existingReceipt.payloadHash || '') === managedTargetPayloadHash) {
+          normalized.targetFolderId = managedPhotosFolderId;
+        }
+      }
     }
     if (!normalized.targetFolderId) {
       throw importItemError_('INVALID_IMPORT_PAYLOAD', 'target folder is missing.', false);
     }
     const mapSheet = openMapInfoSheet_();
-    let driveSource = null;
-    if (normalized.sourceDriveFileId && (!existingReceipt
-        || String(existingReceipt.state) !== IMPORT_RECEIPT_STATES.COMPLETED)) {
-      driveSource = validateDriveSourceForImport_(normalized.sourceDriveFileId);
+    let driveSource = preflightDriveSource;
+    if (normalized.sourceDriveFileId && !driveSource
+        && (!existingReceipt || !String(existingReceipt.fileId || ''))) {
+      driveSource = validateUnownedDriveSourceForImport_(normalized.sourceDriveFileId);
     }
     let payloadHash = hashImportPayload_(normalized);
     const leaseOwner = Utilities.getUuid();
@@ -6809,10 +7297,18 @@ function saveImportPhotoItem(data) {
       : claimImportReceipt_(receiptSheet, mapSheet, normalized, payloadHash, leaseOwner);
     payloadHash = String(claim.payloadHash || payloadHash);
     if (claim.completed) {
+      if (normalized.sourceDriveFileId) {
+        const archiveResult = archiveCompletedDriveSourceIfPending_(
+          normalized.sourceDriveFileId,
+          mediaStructure
+        );
+        sourceMoveCompleted = archiveResult.moved === true;
+      }
       return { ok: true, deduplicated: true, pin: claim.pin };
     }
-    if (normalized.sourceDriveFileId && !driveSource) {
-      driveSource = validateDriveSourceForImport_(normalized.sourceDriveFileId);
+    if (normalized.sourceDriveFileId && !driveSource
+        && !String(claim.receipt.fileId || '')) {
+      driveSource = validateUnownedDriveSourceForImport_(normalized.sourceDriveFileId);
     }
     expected = {
       idempotencyKeyHash: normalized.idempotencyKeyHash,
@@ -6834,25 +7330,25 @@ function saveImportPhotoItem(data) {
     if (normalized.operationMode === 'attach-existing-pin') {
       assertPhotoAttachTargetReady_(receiptSheet, mapSheet, expected, normalized);
     }
-    if (normalized.sourceDriveFileId) {
-      const originalFolder = resolveDriveOriginalFolder_(driveSource.rootFolderId);
-      moveDriveSourceToOriginal_(driveSource, originalFolder);
-      sourceMoveCompleted = true;
-    }
     let pin;
-    try {
-      pin = normalized.operationMode === 'attach-existing-pin'
-        ? finalizeImportPhotoAttach_(receiptSheet, mapSheet, expected, normalized)
-        : finalizeImportItem_(receiptSheet, mapSheet, expected, normalized);
-    } catch (error) {
-      if (sourceMoveCompleted && error && error.code === 'IMPORT_MAP_ROW_FAILED') {
-        throw importItemError_(
-          'IMPORT_MAP_ROW_FAILED_AFTER_SOURCE_MOVE',
-          'map row append failed after Drive source move.',
-          true
+    pin = normalized.operationMode === 'attach-existing-pin'
+      ? finalizeImportPhotoAttach_(receiptSheet, mapSheet, expected, normalized)
+      : finalizeImportItem_(receiptSheet, mapSheet, expected, normalized);
+    pinLinked = true;
+    if (normalized.sourceDriveFileId) {
+      if (driveSource) {
+        moveDriveSourceToOriginal_(
+          driveSource,
+          DriveApp.getFolderById(String(mediaStructure.originalPhotos))
         );
+        sourceMoveCompleted = true;
+      } else {
+        const archiveResult = archiveCompletedDriveSourceIfPending_(
+          normalized.sourceDriveFileId,
+          mediaStructure
+        );
+        sourceMoveCompleted = archiveResult.moved === true;
       }
-      throw error;
     }
     finalized = true;
     return { ok: true, deduplicated: false, pin: pin };
@@ -6878,6 +7374,9 @@ function saveImportPhotoItem(data) {
       code = isImportItemError_(mappedError)
         ? String(mappedError.code) : 'IMPORT_ITEM_SAVE_FAILED';
     }
+    if (receiptSheet && expected && pinLinked && isImportSourceMoveFailureCode_(code)) {
+      markCompletedImportSourceMoveFailed_(receiptSheet, expected, code);
+    }
     if (receiptSheet && expected && unpersistedDriveResult) {
       compensateUnpersistedImportDriveFile_(receiptSheet, expected, unpersistedDriveResult);
     }
@@ -6891,7 +7390,7 @@ function saveImportPhotoItem(data) {
       PIN_PHOTO_ATTACH_CONFLICT: true,
       PIN_PHOTO_ATTACH_SOURCE_MOVE_FAILED: true
     };
-    if (receiptSheet && expected && persistedDriveResult && !sourceMoveCompleted
+    if (receiptSheet && expected && persistedDriveResult && !sourceMoveCompleted && !pinLinked
         && preMoveCompensationCodes[code]) {
       compensatePersistedImportDriveFile_(
         receiptSheet,
@@ -6904,6 +7403,1061 @@ function saveImportPhotoItem(data) {
       markImportReceiptFailed_(receiptSheet, expected, code);
     }
     return importItemFailureFromError_(mappedError);
+  }
+}
+
+function normalizeImportAudioPayload_(data) {
+  const source = data || {};
+  if (!source || typeof source !== 'object' || Array.isArray(source)) {
+    throw importItemError_('INVALID_AUDIO_PAYLOAD', 'audio payload is invalid.', false);
+  }
+  const jobId = normalizeImportIdentifier_(source.jobId, 'jobId', IMPORT_ITEM_ID_MAX_LENGTH);
+  const itemId = normalizeImportIdentifier_(source.itemId, 'itemId', IMPORT_ITEM_ID_MAX_LENGTH);
+  const idempotencyKey = normalizeImportIdentifier_(
+    source.idempotencyKey,
+    'idempotencyKey',
+    IMPORT_IDEMPOTENCY_KEY_MAX_LENGTH
+  );
+  if (idempotencyKey !== jobId + ':' + itemId) {
+    throw importItemError_('INVALID_IDEMPOTENCY_KEY', 'idempotency key mismatch.', false);
+  }
+  const operationMode = String(source.operationMode || '');
+  if (['create-pin', 'attach-existing-pin', 'replace-existing-audio'].indexOf(operationMode) === -1) {
+    throw importItemError_('INVALID_AUDIO_PAYLOAD', 'operationMode is invalid.', false);
+  }
+  const sourceKind = String(source.sourceKind || '');
+  if (sourceKind !== 'local' && sourceKind !== 'drive') {
+    throw importItemError_('INVALID_AUDIO_PAYLOAD', 'sourceKind is invalid.', false);
+  }
+  if (source.audioMimeType !== 'audio/mpeg') {
+    throw importItemError_('INVALID_AUDIO_PAYLOAD', 'audioMimeType is invalid.', false);
+  }
+  const audioBase64 = String(source.audioBase64 || '');
+  if (!audioBase64 || audioBase64.length % 4 !== 0
+      || !/^[A-Za-z0-9+/]*={0,2}$/.test(audioBase64)) {
+    throw importItemError_('INVALID_AUDIO_PAYLOAD', 'audioBase64 is invalid.', false);
+  }
+  let audioBytes;
+  try {
+    audioBytes = Utilities.base64Decode(audioBase64);
+    if (Utilities.base64Encode(audioBytes) !== audioBase64) throw new Error('non-canonical base64');
+  } catch (_error) {
+    throw importItemError_('INVALID_AUDIO_PAYLOAD', 'audioBase64 is invalid.', false);
+  }
+  const byteLength = audioBytes && Number.isSafeInteger(audioBytes.length) ? audioBytes.length : -1;
+  const first = byteLength > 0 ? ((Number(audioBytes[0]) + 256) % 256) : -1;
+  const second = byteLength > 1 ? ((Number(audioBytes[1]) + 256) % 256) : -1;
+  const third = byteLength > 2 ? ((Number(audioBytes[2]) + 256) % 256) : -1;
+  const hasId3 = first === 0x49 && second === 0x44 && third === 0x33;
+  const hasMpegFrameSync = first === 0xff && (second & 0xe0) === 0xe0;
+  if (byteLength < IMPORT_AUDIO_MIN_BYTES || byteLength > IMPORT_AUDIO_MAX_BYTES
+      || (!hasId3 && !hasMpegFrameSync)) {
+    throw importItemError_('INVALID_AUDIO_PAYLOAD', 'MP3 bytes are invalid.', false);
+  }
+  const sourceFileName = String(source.sourceFileName == null ? '' : source.sourceFileName).trim();
+  if (!sourceFileName || sourceFileName.length > 255
+      || /[\u0000-\u001f\u007f]/.test(sourceFileName)) {
+    throw importItemError_('INVALID_AUDIO_PAYLOAD', 'sourceFileName is invalid.', false);
+  }
+  const sourceDriveFileId = String(source.sourceDriveFileId || '').trim();
+  if ((sourceKind === 'local' && sourceDriveFileId)
+      || (sourceKind === 'drive' && !isValidDrivePhotoImportId_(sourceDriveFileId))) {
+    throw importItemError_('INVALID_AUDIO_PAYLOAD', 'sourceDriveFileId is invalid.', false);
+  }
+
+  let targetPinId = '';
+  let expectedUpdatedAt = '';
+  let pin;
+  if (operationMode === 'create-pin') {
+    if (!source.pin || typeof source.pin !== 'object' || Array.isArray(source.pin)) {
+      throw importItemError_('INVALID_AUDIO_PAYLOAD', 'pin is invalid.', false);
+    }
+    const pinSource = Object.assign({}, source.pin);
+    if (pinSource.lat === '') pinSource.lat = null;
+    if (pinSource.lng === '') pinSource.lng = null;
+    pinSource.eventAt = pinSource.eventTime == null ? '' : pinSource.eventTime;
+    try {
+      pin = normalizeNewPinPayload_(pinSource, {
+        strict: true,
+        normalizeColor: true,
+        defaultMissingStatus: ''
+      });
+    } catch (_error) {
+      throw importItemError_('INVALID_AUDIO_PAYLOAD', 'pin is invalid.', false);
+    }
+  } else {
+    targetPinId = normalizeImportIdentifier_(
+      source.targetPinId,
+      'targetPinId',
+      IMPORT_ITEM_ID_MAX_LENGTH
+    );
+    if (typeof source.expectedUpdatedAt !== 'string'
+        || source.expectedUpdatedAt.length > 64
+        || /[\u0000-\u001f\u007f]/.test(source.expectedUpdatedAt)) {
+      throw importItemError_('INVALID_AUDIO_PAYLOAD', 'expectedUpdatedAt is invalid.', false);
+    }
+    expectedUpdatedAt = source.expectedUpdatedAt;
+    pin = {
+      title: '', description: '', lat: null, lng: null, color: DEFAULT_COLOR,
+      icon: 'default', status: '', tags: [], links: [], eventAt: ''
+    };
+  }
+  return Object.assign({}, pin, {
+    jobId: jobId,
+    itemId: itemId,
+    idempotencyKey: idempotencyKey,
+    idempotencyKeyHash: sha256Hex_(idempotencyKey),
+    operationMode: operationMode,
+    targetPinId: targetPinId,
+    expectedUpdatedAt: expectedUpdatedAt,
+    sourceKind: sourceKind,
+    sourceDriveFileId: sourceDriveFileId,
+    sourceFileName: sourceFileName,
+    audioMimeType: 'audio/mpeg',
+    audioBase64: audioBase64,
+    audioBytes: audioBytes
+  });
+}
+
+function hashImportAudioPayload_(normalized) {
+  const hashPayload = {
+    mediaKind: 'audio',
+    jobId: normalized.jobId,
+    itemId: normalized.itemId,
+    operationMode: normalized.operationMode,
+    targetPinId: normalized.targetPinId,
+    expectedUpdatedAt: normalized.expectedUpdatedAt,
+    sourceKind: normalized.sourceKind,
+    sourceDriveFileId: normalized.sourceDriveFileId,
+    sourceFileName: normalized.sourceFileName,
+    audioMimeType: normalized.audioMimeType,
+    audioBase64: normalized.audioBase64
+  };
+  if (normalized.operationMode === 'create-pin') {
+    hashPayload.pin = {
+      title: normalized.title,
+      description: normalized.description,
+      lat: normalized.lat,
+      lng: normalized.lng,
+      color: normalized.color,
+      icon: normalized.icon,
+      status: normalized.status,
+      tags: normalized.tags.slice(),
+      links: normalized.links.slice(),
+      eventAt: normalized.eventAt
+    };
+  }
+  return sha256Hex_(JSON.stringify(hashPayload));
+}
+
+function preflightImportAudioTarget_(mapSheet, normalized, preflightReceipt, payloadHash) {
+  if (preflightReceipt) {
+    if (String(preflightReceipt.payloadHash || '') !== payloadHash) {
+      throw importItemError_('IDEMPOTENCY_PAYLOAD_CONFLICT', 'audio payload conflict.', false);
+    }
+    if (String(preflightReceipt.mediaKind || '') !== 'audio') {
+      throw importItemError_('IMPORT_RECEIPT_CORRUPTED', 'receipt media kind changed.', false);
+    }
+  }
+  if (normalized.operationMode === 'create-pin') return;
+  audioReceiptMapTarget_(mapSheet, normalized, preflightReceipt || null);
+}
+
+function importAudioTempFileName_(idempotencyKeyHash) {
+  const digest = String(idempotencyKeyHash || '').toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(digest)) {
+    throw importItemError_('IMPORT_RECEIPT_CORRUPTED', 'audio receipt key is invalid.', false);
+  }
+  return '__drop_pin_audio_' + digest.slice(0, 32) + '.mp3';
+}
+
+function audioReceiptMapTarget_(mapSheet, normalized, receipt) {
+  const pinId = normalized.operationMode === 'create-pin'
+    ? String(receipt && receipt.pinId || '') : normalized.targetPinId;
+  const target = pinId ? findMapInfoRowByPinId_(mapSheet, pinId) : null;
+  const receiptFileId = String(receipt && receipt.fileId || '');
+  if (target && receiptFileId && String(target.row[15] || '') === receiptFileId) {
+    return { target: target, linked: true, cleanupFileId: String(receipt.cleanupFileId || '') };
+  }
+  if (normalized.operationMode === 'create-pin') {
+    if (target) {
+      throw importItemError_('IMPORT_RECEIPT_CORRUPTED', 'audio create pin already exists.', false);
+    }
+    return { target: null, linked: false, cleanupFileId: '' };
+  }
+  if (!target) {
+    throw importItemError_('PIN_AUDIO_TARGET_NOT_FOUND', 'audio target is missing.', false);
+  }
+  const currentAudioId = String(target.row[15] || '');
+  if (String(target.row[13] || '') !== normalized.expectedUpdatedAt) {
+    throw importItemError_('PIN_AUDIO_CONFLICT', 'audio target was updated.', false);
+  }
+  if (normalized.operationMode === 'attach-existing-pin' && currentAudioId) {
+    throw importItemError_('PIN_AUDIO_ALREADY_ATTACHED', 'audio target already has audio.', false);
+  }
+  if (normalized.operationMode === 'replace-existing-audio' && !currentAudioId) {
+    throw importItemError_('PIN_AUDIO_MISSING', 'audio target has no audio.', false);
+  }
+  return {
+    target: target,
+    linked: false,
+    cleanupFileId: normalized.operationMode === 'replace-existing-audio' ? currentAudioId : ''
+  };
+}
+
+function assertAudioReceiptMetadata_(receipt, normalized, targetFolderId) {
+  if (!receipt
+      || String(receipt.mediaKind || '') !== 'audio'
+      || String(receipt.operationMode || '') !== normalized.operationMode
+      || String(receipt.targetPinId || '') !== normalized.targetPinId
+      || String(receipt.targetFolderId || '') !== String(targetFolderId || '')
+      || String(receipt.tempFileName || '') !== importAudioTempFileName_(normalized.idempotencyKeyHash)
+      || String(receipt.sourceDriveFileId || '') !== normalized.sourceDriveFileId
+      || String(receipt.imageUrl || '') !== '') {
+    throw importItemError_('IMPORT_RECEIPT_CORRUPTED', 'audio receipt metadata changed.', false);
+  }
+}
+
+function assertAudioSourceReceiptAvailable_(receiptSheet, normalized) {
+  if (!normalized.sourceDriveFileId || receiptSheet.getLastRow() < 2) return;
+  const rows = receiptSheet.getRange(
+    2, 1, receiptSheet.getLastRow() - 1, IMPORT_RECEIPT_COLUMN_COUNT
+  ).getValues();
+  rows.forEach(function(row, index) {
+    const receipt = importReceiptFromRow_(row, index + 2);
+    if (String(receipt.idempotencyKey || '') === normalized.idempotencyKeyHash
+        || String(receipt.sourceDriveFileId || '') !== normalized.sourceDriveFileId) return;
+    if (String(receipt.state || '') !== IMPORT_RECEIPT_STATES.FAILED) {
+      throw importItemError_('DRIVE_SOURCE_ALREADY_LINKED', 'audio source is already owned.', false);
+    }
+  });
+}
+
+function claimImportAudioReceipt_(receiptSheet, mapSheet, normalized, payloadHash, leaseOwner, targetFolderId) {
+  return withImportReceiptLock_(function() {
+    const now = getImportNow_();
+    assertAudioSourceReceiptAvailable_(receiptSheet, normalized);
+    let receipt = findImportReceipt_(receiptSheet, normalized.idempotencyKeyHash);
+    if (receipt) {
+      if (String(receipt.jobId || '') !== normalized.jobId
+          || String(receipt.itemId || '') !== normalized.itemId) {
+        throw importItemError_('IMPORT_RECEIPT_CORRUPTED', 'audio receipt ids changed.', false);
+      }
+      if (String(receipt.payloadHash || '') !== payloadHash) {
+        throw importItemError_('IDEMPOTENCY_PAYLOAD_CONFLICT', 'audio payload conflict.', false);
+      }
+      if (!String(receipt.pinId || '')) {
+        throw importItemError_('IMPORT_RECEIPT_CORRUPTED', 'audio receipt pin is missing.', false);
+      }
+      assertAudioReceiptMetadata_(receipt, normalized, targetFolderId);
+      if (importLeaseIsActive_(receipt, now) && String(receipt.leaseOwner || '') !== leaseOwner) {
+        throw importItemError_('IMPORT_ITEM_IN_PROGRESS', 'audio item is in progress.', true);
+      }
+    } else {
+      const targetState = audioReceiptMapTarget_(mapSheet, normalized, null);
+      receipt = {
+        rowNumber: 0,
+        idempotencyKey: normalized.idempotencyKeyHash,
+        jobId: normalized.jobId,
+        itemId: normalized.itemId,
+        payloadHash: payloadHash,
+        state: IMPORT_RECEIPT_STATES.RESERVED,
+        leaseOwner: '', leaseUntil: '',
+        pinId: normalized.operationMode === 'create-pin' ? Utilities.getUuid() : normalized.targetPinId,
+        targetFolderId: String(targetFolderId || ''),
+        tempFileName: importAudioTempFileName_(normalized.idempotencyKeyHash),
+        fileId: '', imageUrl: '', folderUrl: '',
+        createdAt: now.toISOString(), updatedAt: now.toISOString(), lastErrorCode: '',
+        sourceDriveFileId: normalized.sourceDriveFileId,
+        mediaKind: 'audio', operationMode: normalized.operationMode,
+        targetPinId: normalized.targetPinId,
+        cleanupFileId: targetState.cleanupFileId
+      };
+    }
+    const targetState = audioReceiptMapTarget_(mapSheet, normalized, receipt);
+    const currentState = String(receipt.state || '');
+    if (targetState.linked) {
+      if (normalized.operationMode !== 'create-pin'
+          && String(targetState.target.row[13] || '') === normalized.expectedUpdatedAt) {
+        const repairedUpdatedAt = currentUpdatedAt_();
+        try {
+          mapSheet.getRange(targetState.target.rowNumber, 14, 1, 1).setValue(repairedUpdatedAt);
+          targetState.target.row[13] = repairedUpdatedAt;
+        } catch (_error) {
+          throw importItemError_(
+            'IMPORT_AUDIO_MAP_UPDATE_FAILED',
+            'audio timestamp repair failed.',
+            true
+          );
+        }
+      }
+      if (currentState === IMPORT_RECEIPT_STATES.COMPLETED) {
+        return {
+          completed: true,
+          cleanup: false,
+          receipt: receipt,
+          pin: mapInfoRowToPinResult_(targetState.target.row, ''),
+          deduplicated: true
+        };
+      }
+      if ([
+        IMPORT_RECEIPT_STATES.FILE_SAVED,
+        IMPORT_RECEIPT_STATES.LINKED,
+        IMPORT_RECEIPT_STATES.CLEANUP_PENDING,
+        IMPORT_RECEIPT_STATES.FAILED
+      ].indexOf(currentState) === -1) {
+        throw importItemError_('IMPORT_RECEIPT_CORRUPTED', 'audio linked receipt state is invalid.', false);
+      }
+      receipt.state = IMPORT_RECEIPT_STATES.LINKED;
+      receipt.leaseOwner = '';
+      receipt.leaseUntil = '';
+      receipt.updatedAt = now.toISOString();
+      receipt.lastErrorCode = '';
+      writeImportReceipt_(receiptSheet, receipt);
+      return {
+        completed: false,
+        cleanup: true,
+        receipt: receipt,
+        pin: mapInfoRowToPinResult_(targetState.target.row, ''),
+        deduplicated: true
+      };
+    }
+    if (currentState === IMPORT_RECEIPT_STATES.COMPLETED
+        || currentState === IMPORT_RECEIPT_STATES.LINKED
+        || currentState === IMPORT_RECEIPT_STATES.CLEANUP_PENDING) {
+      throw importItemError_('IMPORT_RECEIPT_CORRUPTED', 'audio receipt linkage is missing.', false);
+    }
+    if (String(receipt.cleanupFileId || '') !== targetState.cleanupFileId) {
+      throw importItemError_('IMPORT_RECEIPT_CORRUPTED', 'audio cleanup owner changed.', false);
+    }
+    receipt.state = receipt.fileId ? IMPORT_RECEIPT_STATES.FILE_SAVED : IMPORT_RECEIPT_STATES.RESERVED;
+    receipt.leaseOwner = leaseOwner;
+    receipt.leaseUntil = new Date(now.getTime() + IMPORT_ITEM_LEASE_MS).toISOString();
+    receipt.updatedAt = now.toISOString();
+    receipt.lastErrorCode = '';
+    writeImportReceipt_(receiptSheet, receipt);
+    return {
+      completed: false,
+      cleanup: false,
+      receipt: receipt,
+      target: targetState.target,
+      deduplicated: false
+    };
+  });
+}
+
+function assertAudioReceiptOwner_(receipt, expected) {
+  if (!receipt
+      || String(receipt.payloadHash || '') !== expected.payloadHash
+      || String(receipt.pinId || '') !== expected.pinId
+      || String(receipt.leaseOwner || '') !== expected.leaseOwner
+      || String(receipt.mediaKind || '') !== 'audio') {
+    throw importItemError_('IMPORT_ITEM_LEASE_LOST', 'audio receipt ownership changed.', true);
+  }
+}
+
+function persistImportAudioFile_(receiptSheet, expected, driveResult) {
+  return withImportReceiptLock_(function() {
+    const receipt = findImportReceipt_(receiptSheet, expected.idempotencyKeyHash);
+    assertAudioReceiptOwner_(receipt, expected);
+    receipt.state = IMPORT_RECEIPT_STATES.FILE_SAVED;
+    receipt.fileId = String(driveResult.fileId || '');
+    receipt.imageUrl = '';
+    receipt.folderUrl = '';
+    receipt.updatedAt = getImportNow_().toISOString();
+    receipt.leaseUntil = new Date(getImportNow_().getTime() + IMPORT_ITEM_LEASE_MS).toISOString();
+    receipt.lastErrorCode = '';
+    writeImportReceipt_(receiptSheet, receipt);
+    return receipt;
+  });
+}
+
+function finalizeImportAudioLink_(receiptSheet, mapSheet, expected, normalized) {
+  return withImportReceiptLock_(function() {
+    const receipt = findImportReceipt_(receiptSheet, expected.idempotencyKeyHash);
+    assertAudioReceiptOwner_(receipt, expected);
+    const targetState = audioReceiptMapTarget_(mapSheet, normalized, receipt);
+    let mapResult = targetState.target;
+    if (!targetState.linked) {
+      if (normalized.operationMode === 'create-pin') {
+        const row = buildMapInfoRow_(normalized, {
+          timestamp: formatMapTimestamp_(getImportNow_()),
+          pinId: expected.pinId,
+          fileId: '', imageUrl: '', updatedAt: ''
+        });
+        row[15] = String(receipt.fileId || '');
+        try {
+          appendMapInfoRow_(mapSheet, row);
+        } catch (_error) {
+          throw importItemError_('IMPORT_AUDIO_MAP_UPDATE_FAILED', 'audio pin append failed.', true);
+        }
+        mapResult = { rowNumber: mapSheet.getLastRow(), row: row };
+      } else {
+        const target = targetState.target;
+        const updatedAt = currentUpdatedAt_();
+        try {
+          mapSheet.getRange(target.rowNumber, 16, 1, 1).setValue(String(receipt.fileId || ''));
+          target.row[15] = String(receipt.fileId || '');
+          mapSheet.getRange(target.rowNumber, 14, 1, 1).setValue(updatedAt);
+          target.row[13] = updatedAt;
+        } catch (_error) {
+          throw importItemError_('IMPORT_AUDIO_MAP_UPDATE_FAILED', 'audio map update failed.', true);
+        }
+        mapResult = target;
+      }
+    }
+    receipt.state = IMPORT_RECEIPT_STATES.LINKED;
+    receipt.leaseOwner = '';
+    receipt.leaseUntil = '';
+    receipt.updatedAt = getImportNow_().toISOString();
+    receipt.lastErrorCode = '';
+    writeImportReceipt_(receiptSheet, receipt);
+    return { pin: mapInfoRowToPinResult_(mapResult.row, ''), receipt: receipt };
+  });
+}
+
+function completeImportAudioReceipt_(receiptSheet, expected) {
+  return withImportReceiptLock_(function() {
+    const receipt = findImportReceipt_(receiptSheet, expected.idempotencyKeyHash);
+    if (!receipt
+        || String(receipt.payloadHash || '') !== expected.payloadHash
+        || String(receipt.pinId || '') !== expected.pinId
+        || String(receipt.mediaKind || '') !== 'audio') {
+      throw importItemError_('IMPORT_RECEIPT_CORRUPTED', 'audio completion owner changed.', false);
+    }
+    receipt.state = IMPORT_RECEIPT_STATES.COMPLETED;
+    receipt.leaseOwner = '';
+    receipt.leaseUntil = '';
+    receipt.updatedAt = getImportNow_().toISOString();
+    receipt.lastErrorCode = '';
+    writeImportReceipt_(receiptSheet, receipt);
+    return receipt;
+  });
+}
+
+function markImportAudioCleanupPending_(receiptSheet, expected, errorCode) {
+  try {
+    withImportReceiptLock_(function() {
+      const receipt = findImportReceipt_(receiptSheet, expected.idempotencyKeyHash);
+      if (!receipt
+          || String(receipt.payloadHash || '') !== expected.payloadHash
+          || String(receipt.pinId || '') !== expected.pinId
+          || String(receipt.mediaKind || '') !== 'audio') return;
+      receipt.state = IMPORT_RECEIPT_STATES.CLEANUP_PENDING;
+      receipt.leaseOwner = '';
+      receipt.leaseUntil = '';
+      receipt.updatedAt = getImportNow_().toISOString();
+      receipt.lastErrorCode = String(errorCode || 'IMPORT_AUDIO_CLEANUP_FAILED');
+      writeImportReceipt_(receiptSheet, receipt);
+    });
+  } catch (_error) {
+    // The linked map row remains authoritative if cleanup journaling is unavailable.
+  }
+}
+
+function runImportAudioCleanup_(receipt, structure) {
+  if (String(receipt.sourceDriveFileId || '')) {
+    archiveAudioDriveSourceIfPending_(String(receipt.sourceDriveFileId), structure);
+  }
+  if (String(receipt.cleanupFileId || '')) {
+    trashManagedAudioFileIfOwned_(String(receipt.cleanupFileId), structure);
+  }
+}
+
+function audioReceiptFileIsReferenced_(mapSheet, fileId) {
+  const targetId = String(fileId || '');
+  if (!targetId || mapSheet.getLastRow() < 2) return false;
+  return mapSheet.getRange(2, 16, mapSheet.getLastRow() - 1, 1).getValues().some(function(row) {
+    return String(row[0] || '') === targetId;
+  });
+}
+
+function compensateUnlinkedImportAudioFile_(receiptSheet, mapSheet, expected, driveResult, structure, errorCode) {
+  if (!driveResult || !driveResult.created || !driveResult.fileId) return false;
+  let owned = false;
+  try {
+    owned = withImportReceiptLock_(function() {
+      const receipt = findImportReceipt_(receiptSheet, expected.idempotencyKeyHash);
+      if (!receipt
+          || String(receipt.payloadHash || '') !== expected.payloadHash
+          || String(receipt.pinId || '') !== expected.pinId
+          || String(receipt.fileId || '') !== String(driveResult.fileId)
+          || String(receipt.mediaKind || '') !== 'audio'
+          || audioReceiptFileIsReferenced_(mapSheet, driveResult.fileId)) return false;
+      return true;
+    });
+  } catch (_error) {
+    return false;
+  }
+  if (!owned) return false;
+  try {
+    trashManagedAudioFileIfOwned_(String(driveResult.fileId), structure);
+  } catch (_error) {
+    return false;
+  }
+  try {
+    withImportReceiptLock_(function() {
+      const receipt = findImportReceipt_(receiptSheet, expected.idempotencyKeyHash);
+      if (!receipt || String(receipt.fileId || '') !== String(driveResult.fileId)
+          || audioReceiptFileIsReferenced_(mapSheet, driveResult.fileId)) return;
+      receipt.state = IMPORT_RECEIPT_STATES.FAILED;
+      receipt.fileId = '';
+      receipt.imageUrl = '';
+      receipt.folderUrl = '';
+      receipt.leaseOwner = '';
+      receipt.leaseUntil = '';
+      receipt.updatedAt = getImportNow_().toISOString();
+      receipt.lastErrorCode = String(errorCode || 'IMPORT_AUDIO_MAP_UPDATE_FAILED');
+      writeImportReceipt_(receiptSheet, receipt);
+    });
+  } catch (_error) {
+    return false;
+  }
+  return true;
+}
+
+function markImportAudioFailedIfUnlinked_(receiptSheet, mapSheet, expected, errorCode) {
+  try {
+    withImportReceiptLock_(function() {
+      const receipt = findImportReceipt_(receiptSheet, expected.idempotencyKeyHash);
+      if (!receipt
+          || String(receipt.payloadHash || '') !== expected.payloadHash
+          || String(receipt.pinId || '') !== expected.pinId
+          || String(receipt.mediaKind || '') !== 'audio') return;
+      if (receipt.fileId && audioReceiptFileIsReferenced_(mapSheet, receipt.fileId)) {
+        receipt.state = IMPORT_RECEIPT_STATES.CLEANUP_PENDING;
+      } else {
+        receipt.state = IMPORT_RECEIPT_STATES.FAILED;
+      }
+      receipt.leaseOwner = '';
+      receipt.leaseUntil = '';
+      receipt.updatedAt = getImportNow_().toISOString();
+      receipt.lastErrorCode = String(errorCode || 'IMPORT_ITEM_SAVE_FAILED');
+      writeImportReceipt_(receiptSheet, receipt);
+    });
+  } catch (_error) {
+    // Preserve the original safe failure if receipt journaling is unavailable.
+  }
+}
+
+function saveImportAudioItem(data) {
+  assertEditToken_(data);
+  let normalized;
+  let receiptSheet;
+  let mapSheet;
+  let expected = null;
+  let driveResult = null;
+  let structure = null;
+  let currentPin = null;
+  try {
+    normalized = normalizeImportAudioPayload_(data);
+    const payloadHash = hashImportAudioPayload_(normalized);
+    const preflightReceipt = inspectExistingImportReceiptForSave_(normalized.idempotencyKeyHash);
+    mapSheet = openMapInfoSheet_();
+    preflightImportAudioTarget_(mapSheet, normalized, preflightReceipt, payloadHash);
+    structure = audioStorageStructureForImport_();
+    if (normalized.sourceKind === 'drive'
+        && (!preflightReceipt || !String(preflightReceipt.fileId || ''))) {
+      validateAudioDriveSourceForImport_(normalized.sourceDriveFileId, structure);
+    }
+    receiptSheet = ensureImportReceiptSchemaForSave_();
+    const leaseOwner = Utilities.getUuid();
+    const claim = claimImportAudioReceipt_(
+      receiptSheet,
+      mapSheet,
+      normalized,
+      payloadHash,
+      leaseOwner,
+      String(structure.audio || '')
+    );
+    currentPin = claim.target ? mapInfoRowToPinResult_(claim.target.row, '') : claim.pin;
+    expected = {
+      idempotencyKeyHash: normalized.idempotencyKeyHash,
+      payloadHash: payloadHash,
+      pinId: String(claim.receipt.pinId || ''),
+      leaseOwner: leaseOwner
+    };
+    if (claim.completed) {
+      return {
+        ok: true,
+        deduplicated: true,
+        cleanupRequired: false,
+        pin: claim.pin
+      };
+    }
+    let linkedPin = claim.pin || null;
+    let cleanupReceipt = claim.receipt;
+    if (!claim.cleanup) {
+      driveResult = resolveManagedAudioFile_(claim.receipt, normalized, structure);
+      persistImportAudioFile_(receiptSheet, expected, driveResult);
+      const linked = finalizeImportAudioLink_(receiptSheet, mapSheet, expected, normalized);
+      linkedPin = linked.pin;
+      cleanupReceipt = linked.receipt;
+    }
+    try {
+      runImportAudioCleanup_(cleanupReceipt, structure);
+      completeImportAudioReceipt_(receiptSheet, expected);
+      return {
+        ok: true,
+        deduplicated: claim.deduplicated === true,
+        cleanupRequired: false,
+        pin: linkedPin
+      };
+    } catch (cleanupError) {
+      const cleanupCode = isImportItemError_(cleanupError)
+        ? String(cleanupError.code) : 'IMPORT_AUDIO_CLEANUP_FAILED';
+      markImportAudioCleanupPending_(receiptSheet, expected, cleanupCode);
+      return {
+        ok: true,
+        deduplicated: claim.deduplicated === true,
+        cleanupRequired: true,
+        pin: linkedPin
+      };
+    }
+  } catch (error) {
+    const code = isImportItemError_(error) ? String(error.code) : 'IMPORT_ITEM_SAVE_FAILED';
+    if (receiptSheet && mapSheet && expected && driveResult && structure) {
+      compensateUnlinkedImportAudioFile_(
+        receiptSheet, mapSheet, expected, driveResult, structure, code
+      );
+    }
+    if (receiptSheet && mapSheet && expected && code !== 'IMPORT_ITEM_LEASE_LOST') {
+      markImportAudioFailedIfUnlinked_(receiptSheet, mapSheet, expected, code);
+    }
+    const failure = importItemFailureFromError_(error);
+    if (normalized && normalized.operationMode === 'replace-existing-audio' && currentPin) {
+      failure.pin = currentPin;
+    }
+    return failure;
+  }
+}
+
+function normalizePinAudioMutationPayload_(data) {
+  const source = data || {};
+  if (!source || typeof source !== 'object' || Array.isArray(source)) {
+    throw importItemError_('INVALID_AUDIO_PAYLOAD', 'audio mutation payload is invalid.', false);
+  }
+  const pinId = normalizeImportIdentifier_(source.pinId, 'pinId', IMPORT_ITEM_ID_MAX_LENGTH);
+  if (typeof source.expectedUpdatedAt !== 'string'
+      || source.expectedUpdatedAt.length > 64
+      || /[\u0000-\u001f\u007f]/.test(source.expectedUpdatedAt)) {
+    throw importItemError_('INVALID_AUDIO_PAYLOAD', 'expectedUpdatedAt is invalid.', false);
+  }
+  return { pinId: pinId, expectedUpdatedAt: source.expectedUpdatedAt };
+}
+
+function audioCleanupOwnerDigest_(domain, value) {
+  return sha256Hex_(
+    '\u0000audio-cleanup-owner:' + String(domain || '') + ':' + String(value || '')
+  );
+}
+
+function audioCleanupFileDigest_(fileId) {
+  return audioCleanupOwnerDigest_('file', String(fileId || ''));
+}
+
+function audioCleanupJournalIdentity_(operationMode, pinId, ownerValue) {
+  const payload = {
+    kind: 'audio-cleanup',
+    operationMode: String(operationMode || ''),
+    pinId: String(pinId || ''),
+    ownerValue: String(ownerValue || '')
+  };
+  const payloadHash = sha256Hex_(JSON.stringify(payload));
+  return {
+    operationMode: payload.operationMode,
+    pinId: payload.pinId,
+    ownerValue: payload.ownerValue,
+    receiptJobId: 'audio-cleanup',
+    receiptItemId: payload.ownerValue,
+    payloadHash: payloadHash,
+    // External import identifiers reject NUL, so a client cannot generate this hash preimage.
+    idempotencyKeyHash: sha256Hex_('\u0000audio-cleanup-key:' + JSON.stringify(payload))
+  };
+}
+
+function newPinDeleteAudioCleanupIdentity_(pinId, cleanupFileId) {
+  const identity = audioCleanupJournalIdentity_(
+    'delete-pin-audio',
+    pinId,
+    audioCleanupOwnerDigest_('delete-attempt', Utilities.getUuid())
+  );
+  identity.receiptJobId = 'audio-cleanup-delete:' + audioCleanupFileDigest_(cleanupFileId);
+  return identity;
+}
+
+function pinDeleteAudioCleanupIdentityFromReceipt_(receipt) {
+  const pinId = String(receipt && receipt.targetPinId || '');
+  const cleanupFileId = String(receipt && receipt.cleanupFileId || '');
+  const ownerValue = String(receipt && receipt.itemId || '');
+  if (!pinId || !cleanupFileId || !/^[0-9a-f]{64}$/.test(ownerValue)) {
+    throw importItemError_('IMPORT_RECEIPT_CORRUPTED', 'audio cleanup generation is invalid.', false);
+  }
+  const identity = audioCleanupJournalIdentity_('delete-pin-audio', pinId, ownerValue);
+  identity.receiptJobId = 'audio-cleanup-delete:' + audioCleanupFileDigest_(cleanupFileId);
+  return identity;
+}
+
+function assertAudioCleanupJournal_(receipt, identity) {
+  if (!receipt
+      || String(receipt.payloadHash || '') !== identity.payloadHash
+      || String(receipt.mediaKind || '') !== 'audio'
+      || String(receipt.operationMode || '') !== identity.operationMode
+      || String(receipt.pinId || '') !== identity.pinId
+      || String(receipt.targetPinId || '') !== identity.pinId
+      || String(receipt.jobId || '') !== identity.receiptJobId
+      || String(receipt.itemId || '') !== identity.receiptItemId
+      || String(receipt.fileId || '') !== ''
+      || String(receipt.imageUrl || '') !== ''
+      || String(receipt.sourceDriveFileId || '') !== '') {
+    throw importItemError_('IMPORT_RECEIPT_CORRUPTED', 'audio cleanup journal changed.', false);
+  }
+  return receipt;
+}
+
+function findAudioCleanupJournal_(receiptSheet, identity) {
+  const receipt = findImportReceipt_(receiptSheet, identity.idempotencyKeyHash);
+  return receipt ? assertAudioCleanupJournal_(receipt, identity) : null;
+}
+
+function claimAudioCleanupJournal_(receiptSheet, identity, cleanupFileId) {
+  let receipt = findAudioCleanupJournal_(receiptSheet, identity);
+  const normalizedCleanupFileId = String(cleanupFileId || '');
+  if (receipt) {
+    if (normalizedCleanupFileId
+        && String(receipt.cleanupFileId || '') !== normalizedCleanupFileId) {
+      throw importItemError_('IMPORT_RECEIPT_CORRUPTED', 'audio cleanup target changed.', false);
+    }
+    return receipt;
+  }
+  if (!normalizedCleanupFileId) {
+    throw importItemError_('PIN_AUDIO_MISSING', 'audio cleanup target is missing.', false);
+  }
+  const now = getImportNow_().toISOString();
+  receipt = {
+    rowNumber: 0,
+    idempotencyKey: identity.idempotencyKeyHash,
+    jobId: identity.receiptJobId,
+    itemId: identity.receiptItemId,
+    payloadHash: identity.payloadHash,
+    state: IMPORT_RECEIPT_STATES.RESERVED,
+    leaseOwner: '', leaseUntil: '',
+    pinId: identity.pinId,
+    targetFolderId: '', tempFileName: '', fileId: '', imageUrl: '', folderUrl: '',
+    createdAt: now, updatedAt: now, lastErrorCode: '', sourceDriveFileId: '',
+    mediaKind: 'audio', operationMode: identity.operationMode,
+    targetPinId: identity.pinId, cleanupFileId: normalizedCleanupFileId
+  };
+  writeImportReceipt_(receiptSheet, receipt);
+  return receipt;
+}
+
+function markAudioCleanupJournalState_(receiptSheet, identity, state, errorCode) {
+  const receipt = findAudioCleanupJournal_(receiptSheet, identity);
+  if (!receipt) {
+    throw importItemError_('IMPORT_RECEIPT_CORRUPTED', 'audio cleanup journal is missing.', false);
+  }
+  receipt.state = state;
+  receipt.leaseOwner = '';
+  receipt.leaseUntil = '';
+  receipt.updatedAt = getImportNow_().toISOString();
+  receipt.lastErrorCode = String(errorCode || '');
+  writeImportReceipt_(receiptSheet, receipt);
+  return receipt;
+}
+
+function commitRemovePinAudio_(receiptSheet, mapSheet, normalized, identity) {
+  return withImportReceiptLock_(function() {
+    const target = findMapInfoRowByPinId_(mapSheet, normalized.pinId);
+    if (!target) {
+      throw importItemError_('PIN_AUDIO_TARGET_NOT_FOUND', 'audio target is missing.', false);
+    }
+    const currentAudioId = String(target.row[15] || '');
+    let journal = findAudioCleanupJournal_(receiptSheet, identity);
+    if (journal && currentAudioId
+        && currentAudioId !== String(journal.cleanupFileId || '')) {
+      if (String(journal.state || '') !== IMPORT_RECEIPT_STATES.COMPLETED) {
+        journal = markAudioCleanupJournalState_(
+          receiptSheet,
+          identity,
+          IMPORT_RECEIPT_STATES.CLEANUP_PENDING,
+          ''
+        );
+      }
+      return { journal: journal, pin: mapInfoRowToPinResult_(target.row, '') };
+    }
+    if (currentAudioId) {
+      if (String(target.row[13] || '') !== normalized.expectedUpdatedAt) {
+        throw importItemError_('PIN_AUDIO_CONFLICT', 'audio target was updated.', false);
+      }
+      journal = claimAudioCleanupJournal_(receiptSheet, identity, currentAudioId);
+      mapSheet.getRange(target.rowNumber, 16, 1, 1).setValue('');
+      target.row[15] = '';
+    } else if (!journal) {
+      throw importItemError_('PIN_AUDIO_MISSING', 'audio target has no audio.', false);
+    }
+    if (String(target.row[13] || '') === normalized.expectedUpdatedAt) {
+      const updatedAt = currentUpdatedAt_();
+      mapSheet.getRange(target.rowNumber, 14, 1, 1).setValue(updatedAt);
+      target.row[13] = updatedAt;
+    }
+    if (String(journal.state || '') !== IMPORT_RECEIPT_STATES.COMPLETED) {
+      journal = markAudioCleanupJournalState_(
+        receiptSheet,
+        identity,
+        IMPORT_RECEIPT_STATES.CLEANUP_PENDING,
+        ''
+      );
+    }
+    return { journal: journal, pin: mapInfoRowToPinResult_(target.row, '') };
+  });
+}
+
+function drainAudioCleanupJournal_(receiptSheet, identity, structure) {
+  let receipt = findAudioCleanupJournal_(receiptSheet, identity);
+  if (!receipt || String(receipt.state || '') === IMPORT_RECEIPT_STATES.COMPLETED) {
+    return { cleanupRequired: false, receipt: receipt };
+  }
+  try {
+    trashManagedAudioFileIfOwned_(String(receipt.cleanupFileId || ''), structure);
+  } catch (_error) {
+    try {
+      withImportReceiptLock_(function() {
+        markAudioCleanupJournalState_(
+          receiptSheet,
+          identity,
+          IMPORT_RECEIPT_STATES.CLEANUP_PENDING,
+          'IMPORT_AUDIO_CLEANUP_FAILED'
+        );
+      });
+    } catch (_journalError) {
+      // The existing cleanup journal remains authoritative for replay.
+    }
+    return { cleanupRequired: true, receipt: receipt };
+  }
+  receipt = withImportReceiptLock_(function() {
+    return markAudioCleanupJournalState_(
+      receiptSheet,
+      identity,
+      IMPORT_RECEIPT_STATES.COMPLETED,
+      ''
+    );
+  });
+  return { cleanupRequired: false, receipt: receipt };
+}
+
+function preparePinDeleteAudioCleanup_(snapshots, requestedPinIds) {
+  if (typeof audioStorageStructureForImport_ !== 'function'
+      || typeof trashManagedAudioFileIfOwned_ !== 'function') return null;
+  const audioByPinId = Object.create(null);
+  (snapshots || []).forEach(function(snapshot) {
+    if (snapshot && snapshot.pinId) {
+      audioByPinId[String(snapshot.pinId)] = String(snapshot.audioId || '');
+    }
+  });
+  const requestedIds = normalizePinDeleteRequestIds_(requestedPinIds);
+  const requestedIdSet = Object.create(null);
+  requestedIds.forEach(function(pinId) { requestedIdSet[pinId] = true; });
+  const entries = requestedIds.map(function(pinId) {
+    return {
+      pinId: pinId,
+      pendingJournals: [],
+      completedJournals: [],
+      hadJournal: false
+    };
+  });
+  const byPinId = Object.create(null);
+  entries.forEach(function(entry) { byPinId[entry.pinId] = entry; });
+  let hasWork = requestedIds.some(function(pinId) { return !!audioByPinId[pinId]; });
+  const spreadsheet = openDataSpreadsheet_();
+  const inspection = inspectImportReceiptSchemaForSave_(
+    spreadsheet.getSheetByName(IMPORT_RECEIPTS_SHEET_NAME)
+  );
+  if (inspection.state === 'corrupted') {
+    throw importItemError_('IMPORT_RECEIPT_CORRUPTED', 'receipt headers are invalid.', false);
+  }
+  if (inspection.state === 'current' && inspection.sheet.getLastRow() >= 2) {
+    inspection.sheet.getRange(
+      2, 1, inspection.sheet.getLastRow() - 1, IMPORT_RECEIPT_COLUMN_COUNT
+    ).getValues().forEach(function(row, index) {
+      const receipt = importReceiptFromRow_(row, index + 2);
+      if (String(receipt.mediaKind || '') !== 'audio'
+          || String(receipt.operationMode || '') !== 'delete-pin-audio'
+          || !requestedIdSet[String(receipt.targetPinId || '')]) return;
+      const identity = pinDeleteAudioCleanupIdentityFromReceipt_(receipt);
+      assertAudioCleanupJournal_(receipt, identity);
+      const entry = byPinId[identity.pinId];
+      const journal = { identity: identity, receipt: receipt };
+      if (String(receipt.state || '') === IMPORT_RECEIPT_STATES.COMPLETED) {
+        entry.completedJournals.push(journal);
+        if (!Object.prototype.hasOwnProperty.call(audioByPinId, identity.pinId)) {
+          entry.hadJournal = true;
+        }
+      } else {
+        entry.pendingJournals.push(journal);
+        entry.hadJournal = true;
+        hasWork = true;
+      }
+    });
+  }
+  const hasReplayEvidence = entries.some(function(entry) {
+    return entry.completedJournals.length > 0
+      && !Object.prototype.hasOwnProperty.call(audioByPinId, entry.pinId);
+  });
+  const canDiscoverCurrentAudio = (snapshots || []).length > 0;
+  if (!hasWork && !hasReplayEvidence && !canDiscoverCurrentAudio) return null;
+  const structure = hasWork ? audioStorageStructureForImport_() : null;
+  const receiptSheet = (hasWork || canDiscoverCurrentAudio)
+    ? ensureImportReceiptSchemaForSave_()
+    : inspection.sheet;
+  return {
+    structure: structure,
+    receiptSheet: receiptSheet,
+    entries: entries,
+    byPinId: byPinId
+  };
+}
+
+function claimPinDeleteAudioCleanup_(preparation, pinId, cleanupFileId) {
+  if (!preparation || !preparation.receiptSheet) return null;
+  const entry = preparation.byPinId[String(pinId || '')];
+  if (!entry) return null;
+  const cleanupDigest = audioCleanupFileDigest_(cleanupFileId);
+  let journal = entry.pendingJournals.find(function(candidate) {
+    return candidate.identity.receiptJobId === 'audio-cleanup-delete:' + cleanupDigest;
+  }) || null;
+  const identity = journal
+    ? journal.identity
+    : newPinDeleteAudioCleanupIdentity_(String(pinId || ''), cleanupFileId);
+  const receipt = claimAudioCleanupJournal_(
+    preparation.receiptSheet,
+    identity,
+    cleanupFileId
+  );
+  journal = { identity: identity, receipt: receipt };
+  if (!entry.pendingJournals.some(function(candidate) {
+    return candidate.identity.idempotencyKeyHash === identity.idempotencyKeyHash;
+  })) {
+    entry.pendingJournals.push(journal);
+  }
+  entry.hadJournal = true;
+  return journal;
+}
+
+function stagePinDeleteAudioCleanup_(preparation, journal) {
+  if (!preparation || !journal) return null;
+  journal.receipt = markAudioCleanupJournalState_(
+    preparation.receiptSheet,
+    journal.identity,
+    IMPORT_RECEIPT_STATES.CLEANUP_PENDING,
+    ''
+  );
+  return journal;
+}
+
+function reconcilePinDeleteAudioCleanup_(preparation, identity) {
+  if (!preparation || !identity) return false;
+  return withImportReceiptLock_(function() {
+    const receipt = findAudioCleanupJournal_(preparation.receiptSheet, identity);
+    if (!receipt || String(receipt.state || '') === IMPORT_RECEIPT_STATES.COMPLETED) return !!receipt;
+    const target = findMapInfoRowByPinId_(openMapInfoSheet_(), identity.pinId);
+    if (target && String(target.row[15] || '') === String(receipt.cleanupFileId || '')) {
+      return false;
+    }
+    markAudioCleanupJournalState_(
+      preparation.receiptSheet,
+      identity,
+      IMPORT_RECEIPT_STATES.CLEANUP_PENDING,
+      ''
+    );
+    return true;
+  });
+}
+
+function drainPreparedPinDeleteAudioCleanup_(preparation, identities) {
+  if (!preparation) return { cleanupRequired: false, attempted: false };
+  const unique = Object.create(null);
+  const queue = [];
+  (identities || []).concat([].concat.apply([], preparation.entries.map(function(entry) {
+    return entry.pendingJournals.map(function(journal) { return journal.identity; });
+  }))).forEach(function(identity) {
+    if (!identity || unique[identity.idempotencyKeyHash]) return;
+    unique[identity.idempotencyKeyHash] = true;
+    queue.push(identity);
+  });
+  let cleanupRequired = false;
+  let attempted = false;
+  queue.forEach(function(identity) {
+    let ready = false;
+    try {
+      ready = reconcilePinDeleteAudioCleanup_(preparation, identity);
+    } catch (_error) {
+      cleanupRequired = true;
+      return;
+    }
+    if (!ready) return;
+    attempted = true;
+    if (!preparation.structure) {
+      try {
+        preparation.structure = audioStorageStructureForImport_();
+      } catch (_error) {
+        cleanupRequired = true;
+        return;
+      }
+    }
+    const result = drainAudioCleanupJournal_(
+      preparation.receiptSheet,
+      identity,
+      preparation.structure
+    );
+    if (result.cleanupRequired) cleanupRequired = true;
+  });
+  return { cleanupRequired: cleanupRequired, attempted: attempted };
+}
+
+function preflightPinAudioMutation_(mapSheet, normalized) {
+  const target = findMapInfoRowByPinId_(mapSheet, normalized.pinId);
+  if (!target) {
+    throw importItemError_('PIN_AUDIO_TARGET_NOT_FOUND', 'audio target is missing.', false);
+  }
+  if (String(target.row[13] || '') !== normalized.expectedUpdatedAt) {
+    throw importItemError_('PIN_AUDIO_CONFLICT', 'audio target was updated.', false);
+  }
+  if (!String(target.row[15] || '')) {
+    throw importItemError_('PIN_AUDIO_MISSING', 'audio target has no audio.', false);
+  }
+  return target;
+}
+
+function removePinAudio(data) {
+  assertEditToken_(data);
+  try {
+    const normalized = normalizePinAudioMutationPayload_(data);
+    const mapSheet = openMapInfoSheet_();
+    const identity = audioCleanupJournalIdentity_(
+      'remove-pin-audio',
+      normalized.pinId,
+      audioCleanupOwnerDigest_('remove-request', normalized.expectedUpdatedAt)
+    );
+    const preflightReceipt = inspectExistingImportReceiptForSave_(identity.idempotencyKeyHash);
+    if (preflightReceipt) {
+      assertAudioCleanupJournal_(preflightReceipt, identity);
+    } else {
+      preflightPinAudioMutation_(mapSheet, normalized);
+    }
+    const structure = audioStorageStructureForImport_();
+    const receiptSheet = ensureImportReceiptSchemaForSave_();
+    let mutation;
+    try {
+      mutation = commitRemovePinAudio_(receiptSheet, mapSheet, normalized, identity);
+    } catch (error) {
+      if (!findAudioCleanupJournal_(receiptSheet, identity)) throw error;
+      mutation = commitRemovePinAudio_(receiptSheet, mapSheet, normalized, identity);
+    }
+    const cleanup = drainAudioCleanupJournal_(receiptSheet, identity, structure);
+    return { ok: true, cleanupRequired: cleanup.cleanupRequired, pin: mutation.pin };
+  } catch (error) {
+    return importItemFailureFromError_(error);
   }
 }
 
@@ -7042,11 +8596,12 @@ function duplicatePin(data) {
     PinData.serializeTags(tags),
     eventAt,
     now,
-    icon
+    icon,
+    ''
   ];
   sheet.appendRow(row);
 
-  const pin = PinData.rowToPin(row);
+  const pin = toClientPin_(PinData.rowToPin(row));
   pin.folderUrl = '';
   return { ok: true, pin: pin };
 }
@@ -7433,6 +8988,7 @@ function buildPinDeleteSnapshots_(rows, requestedIds) {
     snapshots.push({
       pinId: pinId,
       fileId: String(row[6] || ''),
+      audioId: String(row[15] || ''),
       originalRowNumber: rowIndex + 1
     });
   }
@@ -7527,6 +9083,7 @@ function indexCurrentPinDeleteRows_(rows) {
     byId[pinId] = {
       pinId: pinId,
       fileId: String(row[6] || ''),
+      audioId: String(row[15] || ''),
       rowNumber: rowIndex + 1
     };
   }
@@ -7564,20 +9121,42 @@ function deletePin(data) {
   const sheet = openMapInfoSheet_();
   const rows = sheet.getDataRange().getValues();
   const snapshots = buildPinDeleteSnapshots_(rows, [data.id]);
+  let audioCleanupPreparation = null;
+  try {
+    audioCleanupPreparation = preparePinDeleteAudioCleanup_(snapshots, [data.id]);
+  } catch (error) {
+    return importItemFailureFromError_(error);
+  }
   if (snapshots.length === 0) {
     const missingPinId = String(data.id);
-    return withSpreadsheetMutationLock_(function() {
-      const currentRows = sheet.getDataRange().getValues();
-      const currentById = indexCurrentPinDeleteRows_(currentRows);
-      if (currentById[missingPinId]) {
-        logPinDeleteStage_(missingPinId, 'appeared_after_snapshot');
-        return { ok: false, error: PIN_DELETE_CONFLICT_ERROR };
-      }
-      deletePinRelationsAndCaches_([missingPinId]);
-      return { ok: false, error: 'id not found' };
-    });
+    let missingResult;
+    let missingError = null;
+    try {
+      missingResult = withSpreadsheetMutationLock_(function() {
+        const currentRows = sheet.getDataRange().getValues();
+        const currentById = indexCurrentPinDeleteRows_(currentRows);
+        if (currentById[missingPinId]) {
+          logPinDeleteStage_(missingPinId, 'appeared_after_snapshot');
+          return { ok: false, error: PIN_DELETE_CONFLICT_ERROR };
+        }
+        deletePinRelationsAndCaches_([missingPinId]);
+        return { ok: false, error: 'id not found' };
+      });
+    } catch (error) {
+      missingError = error;
+    }
+    const missingDrain = drainPreparedPinDeleteAudioCleanup_(audioCleanupPreparation, []);
+    const hadJournal = !!(audioCleanupPreparation
+      && audioCleanupPreparation.entries.some(function(entry) { return entry.hadJournal; }));
+    if (missingError) throw missingError;
+    if (hadJournal && missingResult && missingResult.error !== SPREADSHEET_MUTATION_BUSY_ERROR) {
+      missingResult = { ok: true, cleanupRequired: missingDrain.cleanupRequired };
+    }
+    return missingResult;
   }
   const snapshot = snapshots[0];
+  let deletedAudioId = '';
+  const audioCleanupIdentities = [];
   const sourceProtection = inspectDriveImportSourceProtection_(snapshots);
 
   if (snapshot.fileId
@@ -7590,26 +9169,65 @@ function deletePin(data) {
     }
   }
 
-  const result = withSpreadsheetMutationLock_(function() {
-    const currentRows = sheet.getDataRange().getValues();
-    const currentById = indexCurrentPinDeleteRows_(currentRows);
-    const current = currentById[snapshot.pinId];
-    if (!current) {
+  let result;
+  let mutationError = null;
+  try {
+    result = withSpreadsheetMutationLock_(function() {
+      const currentRows = sheet.getDataRange().getValues();
+      const currentById = indexCurrentPinDeleteRows_(currentRows);
+      const current = currentById[snapshot.pinId];
+      if (!current) {
+        deletePinRelationsAndCaches_([snapshot.pinId]);
+        return { ok: true };
+      }
+      if (current.fileId !== snapshot.fileId) {
+        logPinDeleteStage_(snapshot.pinId, 'file_id_conflict');
+        return { ok: false, error: PIN_DELETE_CONFLICT_ERROR };
+      }
+
+      let audioJournal = null;
+      if (current.audioId && audioCleanupPreparation) {
+        audioJournal = claimPinDeleteAudioCleanup_(
+          audioCleanupPreparation,
+          current.pinId,
+          current.audioId
+        );
+        audioCleanupIdentities.push(audioJournal.identity);
+      } else {
+        deletedAudioId = current.audioId;
+      }
+      sheet.deleteRow(current.rowNumber);
+      if (audioJournal) stagePinDeleteAudioCleanup_(audioCleanupPreparation, audioJournal);
       deletePinRelationsAndCaches_([snapshot.pinId]);
       return { ok: true };
-    }
-    if (current.fileId !== snapshot.fileId) {
-      logPinDeleteStage_(snapshot.pinId, 'file_id_conflict');
-      return { ok: false, error: PIN_DELETE_CONFLICT_ERROR };
-    }
-
-    sheet.deleteRow(current.rowNumber);
-    deletePinRelationsAndCaches_([snapshot.pinId]);
-    return { ok: true };
-  });
+    });
+  } catch (error) {
+    mutationError = error;
+  }
   if (result && result.error === SPREADSHEET_MUTATION_BUSY_ERROR) {
     logDriveSuccessesAfterLockFailure_([snapshot]);
   }
+  const journalDrain = drainPreparedPinDeleteAudioCleanup_(
+    audioCleanupPreparation,
+    audioCleanupIdentities
+  );
+  if (result && result.ok && deletedAudioId
+      && typeof audioStorageStructureForImport_ === 'function'
+      && typeof trashManagedAudioFileIfOwned_ === 'function') {
+    try {
+      const structure = audioStorageStructureForImport_();
+      trashManagedAudioFileIfOwned_(deletedAudioId, structure);
+      result.cleanupRequired = false;
+    } catch (_error) {
+      result.cleanupRequired = true;
+    }
+  }
+  const hadAudioCleanupJournal = !!(audioCleanupPreparation
+    && audioCleanupPreparation.entries.some(function(entry) { return entry.hadJournal; }));
+  if (result && result.ok && hadAudioCleanupJournal) {
+    result.cleanupRequired = journalDrain.cleanupRequired;
+  }
+  if (mutationError) throw mutationError;
   return result;
 }
 
@@ -7624,8 +9242,16 @@ function bulkDeletePins(data) {
   const requestedPinIds = normalizePinDeleteRequestIds_(data.ids);
   const requestedPinIdSet = new Set(requestedPinIds);
   const snapshots = buildPinDeleteSnapshots_(rows, data.ids);
+  let audioCleanupPreparation = null;
+  try {
+    audioCleanupPreparation = preparePinDeleteAudioCleanup_(snapshots, requestedPinIds);
+  } catch (error) {
+    return importItemFailureFromError_(error);
+  }
   const sourceProtection = inspectDriveImportSourceProtection_(snapshots);
   const driveSuccessfulSnapshots = [];
+  const deletedAudioSnapshots = [];
+  const audioCleanupIdentities = [];
   const failedIdSet = {};
   const driveFileResults = Object.create(null);
 
@@ -7666,59 +9292,112 @@ function bulkDeletePins(data) {
     };
   }
 
-  const result = withSpreadsheetMutationLock_(function() {
-    const currentRows = sheet.getDataRange().getValues();
-    const currentById = indexCurrentPinDeleteRows_(currentRows);
-    const currentEntries = [];
-    driveSuccessfulSnapshots.forEach(function(snapshot) {
-      const current = currentById[snapshot.pinId];
-      if (!current) return;
-      if (current.fileId !== snapshot.fileId) {
-        failedIdSet[snapshot.pinId] = true;
-        logPinDeleteStage_(snapshot.pinId, 'file_id_conflict');
-        return;
-      }
-      currentEntries.push({
-        pinId: snapshot.pinId,
-        fileId: current.fileId,
-        rowNumber: current.rowNumber
-      });
-    });
-    const deletedIds = [];
-
-    groupContiguousPinDeleteRows_(currentEntries).forEach(function(run) {
-      try {
-        sheet.deleteRows(run.startRow, run.entries.length);
-        run.entries.forEach(function(entry) { deletedIds.push(entry.pinId); });
-      } catch (_error) {
-        run.entries.forEach(function(entry) {
-          failedIdSet[entry.pinId] = true;
-          logPinDeleteStage_(entry.pinId, 'spreadsheet_delete_failed');
+  let result;
+  let mutationError = null;
+  try {
+    result = withSpreadsheetMutationLock_(function() {
+      const currentRows = sheet.getDataRange().getValues();
+      const currentById = indexCurrentPinDeleteRows_(currentRows);
+      const currentEntries = [];
+      driveSuccessfulSnapshots.forEach(function(snapshot) {
+        const current = currentById[snapshot.pinId];
+        if (!current) return;
+        if (current.fileId !== snapshot.fileId) {
+          failedIdSet[snapshot.pinId] = true;
+          logPinDeleteStage_(snapshot.pinId, 'file_id_conflict');
+          return;
+        }
+        let audioJournal = null;
+        if (current.audioId && audioCleanupPreparation) {
+          audioJournal = claimPinDeleteAudioCleanup_(
+            audioCleanupPreparation,
+            current.pinId,
+            current.audioId
+          );
+          audioCleanupIdentities.push(audioJournal.identity);
+        }
+        currentEntries.push({
+          pinId: snapshot.pinId,
+          fileId: current.fileId,
+          audioId: current.audioId,
+          audioJournal: audioJournal,
+          rowNumber: current.rowNumber
         });
-      }
-    });
+      });
+      const deletedIds = [];
 
-    const cleanupIds = deletedIds.slice();
-    requestedPinIds.forEach(function(pinId) {
-      if (!currentById[pinId] && cleanupIds.indexOf(pinId) === -1) {
-        cleanupIds.push(pinId);
-      }
-    });
-    if (cleanupIds.length > 0) {
-      deletePinRelationsAndCaches_(cleanupIds);
-    }
+      groupContiguousPinDeleteRows_(currentEntries).forEach(function(run) {
+        try {
+          sheet.deleteRows(run.startRow, run.entries.length);
+        } catch (_error) {
+          run.entries.forEach(function(entry) {
+            failedIdSet[entry.pinId] = true;
+            logPinDeleteStage_(entry.pinId, 'spreadsheet_delete_failed');
+          });
+          return;
+        }
+        run.entries.forEach(function(entry) {
+          deletedIds.push(entry.pinId);
+          if (entry.audioJournal) {
+            stagePinDeleteAudioCleanup_(audioCleanupPreparation, entry.audioJournal);
+          } else if (entry.audioId) {
+            deletedAudioSnapshots.push(entry);
+          }
+        });
+      });
 
-    return {
-      ok: true,
-      deletedCount: deletedIds.length,
-      failedIds: snapshots.filter(function(snapshot) {
-        return failedIdSet[snapshot.pinId];
-      }).map(function(snapshot) { return snapshot.pinId; })
-    };
-  });
+      const cleanupIds = deletedIds.slice();
+      requestedPinIds.forEach(function(pinId) {
+        if (!currentById[pinId] && cleanupIds.indexOf(pinId) === -1) {
+          cleanupIds.push(pinId);
+        }
+      });
+      if (cleanupIds.length > 0) {
+        deletePinRelationsAndCaches_(cleanupIds);
+      }
+
+      return {
+        ok: true,
+        deletedCount: deletedIds.length,
+        failedIds: snapshots.filter(function(snapshot) {
+          return failedIdSet[snapshot.pinId];
+        }).map(function(snapshot) { return snapshot.pinId; })
+      };
+    });
+  } catch (error) {
+    mutationError = error;
+  }
   if (result && result.error === SPREADSHEET_MUTATION_BUSY_ERROR) {
     logDriveSuccessesAfterLockFailure_(driveSuccessfulSnapshots);
   }
+  const journalDrain = drainPreparedPinDeleteAudioCleanup_(
+    audioCleanupPreparation,
+    audioCleanupIdentities
+  );
+  if (result && result.ok && deletedAudioSnapshots.length
+      && typeof audioStorageStructureForImport_ === 'function'
+      && typeof trashManagedAudioFileIfOwned_ === 'function') {
+    let cleanupRequired = false;
+    try {
+      const structure = audioStorageStructureForImport_();
+      deletedAudioSnapshots.forEach(function(snapshot) {
+        try {
+          trashManagedAudioFileIfOwned_(snapshot.audioId, structure);
+        } catch (_error) {
+          cleanupRequired = true;
+        }
+      });
+    } catch (_error) {
+      cleanupRequired = true;
+    }
+    result.cleanupRequired = cleanupRequired;
+  }
+  const hadAudioCleanupJournal = !!(audioCleanupPreparation
+    && audioCleanupPreparation.entries.some(function(entry) { return entry.hadJournal; }));
+  if (result && result.ok && hadAudioCleanupJournal) {
+    result.cleanupRequired = journalDrain.cleanupRequired;
+  }
+  if (mutationError) throw mutationError;
   return result;
 }
 
@@ -7903,4 +9582,803 @@ if (typeof module !== 'undefined' && module.exports) {
     testRouteCRUD: testRouteCRUD,
     setupSheet: setupSheet
   };
+}
+
+var MEDIA_DRIVE_NAMES = Object.freeze({
+  photos: 'photos',
+  audio: 'audio',
+  original: 'original',
+  guide: 'ここに直接ファイルを入れてください.txt'
+});
+var DRIVE_AUDIO_MAX_BYTES = 15 * 1024 * 1024;
+var MANAGED_AUDIO_MIN_BYTES = 1024;
+var MANAGED_AUDIO_MAX_BYTES = 4 * 1024 * 1024;
+
+var DRIVE_MEDIA_ERROR_MESSAGES = Object.freeze({
+  DRIVE_MEDIA_ACCESS_DENIED: 'Driveメディアの取込権限を確認してください。',
+  DRIVE_MEDIA_ROOT_MISSING: 'Driveメディアの取込元フォルダが設定されていません。',
+  DRIVE_MEDIA_KIND_INVALID: 'Driveメディアの種類を確認してください。',
+  DRIVE_MEDIA_STRUCTURE_AMBIGUOUS: 'Driveメディアの保存先に同名フォルダまたは案内ファイルが複数あります。',
+  DRIVE_MEDIA_STRUCTURE_NAME_CONFLICT: 'Driveメディアの保存先に同名の項目があります。',
+  DRIVE_MEDIA_STRUCTURE_PARENT_INVALID: 'Driveメディアの保存先階層を確認してください。',
+  DRIVE_MEDIA_STRUCTURE_FAILED: 'Driveメディアの保存先を準備できませんでした。',
+  DRIVE_MEDIA_INBOX_READ_FAILED: 'Driveメディアの一覧を取得できませんでした。',
+  DRIVE_MEDIA_INBOX_TOO_LARGE: '取込Inboxの項目数が多すぎます。',
+  DRIVE_AUDIO_FILE_ID_INVALID: 'Driveの音声を確認してください。',
+  DRIVE_AUDIO_FILE_NOT_FOUND: 'Driveの音声を開けませんでした。',
+  DRIVE_AUDIO_FILE_OUTSIDE_INBOX: 'このDrive音声は取込Inboxの直下にありません。',
+  DRIVE_AUDIO_FILE_TYPE_UNSUPPORTED: '対応していない音声形式です。',
+  DRIVE_AUDIO_FILE_EMPTY: '空の音声ファイルは取り込めません。',
+  DRIVE_AUDIO_FILE_TOO_LARGE: '音声ファイルは15MB以内にしてください。',
+  DRIVE_AUDIO_FILE_READ_FAILED: 'Driveの音声を読み込めませんでした。'
+});
+
+function mediaDriveHasOwn_(value, key) {
+  return !!value && Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function mediaDriveError_(code) {
+  var error = new Error(code);
+  error.code = code;
+  return error;
+}
+
+function mediaDriveFailure_(code) {
+  var safeCode = mediaDriveHasOwn_(DRIVE_MEDIA_ERROR_MESSAGES, code)
+    ? code : 'DRIVE_MEDIA_STRUCTURE_FAILED';
+  return {
+    ok: false,
+    errorCode: safeCode,
+    error: DRIVE_MEDIA_ERROR_MESSAGES[safeCode]
+  };
+}
+
+function mediaDriveFailureFromError_(error, fallbackCode) {
+  var code = fallbackCode;
+  try {
+    if (error && mediaDriveHasOwn_(error, 'code')
+        && mediaDriveHasOwn_(DRIVE_MEDIA_ERROR_MESSAGES, error.code)) {
+      code = error.code;
+    }
+  } catch (_error) {
+    code = fallbackCode;
+  }
+  return mediaDriveFailure_(code);
+}
+
+function assertMediaDriveEditToken_(payload) {
+  try {
+    assertEditToken_(payload);
+  } catch (_error) {
+    throw mediaDriveError_('DRIVE_MEDIA_ACCESS_DENIED');
+  }
+}
+
+function getMediaDriveRootId_() {
+  var rootFolderId = getRootFolderId_();
+  if (!isValidDrivePhotoImportId_(rootFolderId)) {
+    throw mediaDriveError_('DRIVE_MEDIA_ROOT_MISSING');
+  }
+  return String(rootFolderId);
+}
+
+function mediaDriveDirectParentIds_(item) {
+  var ids = [];
+  var parents = item.getParents();
+  while (parents.hasNext()) ids.push(String(parents.next().getId()));
+  return ids;
+}
+
+function mediaDriveIsExactDirectChild_(item, parentId) {
+  var ids = mediaDriveDirectParentIds_(item);
+  return ids.length === 1 && ids[0] === String(parentId);
+}
+
+function mediaDriveIsActive_(item) {
+  return !!item && typeof item.isTrashed === 'function' && !item.isTrashed();
+}
+
+function mediaDriveInspectFolder_(parent, name) {
+  var parentId = String(parent.getId());
+  var fileMatches = [];
+  var files = parent.getFiles();
+  while (files.hasNext()) {
+    var file = files.next();
+    if (!mediaDriveIsActive_(file) || String(file.getName()) !== name) continue;
+    if (!mediaDriveIsExactDirectChild_(file, parentId)) {
+      throw mediaDriveError_('DRIVE_MEDIA_STRUCTURE_PARENT_INVALID');
+    }
+    fileMatches.push(file);
+  }
+  if (fileMatches.length) throw mediaDriveError_('DRIVE_MEDIA_STRUCTURE_NAME_CONFLICT');
+
+  var matches = [];
+  var folders = parent.getFolders();
+  while (folders.hasNext()) {
+    var folder = folders.next();
+    if (!mediaDriveIsActive_(folder) || String(folder.getName()) !== name) continue;
+    if (!mediaDriveIsExactDirectChild_(folder, parentId)) {
+      throw mediaDriveError_('DRIVE_MEDIA_STRUCTURE_PARENT_INVALID');
+    }
+    matches.push(folder);
+    if (matches.length > 1) throw mediaDriveError_('DRIVE_MEDIA_STRUCTURE_AMBIGUOUS');
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function mediaDriveCreateFolder_(parent, name) {
+  var parentId = String(parent.getId());
+  var created = parent.createFolder(name);
+  if (!mediaDriveIsActive_(created)
+      || String(created.getName()) !== name
+      || !isValidDrivePhotoImportId_(String(created.getId()))
+      || !mediaDriveIsExactDirectChild_(created, parentId)) {
+    throw mediaDriveError_('DRIVE_MEDIA_STRUCTURE_PARENT_INVALID');
+  }
+  return created;
+}
+
+function mediaDriveInspectGuide_(rootFolder) {
+  var rootId = String(rootFolder.getId());
+  var folderMatches = [];
+  var folders = rootFolder.getFolders();
+  while (folders.hasNext()) {
+    var folder = folders.next();
+    if (mediaDriveIsActive_(folder) && String(folder.getName()) === MEDIA_DRIVE_NAMES.guide) {
+      folderMatches.push(folder);
+    }
+  }
+  if (folderMatches.length) throw mediaDriveError_('DRIVE_MEDIA_STRUCTURE_NAME_CONFLICT');
+
+  var matches = [];
+  var files = rootFolder.getFilesByName(MEDIA_DRIVE_NAMES.guide);
+  while (files.hasNext()) {
+    var file = files.next();
+    if (!mediaDriveIsActive_(file)) continue;
+    if (!mediaDriveIsExactDirectChild_(file, rootId)) {
+      throw mediaDriveError_('DRIVE_MEDIA_STRUCTURE_PARENT_INVALID');
+    }
+    matches.push(file);
+    if (matches.length > 1) throw mediaDriveError_('DRIVE_MEDIA_STRUCTURE_AMBIGUOUS');
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function mediaDriveCreateGuide_(rootFolder) {
+  var rootId = String(rootFolder.getId());
+  var blob = Utilities.newBlob([], 'text/plain', MEDIA_DRIVE_NAMES.guide);
+  var created = rootFolder.createFile(blob);
+  if (!mediaDriveIsActive_(created)
+      || String(created.getName()) !== MEDIA_DRIVE_NAMES.guide
+      || !mediaDriveIsExactDirectChild_(created, rootId)) {
+    throw mediaDriveError_('DRIVE_MEDIA_STRUCTURE_PARENT_INVALID');
+  }
+  return created;
+}
+
+function mediaDriveInspectStructure_(rootFolder) {
+  var photosFolder = mediaDriveInspectFolder_(rootFolder, MEDIA_DRIVE_NAMES.photos);
+  var audioFolder = mediaDriveInspectFolder_(rootFolder, MEDIA_DRIVE_NAMES.audio);
+  var originalFolder = mediaDriveInspectFolder_(rootFolder, MEDIA_DRIVE_NAMES.original);
+  var guideFile = mediaDriveInspectGuide_(rootFolder);
+  var originalPhotosFolder = null;
+  var originalAudioFolder = null;
+  if (originalFolder) {
+    originalPhotosFolder = mediaDriveInspectFolder_(originalFolder, MEDIA_DRIVE_NAMES.photos);
+    originalAudioFolder = mediaDriveInspectFolder_(originalFolder, MEDIA_DRIVE_NAMES.audio);
+  }
+  return {
+    photosFolder: photosFolder,
+    audioFolder: audioFolder,
+    originalFolder: originalFolder,
+    originalPhotosFolder: originalPhotosFolder,
+    originalAudioFolder: originalAudioFolder,
+    guideFile: guideFile
+  };
+}
+
+function mediaDriveCreateMissingStructure_(rootFolder, inspected) {
+  var photosFolder = inspected.photosFolder
+    || mediaDriveCreateFolder_(rootFolder, MEDIA_DRIVE_NAMES.photos);
+  var audioFolder = inspected.audioFolder
+    || mediaDriveCreateFolder_(rootFolder, MEDIA_DRIVE_NAMES.audio);
+  var originalFolder = inspected.originalFolder
+    || mediaDriveCreateFolder_(rootFolder, MEDIA_DRIVE_NAMES.original);
+  var originalPhotosFolder = inspected.originalPhotosFolder
+    || mediaDriveCreateFolder_(originalFolder, MEDIA_DRIVE_NAMES.photos);
+  var originalAudioFolder = inspected.originalAudioFolder
+    || mediaDriveCreateFolder_(originalFolder, MEDIA_DRIVE_NAMES.audio);
+  var guideFile = inspected.guideFile || mediaDriveCreateGuide_(rootFolder);
+  return {
+    photosFolder: photosFolder,
+    audioFolder: audioFolder,
+    originalFolder: originalFolder,
+    originalPhotosFolder: originalPhotosFolder,
+    originalAudioFolder: originalAudioFolder,
+    guideFile: guideFile
+  };
+}
+
+function mediaDriveStructureIds_(rootId, inspected) {
+  if (!inspected.photosFolder || !inspected.audioFolder || !inspected.originalFolder
+      || !inspected.originalPhotosFolder || !inspected.originalAudioFolder
+      || !inspected.guideFile) {
+    throw mediaDriveError_('DRIVE_MEDIA_STRUCTURE_PARENT_INVALID');
+  }
+  return {
+    root: rootId,
+    photos: String(inspected.photosFolder.getId()),
+    audio: String(inspected.audioFolder.getId()),
+    original: String(inspected.originalFolder.getId()),
+    originalPhotos: String(inspected.originalPhotosFolder.getId()),
+    originalAudio: String(inspected.originalAudioFolder.getId())
+  };
+}
+
+function withMediaDriveStructureLock_(callback) {
+  var lock = LockService.getScriptLock();
+  var acquired = false;
+  try {
+    acquired = lock.tryLock(SPREADSHEET_MUTATION_LOCK_TIMEOUT_MS);
+    if (!acquired) throw mediaDriveError_('DRIVE_MEDIA_STRUCTURE_FAILED');
+    return callback();
+  } finally {
+    if (acquired) lock.releaseLock();
+  }
+}
+
+function mediaDriveAddOwner_(owners, fileId, pinId) {
+  var normalizedFileId = String(fileId || '');
+  var normalizedPinId = String(pinId || '');
+  if (!isValidDrivePhotoImportId_(normalizedFileId) || !normalizedPinId) return;
+  if (!mediaDriveHasOwn_(owners, normalizedFileId)) owners[normalizedFileId] = Object.create(null);
+  owners[normalizedFileId][normalizedPinId] = true;
+}
+
+function getMediaDriveAssociations_() {
+  var result = {
+    managedPhotoIds: new Set(),
+    managedAudioIds: new Set(),
+    completedSourceIds: new Set(),
+    photoOwners: Object.create(null)
+  };
+  try {
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    var mapSheet = spreadsheet.getSheetByName(SHEET_NAME);
+    if (mapSheet) {
+      var mapRows = mapSheet.getDataRange().getValues();
+      if (mapRows.length) {
+        var mapHeaders = mapRows[0].map(String);
+        var mapPinIdColumn = mapHeaders.indexOf('ID');
+        var mapPhotoIdColumn = mapHeaders.indexOf('ファイルID');
+        var mapAudioIdColumn = mapHeaders.indexOf('音声ID');
+        mapRows.slice(1).forEach(function(row) {
+          var pinId = mapPinIdColumn >= 0 ? String(row[mapPinIdColumn] || '') : '';
+          var photoId = mapPhotoIdColumn >= 0 ? String(row[mapPhotoIdColumn] || '') : '';
+          var audioId = mapAudioIdColumn >= 0 ? String(row[mapAudioIdColumn] || '') : '';
+          if (isValidDrivePhotoImportId_(photoId)) {
+            result.managedPhotoIds.add(photoId);
+            mediaDriveAddOwner_(result.photoOwners, photoId, pinId);
+          }
+          if (isValidDrivePhotoImportId_(audioId)) result.managedAudioIds.add(audioId);
+        });
+      }
+    }
+
+    var receiptSheet = spreadsheet.getSheetByName(IMPORT_RECEIPTS_SHEET_NAME);
+    if (receiptSheet) {
+      var receiptRows = receiptSheet.getDataRange().getValues();
+      if (receiptRows.length) {
+        var receiptHeaders = receiptRows[0].map(String);
+        var stateColumn = receiptHeaders.indexOf('state');
+        var pinIdColumn = receiptHeaders.indexOf('pinId');
+        var fileIdColumn = receiptHeaders.indexOf('fileId');
+        var sourceIdColumn = receiptHeaders.indexOf('sourceDriveFileId');
+        var kindColumn = receiptHeaders.indexOf('mediaKind');
+        receiptRows.slice(1).forEach(function(row) {
+          if (stateColumn < 0 || String(row[stateColumn] || '') !== 'completed') return;
+          var kind = kindColumn >= 0 ? String(row[kindColumn] || '') : '';
+          var fileId = fileIdColumn >= 0 ? String(row[fileIdColumn] || '') : '';
+          var sourceId = sourceIdColumn >= 0 ? String(row[sourceIdColumn] || '') : '';
+          var pinId = pinIdColumn >= 0 ? String(row[pinIdColumn] || '') : '';
+          if (isValidDrivePhotoImportId_(sourceId)) result.completedSourceIds.add(sourceId);
+          if (kind === 'audio') {
+            if (isValidDrivePhotoImportId_(fileId)) result.managedAudioIds.add(fileId);
+          } else if (isValidDrivePhotoImportId_(fileId)) {
+            result.managedPhotoIds.add(fileId);
+            mediaDriveAddOwner_(result.photoOwners, fileId, pinId);
+          }
+        });
+      }
+    }
+    return result;
+  } catch (_error) {
+    throw mediaDriveError_('DRIVE_MEDIA_INBOX_READ_FAILED');
+  }
+}
+
+function migrateLegacyManagedPhotos_(rootFolder, photosFolder) {
+  var associations = getMediaDriveAssociations_();
+  var rootId = String(rootFolder.getId());
+  var files = rootFolder.getFiles();
+  while (files.hasNext()) {
+    var file = files.next();
+    if (!mediaDriveIsActive_(file)) continue;
+    var fileId = String(file.getId());
+    var owners = associations.photoOwners[fileId];
+    if (!owners || Object.keys(owners).length !== 1) continue;
+    if (!mediaDriveIsExactDirectChild_(file, rootId)) continue;
+    var classification = classifyDrivePhotoImportFile_({
+      name: String(file.getName()),
+      type: String(file.getMimeType())
+    });
+    if (!classification.supported || classification.kind !== 'jpeg') continue;
+    file.moveTo(photosFolder);
+    if (!mediaDriveIsExactDirectChild_(file, String(photosFolder.getId()))) {
+      throw mediaDriveError_('DRIVE_MEDIA_STRUCTURE_PARENT_INVALID');
+    }
+  }
+}
+
+function ensureMediaDriveStructure_() {
+  var rootId = getMediaDriveRootId_();
+  try {
+    return withMediaDriveStructureLock_(function() {
+      var rootFolder = DriveApp.getFolderById(rootId);
+      if (!mediaDriveIsActive_(rootFolder) || String(rootFolder.getId()) !== rootId) {
+        throw mediaDriveError_('DRIVE_MEDIA_ROOT_MISSING');
+      }
+      var inspected = mediaDriveInspectStructure_(rootFolder);
+      mediaDriveCreateMissingStructure_(rootFolder, inspected);
+      var verified = mediaDriveInspectStructure_(rootFolder);
+      var structure = mediaDriveStructureIds_(rootId, verified);
+      migrateLegacyManagedPhotos_(rootFolder, verified.photosFolder);
+      return structure;
+    });
+  } catch (error) {
+    if (error && mediaDriveHasOwn_(DRIVE_MEDIA_ERROR_MESSAGES, error.code)) throw error;
+    throw mediaDriveError_('DRIVE_MEDIA_STRUCTURE_FAILED');
+  }
+}
+
+function ensureMediaDriveStructure(payload) {
+  try {
+    assertMediaDriveEditToken_(payload);
+    ensureMediaDriveStructure_();
+    return { ok: true };
+  } catch (error) {
+    return mediaDriveFailureFromError_(error, 'DRIVE_MEDIA_STRUCTURE_FAILED');
+  }
+}
+
+function classifyDriveAudioImportFile_(value) {
+  var name = value && typeof value.name === 'string' ? value.name : '';
+  var type = value && typeof value.type === 'string' ? value.type.trim().toLowerCase() : '';
+  var extension = drivePhotoImportExtensionOf_(name);
+  var expected = {
+    m4a: { kind: 'm4a', mimeType: 'audio/mp4' },
+    mp3: { kind: 'mp3', mimeType: 'audio/mpeg' },
+    wav: { kind: 'wav', mimeType: 'audio/wav' }
+  }[extension];
+  if (!expected || type !== expected.mimeType) {
+    return { supported: false, kind: '', normalizedMimeType: '' };
+  }
+  return { supported: true, kind: expected.kind, normalizedMimeType: expected.mimeType };
+}
+
+function classifyDriveMediaImportFile_(mediaKind, value) {
+  return mediaKind === 'audio'
+    ? classifyDriveAudioImportFile_(value)
+    : classifyDrivePhotoImportFile_(value);
+}
+
+function resolveDriveMediaKind_(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)
+      || !mediaDriveHasOwn_(payload, 'mediaKind')
+      || (payload.mediaKind !== 'photo' && payload.mediaKind !== 'audio')) {
+    throw mediaDriveError_('DRIVE_MEDIA_KIND_INVALID');
+  }
+  return payload.mediaKind;
+}
+
+function listDriveMediaInbox(payload) {
+  try {
+    assertMediaDriveEditToken_(payload);
+    var mediaKind = resolveDriveMediaKind_(payload);
+    var structure = ensureMediaDriveStructure_();
+    var rootFolder = DriveApp.getFolderById(structure.root);
+    var associations = getMediaDriveAssociations_();
+    var excludedManagedIds = mediaKind === 'audio'
+      ? associations.managedAudioIds : associations.managedPhotoIds;
+    var items = [];
+    var scannedEntries = 0;
+    var files = rootFolder.getFiles();
+    while (files.hasNext()) {
+      var file = files.next();
+      if (String(file.getName()) === MEDIA_DRIVE_NAMES.guide) continue;
+      scannedEntries += 1;
+      if (scannedEntries > DRIVE_PHOTO_IMPORT_MAX_FOLDER_ENTRIES) {
+        throw mediaDriveError_('DRIVE_MEDIA_INBOX_TOO_LARGE');
+      }
+      if (!mediaDriveIsActive_(file) || !mediaDriveIsExactDirectChild_(file, structure.root)) continue;
+      var id = String(file.getId());
+      var name = String(file.getName());
+      var mimeType = String(file.getMimeType());
+      var sizeBytes = Number(file.getSize());
+      if (excludedManagedIds.has(id) || associations.completedSourceIds.has(id)
+          || mimeType === DRIVE_PHOTO_IMPORT_SHORTCUT_MIME) continue;
+      var classification = classifyDriveMediaImportFile_(mediaKind, { name: name, type: mimeType });
+      var modifiedAt = drivePhotoImportModifiedAt_(file);
+      if (!isValidDrivePhotoImportId_(id)
+          || !isValidDrivePhotoImportFileName_(name)
+          || !classification.supported
+          || !Number.isSafeInteger(sizeBytes)
+          || sizeBytes <= 0
+          || sizeBytes > DRIVE_AUDIO_MAX_BYTES
+          || !modifiedAt) continue;
+      items.push({
+        id: id,
+        name: name,
+        mimeType: classification.normalizedMimeType,
+        sizeBytes: sizeBytes,
+        modifiedAt: modifiedAt,
+        kind: classification.kind
+      });
+    }
+    drivePhotoImportSort_(items);
+    return { ok: true, items: items };
+  } catch (error) {
+    return mediaDriveFailureFromError_(error, 'DRIVE_MEDIA_INBOX_READ_FAILED');
+  }
+}
+
+function driveMediaReadCodes_(mediaKind) {
+  return mediaKind === 'audio' ? {
+    invalid: 'DRIVE_AUDIO_FILE_ID_INVALID',
+    missing: 'DRIVE_AUDIO_FILE_NOT_FOUND',
+    outside: 'DRIVE_AUDIO_FILE_OUTSIDE_INBOX',
+    unsupported: 'DRIVE_AUDIO_FILE_TYPE_UNSUPPORTED',
+    empty: 'DRIVE_AUDIO_FILE_EMPTY',
+    large: 'DRIVE_AUDIO_FILE_TOO_LARGE',
+    failed: 'DRIVE_AUDIO_FILE_READ_FAILED'
+  } : {
+    invalid: 'DRIVE_IMPORT_FILE_ID_INVALID',
+    missing: 'DRIVE_IMPORT_FILE_NOT_FOUND',
+    outside: 'DRIVE_IMPORT_FILE_OUTSIDE_ROOT',
+    unsupported: 'DRIVE_IMPORT_FILE_TYPE_UNSUPPORTED',
+    empty: 'DRIVE_IMPORT_FILE_READ_FAILED',
+    large: 'DRIVE_IMPORT_FILE_TOO_LARGE',
+    failed: 'DRIVE_IMPORT_FILE_READ_FAILED'
+  };
+}
+
+function readDriveMediaImportFile_(payload, mediaKind) {
+  var codes = driveMediaReadCodes_(mediaKind);
+  try {
+    try {
+      assertEditToken_(payload);
+    } catch (_error) {
+      if (mediaKind === 'audio') throw mediaDriveError_('DRIVE_MEDIA_ACCESS_DENIED');
+      throw drivePhotoImportError_('DRIVE_IMPORT_ACCESS_DENIED');
+    }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)
+        || !mediaDriveHasOwn_(payload, 'fileId')
+        || !isValidDrivePhotoImportId_(payload.fileId)) {
+      throw mediaKind === 'audio' ? mediaDriveError_(codes.invalid) : drivePhotoImportError_(codes.invalid);
+    }
+    var structure = ensureMediaDriveStructure_();
+    var associations = getMediaDriveAssociations_();
+    var managedIds = mediaKind === 'audio'
+      ? associations.managedAudioIds : associations.managedPhotoIds;
+    if (managedIds.has(String(payload.fileId))
+        || associations.completedSourceIds.has(String(payload.fileId))) {
+      throw mediaKind === 'audio' ? mediaDriveError_(codes.outside) : drivePhotoImportError_(codes.outside);
+    }
+    var file;
+    try {
+      file = DriveApp.getFileById(payload.fileId);
+    } catch (_error) {
+      throw mediaKind === 'audio' ? mediaDriveError_(codes.missing) : drivePhotoImportError_(codes.missing);
+    }
+    if (!mediaDriveIsActive_(file)) {
+      throw mediaKind === 'audio' ? mediaDriveError_(codes.missing) : drivePhotoImportError_(codes.missing);
+    }
+    var id = String(file.getId());
+    var name = String(file.getName());
+    var mimeType = String(file.getMimeType());
+    var classification = classifyDriveMediaImportFile_(mediaKind, { name: name, type: mimeType });
+    if (!classification.supported || mimeType === DRIVE_PHOTO_IMPORT_SHORTCUT_MIME) {
+      throw mediaKind === 'audio'
+        ? mediaDriveError_(codes.unsupported) : drivePhotoImportError_(codes.unsupported);
+    }
+    if (!mediaDriveIsExactDirectChild_(file, structure.root)) {
+      throw mediaKind === 'audio' ? mediaDriveError_(codes.outside) : drivePhotoImportError_(codes.outside);
+    }
+    var modifiedAt = drivePhotoImportModifiedAt_(file);
+    if (id !== payload.fileId || !isValidDrivePhotoImportFileName_(name) || !modifiedAt) {
+      throw mediaKind === 'audio' ? mediaDriveError_(codes.failed) : drivePhotoImportError_(codes.failed);
+    }
+    var bytes;
+    try {
+      bytes = file.getBlob().getBytes();
+    } catch (_error) {
+      throw mediaKind === 'audio' ? mediaDriveError_(codes.failed) : drivePhotoImportError_(codes.failed);
+    }
+    var sizeBytes = bytes && Number.isSafeInteger(bytes.length) ? bytes.length : -1;
+    if (sizeBytes <= 0) {
+      bytes = null;
+      throw mediaKind === 'audio' ? mediaDriveError_(codes.empty) : drivePhotoImportError_(codes.empty);
+    }
+    if (sizeBytes > DRIVE_AUDIO_MAX_BYTES) {
+      bytes = null;
+      throw mediaKind === 'audio' ? mediaDriveError_(codes.large) : drivePhotoImportError_(codes.large);
+    }
+    var base64;
+    try {
+      base64 = Utilities.base64Encode(bytes);
+    } catch (_error) {
+      bytes = null;
+      throw mediaKind === 'audio' ? mediaDriveError_(codes.failed) : drivePhotoImportError_(codes.failed);
+    }
+    bytes = null;
+    return {
+      ok: true,
+      file: {
+        id: id,
+        name: name,
+        mimeType: classification.normalizedMimeType,
+        sizeBytes: sizeBytes,
+        modifiedAt: modifiedAt,
+        kind: classification.kind,
+        base64: base64
+      }
+    };
+  } catch (error) {
+    return mediaKind === 'audio'
+      ? mediaDriveFailureFromError_(error, codes.failed)
+      : drivePhotoImportFailureFromError_(error, codes.failed);
+  }
+}
+
+function readDriveAudioImportFile(payload) {
+  return readDriveMediaImportFile_(payload, 'audio');
+}
+
+function audioStorageImportError_(code, message, retryable) {
+  if (typeof importItemError_ === 'function') {
+    return importItemError_(code, message, retryable === true);
+  }
+  var error = new Error(String(message || code || 'Audio storage failed.'));
+  error.code = String(code || 'AUDIO_STORAGE_FAILED');
+  error.retryable = retryable === true;
+  return error;
+}
+
+function audioStorageStructureForRead_() {
+  var rootId = getMediaDriveRootId_();
+  try {
+    var rootFolder = DriveApp.getFolderById(rootId);
+    if (!mediaDriveIsActive_(rootFolder) || String(rootFolder.getId()) !== rootId) {
+      throw new Error('media root is unavailable');
+    }
+    var audioFolder = mediaDriveInspectFolder_(rootFolder, MEDIA_DRIVE_NAMES.audio);
+    if (!audioFolder) throw new Error('managed audio folder is unavailable');
+    return { root: rootId, audio: String(audioFolder.getId()) };
+  } catch (_error) {
+    throw audioStorageImportError_(
+      'PIN_AUDIO_NOT_FOUND',
+      'pin audio is unavailable.',
+      false
+    );
+  }
+}
+
+function audioStorageStructureForImport_() {
+  try {
+    return ensureMediaDriveStructure_();
+  } catch (error) {
+    var code = error && typeof error.code === 'string'
+      ? String(error.code) : 'DRIVE_MEDIA_STRUCTURE_FAILED';
+    throw audioStorageImportError_(code, 'media Drive structure is unavailable.', true);
+  }
+}
+
+function audioStorageFileIsDirectManaged_(file, structure) {
+  return !!file
+    && mediaDriveIsActive_(file)
+    && String(file.getMimeType()) === 'audio/mpeg'
+    && mediaDriveIsExactDirectChild_(file, String(structure && structure.audio || ''));
+}
+
+function validateAudioDriveSourceForImport_(sourceDriveFileId, structure) {
+  var sourceId = String(sourceDriveFileId || '');
+  if (!isValidDrivePhotoImportId_(sourceId)) {
+    throw audioStorageImportError_('IMPORT_AUDIO_SOURCE_INVALID', 'audio source is invalid.', false);
+  }
+  try {
+    var associations = getMediaDriveAssociations_();
+    if (associations.managedAudioIds.has(sourceId)
+        || associations.completedSourceIds.has(sourceId)) {
+      throw audioStorageImportError_(
+        'DRIVE_SOURCE_ALREADY_LINKED',
+        'audio source is already linked.',
+        false
+      );
+    }
+    var file = DriveApp.getFileById(sourceId);
+    var name = String(file.getName());
+    var mimeType = String(file.getMimeType());
+    var sizeBytes = Number(file.getSize());
+    var classification = classifyDriveAudioImportFile_({ name: name, type: mimeType });
+    if (!mediaDriveIsActive_(file)
+        || String(file.getId()) !== sourceId
+        || !mediaDriveIsExactDirectChild_(file, String(structure && structure.root || ''))
+        || !isValidDrivePhotoImportFileName_(name)
+        || !classification.supported
+        || !Number.isSafeInteger(sizeBytes)
+        || sizeBytes <= 0
+        || sizeBytes > DRIVE_AUDIO_MAX_BYTES) {
+      throw audioStorageImportError_('IMPORT_AUDIO_SOURCE_INVALID', 'audio source is invalid.', false);
+    }
+    return { file: file, fileId: sourceId };
+  } catch (error) {
+    if (error && typeof error.code === 'string') throw error;
+    throw audioStorageImportError_(
+      'IMPORT_AUDIO_SOURCE_CHECK_FAILED',
+      'audio source could not be verified.',
+      true
+    );
+  }
+}
+
+function resolveManagedAudioFile_(receipt, normalized, structure) {
+  var audioFolderId = String(structure && structure.audio || '');
+  var audioFolder;
+  try {
+    audioFolder = DriveApp.getFolderById(audioFolderId);
+    var file = null;
+    var created = false;
+    if (String(receipt.fileId || '')) {
+      file = DriveApp.getFileById(String(receipt.fileId));
+      if (!audioStorageFileIsDirectManaged_(file, structure)) {
+        throw audioStorageImportError_(
+          'IMPORT_AUDIO_FILE_INVALID',
+          'managed audio file is invalid.',
+          false
+        );
+      }
+    } else {
+      var matches = [];
+      var iterator = audioFolder.getFilesByName(String(receipt.tempFileName || ''));
+      while (iterator.hasNext() && matches.length < 2) matches.push(iterator.next());
+      if (matches.length > 1) {
+        throw audioStorageImportError_(
+          'IMPORT_RECEIPT_CORRUPTED',
+          'multiple managed audio files exist.',
+          false
+        );
+      }
+      if (matches.length === 1) {
+        file = matches[0];
+      } else {
+        file = audioFolder.createFile(Utilities.newBlob(
+          normalized.audioBytes,
+          'audio/mpeg',
+          String(receipt.tempFileName || '')
+        ));
+        created = true;
+      }
+    }
+    if (!audioStorageFileIsDirectManaged_(file, structure)
+        || String(file.getId()) === String(normalized.sourceDriveFileId || '')) {
+      throw audioStorageImportError_(
+        'IMPORT_AUDIO_FILE_INVALID',
+        'managed audio file could not be verified.',
+        false
+      );
+    }
+    return {
+      file: file,
+      fileId: String(file.getId()),
+      created: created,
+      parentFolderId: audioFolderId
+    };
+  } catch (error) {
+    if (error && typeof error.code === 'string') throw error;
+    throw audioStorageImportError_(
+      'IMPORT_AUDIO_FILE_SAVE_FAILED',
+      'managed audio file could not be saved.',
+      true
+    );
+  }
+}
+
+function archiveAudioDriveSourceIfPending_(sourceDriveFileId, structure) {
+  var sourceId = String(sourceDriveFileId || '');
+  if (!sourceId) return { moved: false };
+  try {
+    var file = DriveApp.getFileById(sourceId);
+    if (!file || file.isTrashed() || String(file.getId()) !== sourceId) {
+      return { moved: false };
+    }
+    if (mediaDriveIsExactDirectChild_(file, String(structure.originalAudio || ''))) {
+      return { moved: false };
+    }
+    if (!mediaDriveIsExactDirectChild_(file, String(structure.root || ''))) {
+      throw audioStorageImportError_(
+        'IMPORT_AUDIO_SOURCE_ARCHIVE_FAILED',
+        'audio source archive location is invalid.',
+        true
+      );
+    }
+    validateAudioDriveSourceForImport_(sourceId, structure);
+    file.moveTo(DriveApp.getFolderById(String(structure.originalAudio || '')));
+    if (!mediaDriveIsExactDirectChild_(file, String(structure.originalAudio || ''))) {
+      throw new Error('audio source archive could not be verified');
+    }
+    return { moved: true };
+  } catch (error) {
+    if (error && error.code === 'IMPORT_AUDIO_SOURCE_ARCHIVE_FAILED') throw error;
+    throw audioStorageImportError_(
+      'IMPORT_AUDIO_SOURCE_ARCHIVE_FAILED',
+      'audio source could not be archived.',
+      true
+    );
+  }
+}
+
+function managedAudioHasLiveReference_(fileId) {
+  var targetId = String(fileId || '');
+  var sheet = openMapInfoSheet_();
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return false;
+  return sheet.getRange(2, 16, lastRow - 1, 1).getValues().some(function(row) {
+    return String(row[0] || '') === targetId;
+  });
+}
+
+function trashManagedAudioFileIfOwned_(fileId, structure) {
+  var targetId = String(fileId || '');
+  if (!targetId || managedAudioHasLiveReference_(targetId)) return false;
+  try {
+    var file = DriveApp.getFileById(targetId);
+    if (file.isTrashed()) return true;
+    if (!audioStorageFileIsDirectManaged_(file, structure)) return false;
+    file.setTrashed(true);
+    return true;
+  } catch (error) {
+    throw audioStorageImportError_(
+      'IMPORT_AUDIO_CLEANUP_FAILED',
+      'managed audio cleanup failed.',
+      true
+    );
+  }
+}
+
+function readPinAudioBlobByPinId_(pinId) {
+  var normalizedPinId = String(pinId || '');
+  if (!normalizedPinId) {
+    throw audioStorageImportError_('PIN_AUDIO_NOT_FOUND', 'pin audio is unavailable.', false);
+  }
+  var structure = audioStorageStructureForRead_();
+  var target = findMapInfoRowByPinId_(openMapInfoSheet_(), normalizedPinId);
+  var audioId = target ? String(target.row[15] || '') : '';
+  if (!audioId) {
+    throw audioStorageImportError_('PIN_AUDIO_NOT_FOUND', 'pin audio is unavailable.', false);
+  }
+  try {
+    var file = DriveApp.getFileById(audioId);
+    if (!audioStorageFileIsDirectManaged_(file, structure)) {
+      throw new Error('managed audio ownership check failed');
+    }
+    var sizeBytes = Number(file.getSize());
+    if (!Number.isSafeInteger(sizeBytes)
+        || sizeBytes < MANAGED_AUDIO_MIN_BYTES
+        || sizeBytes > MANAGED_AUDIO_MAX_BYTES) {
+      throw new Error('managed audio size check failed');
+    }
+    return file.getBlob();
+  } catch (_error) {
+    throw audioStorageImportError_('PIN_AUDIO_NOT_FOUND', 'pin audio is unavailable.', false);
+  }
 }

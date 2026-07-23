@@ -55,5 +55,5 @@ test('README summarizes GPX support, limits, phase history, and manual verificat
   assert.match(readme, /写真時刻照合をPhase 8で追加/);
   assert.match(readme, /YAMAP[^\n]*Garmin[^\n]*実GPX/);
   assert.match(readme, /スマートフォン[^\n]*タブレット[^\n]*PC/);
-  assert.match(readme, /Apps Script[^\n]*実ブラウザ[^\n]*確認は未実施/);
+  assert.match(readme, /Nodeテスト[^\n]*Chromiumテスト[^\n]*Apps Script[^\n]*実Drive[^\n]*未実施/);
 });

@@ -166,7 +166,7 @@ test('backdrop dismissal delegates the active modal to the common dispatcher', (
 
 test('all dialogs track backdrop pointers while the dismissal allowlist remains unchanged', () => {
   assert.match(indexHtml, /\['help-overlay'\]\.concat\(MAIN_DISMISSIBLE_OVERLAY_IDS\)\.forEach\(function\(id\)/);
-  assert.match(indexHtml, /setupOverlayBackdropDismissal\(document\.getElementById\(id\), function\(\) \{\s*return closeOverlayFromBackdrop\(id\);\s*}\);/);
+  assert.match(indexHtml, /const overlay = document\.getElementById\(id\);\s*if \(!overlay\) return;\s*setupOverlayBackdropDismissal\(overlay, function\(\) \{\s*return closeOverlayFromBackdrop\(id\);\s*}\);/);
   const idsStart = indexHtml.indexOf('const BACKDROP_DISMISS_OVERLAY_IDS =');
   const idsEnd = indexHtml.indexOf('];', idsStart);
   assert.notEqual(idsStart, -1);

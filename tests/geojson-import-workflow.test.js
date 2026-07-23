@@ -343,5 +343,5 @@ test('README summarizes GeoJSON Point format, limits, import behavior, and verif
   assert.match(readme, /GeoJSONピン[^\n]*FeatureCollection[^\n]*Point[^\n]*geometry: null[^\n]*2MB[^\n]*20 Feature/);
   assert.match(readme, /sourceId[^\n]*既存ピンを上書きせず[^\n]*新規ピン/);
   assert.match(readme, /CSV／GeoJSON Pointの1件／20件取込[^\n]*上限超過[^\n]*不正項目削除/);
-  assert.match(readme, /Apps Script[^\n]*実ブラウザ[^\n]*確認は未実施/);
+  assert.match(readme, /Nodeテスト[^\n]*Chromiumテスト[^\n]*Apps Script[^\n]*実Drive[^\n]*未実施/);
 });

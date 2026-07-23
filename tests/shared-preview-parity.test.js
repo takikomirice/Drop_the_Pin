@@ -8,10 +8,11 @@ const indexHtml = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const sharedHtml = fs.readFileSync(path.join(root, 'shared.html'), 'utf8');
 const indexCss = indexHtml.match(/<style>([\s\S]*?)<\/style>/)[1];
 const sharedCss = sharedHtml.match(/<style>([\s\S]*?)<\/style>/)[1];
+const sharedMainScriptStart = sharedHtml.lastIndexOf('<script>', sharedHtml.indexOf('const SHARED_DEFAULT_COLOR'));
 const sharedBody = sharedHtml.slice(
   sharedHtml.indexOf('<body'),
-  sharedHtml.indexOf('<script>', sharedHtml.indexOf('<body'))
-);
+  sharedMainScriptStart
+).replace(/<script(?:\s[^>]*)?>[\s\S]*?<\/script>/gi, '');
 
 function ruleBodies(source, selector) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

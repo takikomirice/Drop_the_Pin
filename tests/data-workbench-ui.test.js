@@ -78,6 +78,7 @@ test('settings and Data are separate workbenches and all legacy operation IDs re
   assert.match(data, /ピンデータ/);
   assert.match(data, /ルートデータ/);
   assert.match(data, /GeoJSON Point/);
+  assert.doesNotMatch(data, /音声ID|audioBase64|sourceDriveFileId/);
   assert.doesNotMatch(data, /ルート(?:の)?書出|ルートエクスポート/);
   ['renderCsvInterchangeBusy', 'renderGeoJsonInterchangeBusy', 'renderTrackImportBusy']
     .forEach((name) => assert.match(functionBody(name), /'取込'/, `${name} must restore the compact Data label`));

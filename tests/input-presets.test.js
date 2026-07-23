@@ -54,6 +54,10 @@ function createHarness(options = {}) {
     const rows = clone(initialRows);
     const formulas = Object.assign({}, initialFormulas);
     let maxRows = Math.max(1000, rows.length);
+    let maxColumns = Math.max(26, rows.reduce(
+      (maximum, row) => Math.max(maximum, (row || []).length),
+      0
+    ));
     const sheet = {
       name,
       rows,
@@ -64,6 +68,8 @@ function createHarness(options = {}) {
       },
       getMaxRows() { return maxRows; },
       insertRowsAfter(_after, count) { maxRows += count; },
+      getMaxColumns() { return maxColumns; },
+      insertColumnsAfter(_after, count) { maxColumns += count; },
       insertRowBefore(rowNumber) {
         rows.splice(rowNumber - 1, 0, []);
       },

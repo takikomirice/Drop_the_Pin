@@ -12,7 +12,7 @@ const MAP_INFO_HEADERS = [
   'タイムスタンプ', 'タイトル', '説明',
   '緯度', '経度', 'ピンの色',
   'ファイルID', '画像URL', 'ID', '参考URL一覧',
-  '状態', 'タグ', 'イベント時刻', '更新時刻', 'アイコン'
+  '状態', 'タグ', 'イベント時刻', '更新時刻', 'アイコン', '音声ID'
 ];
 
 function cloneRows(rows) {
@@ -45,15 +45,22 @@ function parseA1(a1) {
   throw new Error(`Unsupported A1 range: ${a1}`);
 }
 
-function createSheet(name, rows, audit) {
+function createSheet(name, rows, audit, options = {}) {
+  let maxColumns = options.maxColumns == null
+    ? Math.max(26, ...rows.map((row) => row.length))
+    : Number(options.maxColumns);
   const sheet = {
     name,
     rows: cloneRows(rows),
+    formulas: cloneRows(options.formulas || rows.map((row) => row.map(() => ''))),
     getLastRow() {
       return this.rows.length;
     },
     getLastColumn() {
       return this.rows.reduce((max, row) => Math.max(max, row.length), 0);
+    },
+    getMaxColumns() {
+      return maxColumns;
     },
     getDataRange() {
       audit.dataRangeReads.push(name);
@@ -63,16 +70,26 @@ function createSheet(name, rows, audit) {
       const coordinates = typeof rowOrA1 === 'string'
         ? parseA1(rowOrA1)
         : { row: rowOrA1, column, numRows: numRows || 1, numColumns: numColumns || 1 };
+      if (coordinates.column + coordinates.numColumns - 1 > maxColumns) {
+        throw new Error(`Range exceeds physical columns on ${name}`);
+      }
       audit.rangeReads.push({ sheet: name, ...coordinates });
       return createRange(this, coordinates.row, coordinates.column, coordinates.numRows, coordinates.numColumns, audit);
+    },
+    insertColumnsAfter(after, count) {
+      if (after < 1 || after > maxColumns || count < 1) throw new Error('Invalid column insertion');
+      audit.columnInserts.push({ sheet: name, after, count });
+      maxColumns += count;
     },
     insertRowBefore(rowNumber) {
       audit.writes.push({ sheet: name, method: 'insertRowBefore' });
       this.rows.splice(rowNumber - 1, 0, []);
+      this.formulas.splice(rowNumber - 1, 0, []);
     },
     appendRow(row) {
       audit.writes.push({ sheet: name, method: 'appendRow' });
       this.rows.push(row.slice());
+      this.formulas.push(row.map(() => ''));
     },
     setFrozenRows() {
       audit.writes.push({ sheet: name, method: 'setFrozenRows' });
@@ -87,7 +104,9 @@ function createSheet(name, rows, audit) {
 function createRange(sheet, row, column, numRows, numColumns, audit) {
   function ensureCell(rowIndex, columnIndex) {
     while (sheet.rows.length <= rowIndex) sheet.rows.push([]);
+    while (sheet.formulas.length <= rowIndex) sheet.formulas.push([]);
     while (sheet.rows[rowIndex].length <= columnIndex) sheet.rows[rowIndex].push('');
+    while (sheet.formulas[rowIndex].length <= columnIndex) sheet.formulas[rowIndex].push('');
   }
 
   const range = {
@@ -106,22 +125,26 @@ function createRange(sheet, row, column, numRows, numColumns, audit) {
       return values;
     },
     getFormulas() {
-      return Array.from({ length: numRows }, () =>
-        Array.from({ length: numColumns }, () => '')
+      return Array.from({ length: numRows }, (_, rowOffset) =>
+        Array.from({ length: numColumns }, (_, columnOffset) =>
+          (sheet.formulas[row - 1 + rowOffset] || [])[column - 1 + columnOffset] || ''
+        )
       );
     },
     setValue(value) {
-      audit.writes.push({ sheet: sheet.name, method: 'setValue' });
+      audit.writes.push({ sheet: sheet.name, method: 'setValue', row, column, numRows, numColumns });
       ensureCell(row - 1, column - 1);
       sheet.rows[row - 1][column - 1] = value;
+      sheet.formulas[row - 1][column - 1] = '';
       return range;
     },
     setValues(values) {
-      audit.writes.push({ sheet: sheet.name, method: 'setValues' });
+      audit.writes.push({ sheet: sheet.name, method: 'setValues', row, column, numRows, numColumns });
       values.forEach((valuesRow, rowOffset) => {
         valuesRow.forEach((value, columnOffset) => {
           ensureCell(row - 1 + rowOffset, column - 1 + columnOffset);
           sheet.rows[row - 1 + rowOffset][column - 1 + columnOffset] = value;
+          sheet.formulas[row - 1 + rowOffset][column - 1 + columnOffset] = '';
         });
       });
       return range;
@@ -146,10 +169,10 @@ function createRange(sheet, row, column, numRows, numColumns, audit) {
   return range;
 }
 
-function pinRow({ id, fileId = '', imageUrl = '' }) {
+function pinRow({ id, fileId = '', imageUrl = '', audioId = '' }) {
   return [
     '2026/07/10 10:00:00', id, '', 35, 139, '#e53935', fileId, imageUrl, id,
-    '', '未対応', '', '', '', 'default'
+    '', '未対応', '', '', '', 'default', audioId
   ];
 }
 
@@ -158,6 +181,7 @@ function createHarness(options = {}) {
     driveFileIds: [],
     dataRangeReads: [],
     rangeReads: [],
+    columnInserts: [],
     writes: [],
     logs: [],
     afterGetValues: options.afterGetValues
@@ -168,11 +192,14 @@ function createHarness(options = {}) {
       MAP_INFO_HEADERS,
       pinRow({ id: 'pin-first' }),
       pinRow({ id: 'pin-photo', fileId: 'registered-file', imageUrl: 'https://example.com/photo.jpg' }),
-      pinRow({ id: 'pin-last' })
+      pinRow({ id: 'pin-last', audioId: 'private-audio-id' })
     ]
   };
   Object.entries(initialSheets).forEach(([name, rows]) => {
-    sheets[name] = createSheet(name, rows, audit);
+    sheets[name] = createSheet(name, rows, audit, {
+      maxColumns: options.sheetMaxColumns && options.sheetMaxColumns[name],
+      formulas: options.sheetFormulas && options.sheetFormulas[name]
+    });
   });
 
   const spreadsheet = {
@@ -283,10 +310,73 @@ test('getMapData reads photo-less and photo pins without Drive metadata calls', 
   assert.equal(pins[0].fileId, '');
   assert.equal(pins[0].imageUrl, '');
   assert.equal(pins[0].folderUrl, '');
+  assert.equal(pins[0].hasAudio, false);
+  assert.equal(Object.hasOwn(pins[0], 'audioId'), false);
   assert.equal(pins[1].fileId, 'registered-file');
   assert.equal(pins[1].imageUrl, 'https://example.com/photo.jpg');
   assert.equal(pins[1].folderUrl, '');
+  assert.equal(pins[2].hasAudio, true);
+  assert.equal(Object.hasOwn(pins[2], 'audioId'), false);
   assert.deepEqual(audit.driveFileIds, []);
+});
+
+test('setupSheet appends only P1 and preserves legacy map_info cells', () => {
+  const legacyHeaders = MAP_INFO_HEADERS.slice(0, 15);
+  const legacyRow = pinRow({ id: 'legacy-pin' }).slice(0, 15);
+  legacyRow[2] = 'computed-description';
+  const legacyFormulas = [legacyHeaders.map(() => ''), legacyRow.map(() => '')];
+  legacyFormulas[0][14] = '="アイコン"';
+  legacyFormulas[1][2] = '=FORMULA_PRESERVED';
+  const { api, audit, sheets } = createHarness({
+    sheets: { map_info: [legacyHeaders, legacyRow] },
+    sheetMaxColumns: { map_info: 15 },
+    sheetFormulas: { map_info: legacyFormulas }
+  });
+
+  api.setupSheet();
+  api.setupSheet();
+
+  assert.deepEqual(sheets.map_info.rows[0], MAP_INFO_HEADERS);
+  assert.deepEqual(sheets.map_info.rows[1], legacyRow);
+  assert.equal(sheets.map_info.formulas[0][14], '="アイコン"');
+  assert.equal(sheets.map_info.formulas[1][2], '=FORMULA_PRESERVED');
+  assert.deepEqual(audit.columnInserts, [{ sheet: 'map_info', after: 15, count: 1 }]);
+  assert.deepEqual(
+    audit.writes.filter((write) => write.sheet === 'map_info' && write.method === 'setValue'),
+    [{ sheet: 'map_info', method: 'setValue', row: 1, column: 16, numRows: 1, numColumns: 1 }]
+  );
+
+  const existingAudioHeaders = MAP_INFO_HEADERS.slice();
+  existingAudioHeaders[15] = 'existing-audio-header';
+  const rowWithExistingAudio = legacyRow.concat(['existing-audio-id']);
+  const existing = createHarness({ sheets: { map_info: [existingAudioHeaders, rowWithExistingAudio] } });
+  existing.api.setupSheet();
+  assert.equal(existing.sheets.map_info.rows[0][15], 'existing-audio-header');
+  assert.deepEqual(existing.sheets.map_info.rows[1], rowWithExistingAudio);
+});
+
+test('setupSheet preserves a P1 formula that evaluates to an empty string', () => {
+  const headerValues = MAP_INFO_HEADERS.slice(0, 15).concat(['']);
+  const headerFormulas = [headerValues.map(() => '')];
+  headerFormulas[0][15] = '=""';
+  const { api, audit, sheets } = createHarness({
+    sheets: { map_info: [headerValues] },
+    sheetMaxColumns: { map_info: 16 },
+    sheetFormulas: { map_info: headerFormulas }
+  });
+
+  api.setupSheet();
+
+  assert.equal(sheets.map_info.formulas[0][15], '=""');
+  assert.equal(sheets.map_info.rows[0][15], '');
+  assert.deepEqual(
+    audit.writes.filter((write) => write.sheet === 'map_info'
+      && (write.method === 'setValue' || write.method === 'setValues')
+      && write.row === 1
+      && write.column <= 16
+      && write.column + write.numColumns - 1 >= 16),
+    []
+  );
 });
 
 test('findPinRowIndex_ reads only column I and preserves header-inclusive indexes', () => {

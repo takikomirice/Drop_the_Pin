@@ -5,7 +5,13 @@ const test = require('node:test');
 
 const sharedHtml = fs.readFileSync(path.resolve(__dirname, '..', 'shared.html'), 'utf8');
 const css = sharedHtml.match(/<style>([\s\S]*?)<\/style>/)[1];
-const bodyMarkup = sharedHtml.slice(sharedHtml.indexOf('<body'), sharedHtml.indexOf('<script>', sharedHtml.indexOf('<body')));
+const bodyMarkup = sharedHtml
+  .slice(
+    sharedHtml.indexOf('<body'),
+    sharedHtml.lastIndexOf('<script>', sharedHtml.indexOf('const SHARED_DEFAULT_COLOR'))
+  )
+  .replace(/<script(?:\s[^>]*)?>[\s\S]*?<\/script>/gi, '')
+  .replace(/<\?[\s\S]*?\?>/g, '');
 
 function functionSource(name) {
   const start = sharedHtml.indexOf(`function ${name}(`);

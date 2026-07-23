@@ -5,6 +5,18 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const indexHtml = fs.readFileSync(path.resolve(__dirname, '..', 'index.html'), 'utf8');
+const EDITOR_START = '<template data-dtp-audio-editor-boundary="start"></template>';
+const EDITOR_END = '<template data-dtp-audio-editor-boundary="end"></template>';
+const audioEditorConditionBlock = /<\?\s*if\s*\(editToken\)\s*\{\s*\?>\s*<template data-dtp-audio-editor-boundary="start"><\/template>[\s\S]*?<template data-dtp-audio-editor-boundary="end"><\/template>\s*<\?\s*\}\s*\?>/;
+const editorStartIndex = indexHtml.indexOf(EDITOR_START);
+const editorEndIndex = indexHtml.indexOf(EDITOR_END);
+assert.ok(editorStartIndex >= 0 && editorEndIndex > editorStartIndex, 'inline editor boundaries');
+const audioEditorHtml = indexHtml.slice(editorStartIndex + EDITOR_START.length, editorEndIndex).replace(/^\r?\n/, '');
+
+function evaluateIndexTemplate(hasEditToken) {
+  assert.match(indexHtml, audioEditorConditionBlock);
+  return indexHtml.replace(audioEditorConditionBlock, hasEditToken ? audioEditorHtml : '');
+}
 
 function functionSource(name) {
   const functionStart = indexHtml.indexOf(`function ${name}(`);
@@ -179,11 +191,13 @@ function createHarness() {
       activeElement: null,
       body: { children: [], classList: createClassList() },
       getElementById(id) { return elements[id]; },
+      querySelector(selector) { return selector === '[data-hae-help-dialog]' ? elements['hae-help-dialog'] : null; },
       contains(node) { return !!node && node.connected !== false; }
     },
     URL: { revokeObjectURL(url) { revokedUrls.push(url); } },
     csvInterchangeController: { invalidate() { return true; } },
     geoJsonInterchangeController: { invalidate() { return true; } },
+    pinAudioPlayer: { close() { return true; } },
     trackImportController: {
       busy: false,
       discard() {
@@ -265,7 +279,7 @@ function createHarness() {
     'cancelLocationChoice', 'clearDuplicatePlacement', 'clearPlacement', 'cancelPlacement',
     'returnToPhotoSource', 'returnFromMultiPhotoPreparation',
     'closeHelpPanel', 'setMoreMenuOpen', 'closeMoreMenu',
-    'isTrackDisplaySettingsEditorOpen', 'dismissOverlayById', 'closeOverlayFromBackdrop', 'dispatchEscape',
+    'isTrackDisplaySettingsEditorOpen', 'dismissOverlayById', 'closeOverlayFromBackdrop', 'isAudioEditorHelpDialogOpen', 'dispatchEscape',
     'handleGlobalKeydown'
   ].forEach((name) => {
     context[name] = vm.runInNewContext(`(${functionSource(name)})`, context);
@@ -289,10 +303,12 @@ function createHarness() {
 }
 
 test('dispatcher inventory routes every overlay through its existing cleanup contract', () => {
+  const editIndexHtml = evaluateIndexTemplate(true);
+  assert.equal(evaluateIndexTemplate(false).includes('id="audio-editor-overlay"'), false);
   const inventoryMatch = indexHtml.match(/const MAIN_DISMISSIBLE_OVERLAY_IDS = Object\.freeze\(\[([\s\S]*?)\]\);/);
   assert.ok(inventoryMatch, 'main overlay inventory');
   const inventoryIds = [...inventoryMatch[1].matchAll(/'([^']+-overlay)'/g)].map((match) => match[1]).sort();
-  const domOverlayIds = [...indexHtml.matchAll(/<div id="([^"]+-overlay)" class="[^"]*sheet-overlay[^"]*"/g)]
+  const domOverlayIds = [...editIndexHtml.matchAll(/<div id="([^"]+-overlay)" class="[^"]*sheet-overlay[^"]*"/g)]
     .map((match) => match[1])
     .filter((id) => id !== 'help-overlay')
     .sort();
@@ -327,7 +343,7 @@ test('dispatcher inventory routes every overlay through its existing cleanup con
     assert.ok(source.includes(id), id);
     assert.ok(source.includes(cleanup), `${id} -> ${cleanup}`);
   });
-  const allDialogIds = [...indexHtml.matchAll(/<div id="([^"]+-overlay)" class="[^"]*sheet-overlay[^"]*"/g)]
+  const allDialogIds = [...editIndexHtml.matchAll(/<div id="([^"]+-overlay)" class="[^"]*sheet-overlay[^"]*"/g)]
     .map((match) => match[1]);
   allDialogIds.forEach((id) => assert.ok(source.includes(id), `${id} dispatcher contract`));
   assert.match(functionSource('dismissOverlayById'), /ImportPreviewUI\.close\(\{\s*discard:\s*true\s*\}\)/);

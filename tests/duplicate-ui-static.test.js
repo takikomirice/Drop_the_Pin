@@ -43,6 +43,9 @@ test('index has duplicate placement and shortcut guards for typing targets', () 
   assertIncludes(indexHtml, "target.tagName === 'SELECT'");
   assertIncludes(indexHtml, 'target.isContentEditable');
   assertIncludes(indexHtml, 'function handleDuplicateShortcut(event)');
+  const shortcutOverlayStart = indexHtml.indexOf('function isShortcutOverlayOpen()');
+  const shortcutOverlayEnd = indexHtml.indexOf('function hasMultipleSelectedPins()', shortcutOverlayStart);
+  assertIncludes(indexHtml.slice(shortcutOverlayStart, shortcutOverlayEnd), "'audio-editor-overlay'");
   assertIncludes(indexHtml, "event.key.toLowerCase() === 'd'");
   assertIncludes(indexHtml, "event.key.toLowerCase() === 'c'");
   assertIncludes(indexHtml, "event.key.toLowerCase() === 'v'");

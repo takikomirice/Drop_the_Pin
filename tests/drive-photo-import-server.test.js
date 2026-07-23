@@ -4,405 +4,228 @@ const path = require('node:path');
 const test = require('node:test');
 const { createHarness } = require('./drive-photo-import-server-harness');
 
-const codeJs = fs.readFileSync(path.resolve(__dirname, '..', 'Code.js'), 'utf8');
+const codeJs = fs.readFileSync(path.join(__dirname, '..', 'Code.js'), 'utf8');
 
-function functionBody(name) {
-  const start = codeJs.indexOf(`function ${name}(`);
-  assert.notEqual(start, -1);
-  const open = codeJs.indexOf('{', start);
-  let depth = 0;
-  for (let index = open; index < codeJs.length; index += 1) {
-    if (codeJs[index] === '{') depth += 1;
-    if (codeJs[index] === '}') depth -= 1;
-    if (depth === 0) return codeJs.slice(open + 1, index);
-  }
-  assert.fail(`Could not read ${name}`);
+function plain(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
-function seedTree(harness) {
-  harness.addFolder('folder_AAAAAAAAAA', 'folder-a', [harness.rootId]);
-  harness.addFolder('empty_AAAAAAAAAAA', 'Empty-folder', [harness.rootId]);
-  harness.addFolder('trashed_folder_AAA', 'Trashed-folder', [harness.rootId], { trashed: true });
-  harness.addFolder('nested_AAAAAAAAAA', 'Nested', ['folder_AAAAAAAAAA']);
-  harness.addFolder('outside_AAAAAAAAA', 'Outside');
-  harness.addFile('photo_AAAAAAAAAAA', 'z-photo.jpg', 'image/jpeg', [1, 2, 3], ['folder_AAAAAAAAAA']);
-  harness.addFile('photo_BBBBBBBBBBB', 'A-photo.heic', 'image/heic', [4, 5], ['folder_AAAAAAAAAA']);
-  harness.addFile('unsupported_AAAAA', 'notes.txt', 'text/plain', [6], ['folder_AAAAAAAAAA']);
-  harness.addFile('root_photo_AAAAAA', 'root.webp', 'image/webp', [7, 8], [harness.rootId]);
-  harness.addFile('shortcut_AAAAAAAAA', 'outside shortcut', 'application/vnd.google-apps.shortcut', [9], [harness.rootId]);
-  harness.addFile('trashed_file_AAAAA', 'trashed.jpg', 'image/jpeg', [9], [harness.rootId], { trashed: true });
-  harness.addFile('outside_photo_AAAA', 'private.jpg', 'image/jpeg', [10], ['outside_AAAAAAAAA']);
+function seedStructure(harness) {
+  const result = harness.api.ensureMediaDriveStructure(harness.tokenPayload({}));
+  assert.deepEqual(plain(result), { ok: true });
+  harness.audit.writes.length = 0;
+  return {
+    photos: harness.folderId('photos'),
+    audio: harness.folderId('audio'),
+    original: harness.folderId('original'),
+    originalPhotos: harness.folderId('photos', harness.folderId('original')),
+    originalAudio: harness.folderId('audio', harness.folderId('original'))
+  };
 }
 
-test('folder listing returns direct safe children, parent, stable sort, and unsupported count', () => {
+test('legacy photo listing delegates to a root-only inbox without exposing folder IDs', () => {
   const harness = createHarness();
-  seedTree(harness);
-  assert.equal(typeof harness.api.listDrivePhotoImportFolder, 'function');
+  const ids = seedStructure(harness);
+  harness.addFolder('nested_AAAAAAAAAA', 'Nested', [harness.rootId]);
+  harness.addFile('root_jpeg_AAAAAAA', 'A-photo.jpg', 'image/jpeg', [1], [harness.rootId]);
+  harness.addFile('root_png_AAAAAAAA', 'b-photo.png', 'image/png', [2], [harness.rootId]);
+  harness.addFile('root_webp_AAAAAAA', 'c-photo.webp', 'image/webp', [3], [harness.rootId]);
+  harness.addFile('root_heic_AAAAAAA', 'd-photo.heic', 'image/heic', [4], [harness.rootId]);
+  harness.addFile('root_heif_AAAAAAA', 'e-photo.heif', 'image/heif', [5], [harness.rootId]);
+  harness.addFile('nested_photo_AAAA', 'nested.jpg', 'image/jpeg', [6], ['nested_AAAAAAAAAA']);
+  harness.addFile('managed_photo_AAA', 'managed.jpg', 'image/jpeg', [7], [ids.photos]);
+  harness.addFile('archived_photo_AA', 'archived.jpg', 'image/jpeg', [8], [ids.originalPhotos]);
 
-  const rootResult = harness.api.listDrivePhotoImportFolder(harness.tokenPayload({ folderId: '' }));
-  assert.equal(rootResult.ok, true);
-  assert.deepEqual(JSON.parse(JSON.stringify(rootResult.folders)).map((item) => item.name),
-    ['Empty-folder', 'folder-a']);
-  assert.deepEqual(JSON.parse(JSON.stringify(rootResult.photos)).map((item) => item.name), ['root.webp']);
-  assert.equal(rootResult.parent, null);
-  assert.equal(rootResult.folder.isRoot, true);
-  assert.deepEqual(JSON.parse(JSON.stringify(rootResult.counts)), { folders: 2, photos: 1 });
-  assert.equal(rootResult.ignoredUnsupportedFileCount, 1);
-  assert.deepEqual(Object.keys(rootResult.photos[0]).sort(),
-    ['id', 'imported', 'kind', 'mimeType', 'modifiedAt', 'name', 'sizeBytes']);
-  assert.equal(rootResult.photos[0].imported, false);
+  const result = harness.api.listDrivePhotoImportFolder(harness.tokenPayload({ folderId: '' }));
 
-  const childResult = harness.api.listDrivePhotoImportFolder(
-    harness.tokenPayload({ folderId: 'folder_AAAAAAAAAA' })
-  );
-  assert.equal(childResult.ok, true);
-  assert.deepEqual(JSON.parse(JSON.stringify(childResult.folders)).map((item) => item.name), ['Nested']);
-  assert.deepEqual(JSON.parse(JSON.stringify(childResult.photos)).map((item) => item.name),
-    ['A-photo.heic', 'z-photo.jpg']);
-  assert.deepEqual(JSON.parse(JSON.stringify(childResult.parent)), { id: harness.rootId, name: 'Root' });
-  assert.equal(childResult.ignoredUnsupportedFileCount, 1);
-  assert.doesNotMatch(JSON.stringify(childResult), /notes\.txt|outside|owner|permission|description|https?:/i);
+  assert.equal(result.ok, true);
+  assert.deepEqual(plain(result.folder), { id: '', name: '取込Inbox', isRoot: true });
+  assert.equal(result.parent, null);
+  assert.deepEqual(plain(result.folders), []);
+  assert.deepEqual(plain(result.photos).map((item) => [item.name, item.kind]), [
+    ['A-photo.jpg', 'jpeg'], ['b-photo.png', 'png'], ['c-photo.webp', 'webp'],
+    ['d-photo.heic', 'heic'], ['e-photo.heif', 'heic']
+  ]);
+  assert.deepEqual(plain(result.counts), { folders: 0, photos: 5 });
+  assert.equal(JSON.stringify(result).includes(harness.rootId), false);
   assert.deepEqual(harness.audit.writes, []);
 });
 
-test('folder listing excludes every surviving managed file except completed receipt sources', () => {
+test('legacy photo listing rejects every non-root folder ID with one stable boundary code', () => {
+  const harness = createHarness();
+  seedStructure(harness);
+  const nested = harness.addFolder('nested_AAAAAAAAAA', 'Nested', [harness.rootId]);
+
+  const result = harness.api.listDrivePhotoImportFolder(
+    harness.tokenPayload({ folderId: nested.getId() })
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.errorCode, 'DRIVE_IMPORT_FOLDER_OUTSIDE_ROOT');
+  assert.doesNotMatch(JSON.stringify(result), /nested_A|Nested/);
+  assert.deepEqual(harness.audit.writes, []);
+});
+
+test('photo inbox excludes managed IDs and completed source IDs while leaving unknown root candidates', () => {
   const receiptHeaders = [
     'idempotencyKey', 'jobId', 'itemId', 'payloadHash', 'state', 'leaseOwner',
     'leaseUntil', 'pinId', 'targetFolderId', 'tempFileName', 'fileId', 'imageUrl',
-    'folderUrl', 'createdAt', 'updatedAt', 'lastErrorCode', 'sourceDriveFileId'
+    'folderUrl', 'createdAt', 'updatedAt', 'lastErrorCode', 'sourceDriveFileId',
+    'mediaKind', 'operationMode', 'targetPinId', 'cleanupFileId'
   ];
-  const mapHeaders = [
-    'タイムスタンプ', 'タイトル', '説明', '緯度', '経度', 'ピンの色',
-    'ファイルID', '画像URL', 'ID', '参考URL一覧', '状態', 'タグ',
-    'イベント時刻', '更新時刻', 'アイコン'
-  ];
-  const receipt = (state, pinId, sourceDriveFileId) => {
-    const row = Array(receiptHeaders.length).fill('');
-    row[receiptHeaders.indexOf('state')] = state;
-    row[receiptHeaders.indexOf('pinId')] = pinId;
-    row[receiptHeaders.indexOf('sourceDriveFileId')] = sourceDriveFileId;
-    return row;
-  };
-  const mapRow = (pinId, fileId = '') => {
-    const row = Array(mapHeaders.length).fill('');
-    row[mapHeaders.indexOf('ID')] = pinId;
-    row[mapHeaders.indexOf('ファイルID')] = fileId;
-    return row;
-  };
-  const ids = {
-    directSource: 'photo_DIRECTAAAAAAA',
-    legacySource: 'photo_LEGACYAAAAAA',
-    legacyCopy: 'managed_COPYAAAAA',
-    localUpload: 'managed_LOCALAAAA',
-    singleAdd: 'managed_SINGLEAAA',
-    receiptless: 'managed_NORECEIPT',
-    deletedPin: 'photo_DELETEDAAAAA',
-    unmanaged: 'photo_NEWAAAAAAAAA'
-  };
+  const mapHeaders = ['ID', 'ファイルID', '音声ID'];
+  const receipt = Array(receiptHeaders.length).fill('');
+  receipt[receiptHeaders.indexOf('state')] = 'completed';
+  receipt[receiptHeaders.indexOf('pinId')] = 'pin-source';
+  receipt[receiptHeaders.indexOf('sourceDriveFileId')] = 'source_completed_A';
+  receipt[receiptHeaders.indexOf('mediaKind')] = 'photo';
   const harness = createHarness({ sheets: {
-    import_receipts: [receiptHeaders,
-      receipt('completed', 'pin-direct', ids.directSource),
-      receipt('completed', 'pin-legacy', ids.legacySource),
-      receipt('completed', 'pin-deleted', ids.deletedPin)],
-    map_info: [mapHeaders,
-      mapRow('pin-direct', ids.directSource),
-      mapRow('pin-legacy', ids.legacyCopy),
-      mapRow('pin-local', ids.localUpload),
-      mapRow('pin-single', ids.singleAdd),
-      mapRow('pin-receiptless', ids.receiptless)]
+    map_info: [mapHeaders, ['pin-managed', 'managed_photo_AAA', '']],
+    import_receipts: [receiptHeaders, receipt]
   } });
-  Object.values(ids).forEach((id, index) => {
-    harness.addFile(id, `${String(index).padStart(2, '0')}.jpg`, 'image/jpeg', [index], [harness.rootId]);
-  });
+  seedStructure(harness);
+  harness.addFile('managed_photo_AAA', 'managed.jpg', 'image/jpeg', [1], [harness.rootId]);
+  harness.addFile('source_completed_A', 'completed.jpg', 'image/jpeg', [2], [harness.rootId]);
+  harness.addFile('unknown_photo_AAA', 'unknown.jpg', 'image/jpeg', [3], [harness.rootId]);
 
-  const result = harness.api.listDrivePhotoImportFolder(harness.tokenPayload({ folderId: '' }));
-  assert.equal(result.ok, true);
-  const listed = Object.fromEntries(
-    JSON.parse(JSON.stringify(result.photos)).map((photo) => [photo.id, photo.imported])
-  );
-  assert.deepEqual(listed, {
-    [ids.directSource]: true,
-    [ids.legacySource]: true,
-    [ids.deletedPin]: false,
-    [ids.unmanaged]: false
-  });
-  for (const managedId of [ids.legacyCopy, ids.localUpload, ids.singleAdd, ids.receiptless]) {
-    assert.equal(Object.hasOwn(listed, managedId), false, managedId);
-  }
-  assert.equal(harness.audit.sheetReads.filter((read) => read.name === 'import_receipts').length, 1);
-  assert.equal(harness.audit.sheetReads.filter((read) => read.name === 'map_info').length, 1);
-  assert.deepEqual(harness.audit.writes, []);
+  const result = harness.api.listDriveMediaInbox(harness.tokenPayload({ mediaKind: 'photo' }));
+
+  assert.deepEqual(plain(result.items).map((item) => item.id), ['unknown_photo_AAA']);
+  assert.deepEqual(Object.keys(plain(result.items[0])).sort(),
+    ['id', 'kind', 'mimeType', 'modifiedAt', 'name', 'sizeBytes']);
 });
 
-test('folder listing reports a safe list failure instead of treating a sheet read error as success', () => {
-  const harness = createHarness({
-    failSheetRead: true,
-    sheets: { import_receipts: [['sourceDriveFileId']], map_info: [['ID']] }
-  });
-  harness.addFile('photo_AAAAAAAAAAA', 'photo.jpg', 'image/jpeg', [1], [harness.rootId]);
-  const result = harness.api.listDrivePhotoImportFolder(harness.tokenPayload({ folderId: '' }));
-  assert.equal(result.ok, false);
-  assert.equal(result.errorCode, 'DRIVE_IMPORT_FOLDER_READ_FAILED');
-  assert.doesNotMatch(JSON.stringify(result), /private|spreadsheet|detail/);
-  assert.deepEqual(harness.audit.writes, []);
-});
+test('photo list preserves strict type, safe-name, trash, shortcut, size, and 500-entry behavior', () => {
+  const harness = createHarness();
+  seedStructure(harness);
+  harness.addFile('generic_jpg_AAAAAA', 'generic.jpg', 'application/octet-stream', [1], [harness.rootId]);
+  harness.addFile('mismatch_AAAAAAAAA', 'wrong.png', 'image/jpeg', [1], [harness.rootId]);
+  harness.addFile('unsafe_AAAAAAAAAAA', '../unsafe.jpg', 'image/jpeg', [1], [harness.rootId]);
+  harness.addFile('zero_AAAAAAAAAAAAA', 'zero.jpg', 'image/jpeg', [], [harness.rootId]);
+  harness.addFile('shortcut_AAAAAAAAA', 'shortcut.jpg', 'application/vnd.google-apps.shortcut', [1], [harness.rootId]);
+  harness.addFile('trash_AAAAAAAAAAAA', 'trash.jpg', 'image/jpeg', [1], [harness.rootId], { trashed: true });
+  const result = harness.api.listDriveMediaInbox(harness.tokenPayload({ mediaKind: 'photo' }));
+  assert.deepEqual(plain(result.items).map((item) => item.id), ['generic_jpg_AAAAAA']);
 
-test('folder listing accepts 500 entries and atomically rejects 501', () => {
   const accepted = createHarness();
+  seedStructure(accepted);
   for (let index = 0; index < 500; index += 1) {
-    accepted.addFile(`unsupported_${String(index).padStart(4, '0')}`, `item-${index}.txt`, 'text/plain', [1], [accepted.rootId]);
+    accepted.addFile(`unsupported_${String(index).padStart(4, '0')}`, `item-${index}.txt`,
+      'text/plain', [1], [accepted.rootId]);
   }
-  const acceptedResult = accepted.api.listDrivePhotoImportFolder(accepted.tokenPayload({ folderId: '' }));
-  assert.equal(acceptedResult.ok, true);
-  assert.equal(acceptedResult.ignoredUnsupportedFileCount, 500);
+  assert.equal(accepted.api.listDriveMediaInbox(
+    accepted.tokenPayload({ mediaKind: 'photo' })
+  ).ok, true);
 
   const rejected = createHarness();
+  seedStructure(rejected);
   for (let index = 0; index < 501; index += 1) {
-    rejected.addFile(`unsupported_${String(index).padStart(4, '0')}`, `item-${index}.txt`, 'text/plain', [1], [rejected.rootId]);
+    rejected.addFile(`unsupported_${String(index).padStart(4, '0')}`, `item-${index}.txt`,
+      'text/plain', [1], [rejected.rootId]);
   }
-  const rejectedResult = rejected.api.listDrivePhotoImportFolder(rejected.tokenPayload({ folderId: '' }));
-  assert.equal(rejectedResult.ok, false);
-  assert.equal(rejectedResult.errorCode, 'DRIVE_IMPORT_FOLDER_TOO_LARGE');
-  assert.equal(Object.prototype.hasOwnProperty.call(rejectedResult, 'folders'), false);
-  assert.doesNotMatch(JSON.stringify(rejectedResult), /item-|unsupported_/);
+  assert.equal(rejected.api.listDriveMediaInbox(
+    rejected.tokenPayload({ mediaKind: 'photo' })
+  ).errorCode, 'DRIVE_MEDIA_INBOX_TOO_LARGE');
 });
 
-test('folder listing counts trashed entries toward the atomic traversal limit', () => {
-  const accepted = createHarness();
-  for (let index = 0; index < 500; index += 1) {
-    accepted.addFile(`trashed_${String(index).padStart(12, '0')}`, `item-${index}.jpg`,
-      'image/jpeg', [1], [accepted.rootId], { trashed: true });
-  }
-  const acceptedResult = accepted.api.listDrivePhotoImportFolder(accepted.tokenPayload({ folderId: '' }));
-  assert.equal(acceptedResult.ok, true);
-  assert.equal(acceptedResult.photos.length, 0);
-
-  const rejected = createHarness();
-  for (let index = 0; index < 501; index += 1) {
-    rejected.addFile(`trashed_${String(index).padStart(12, '0')}`, `item-${index}.jpg`,
-      'image/jpeg', [1], [rejected.rootId], { trashed: true });
-  }
-  const rejectedResult = rejected.api.listDrivePhotoImportFolder(rejected.tokenPayload({ folderId: '' }));
-  assert.equal(rejectedResult.ok, false);
-  assert.equal(rejectedResult.errorCode, 'DRIVE_IMPORT_FOLDER_TOO_LARGE');
-  assert.equal(Object.hasOwn(rejectedResult, 'photos'), false);
-});
-
-test('folder listing uses case-insensitive name then ID order and the shared photo type contract', () => {
+test('legacy photo read is root-direct-only and preserves exact actual-byte materialization', () => {
   const harness = createHarness();
-  harness.addFolder('folder_BBBBBBBBBB', 'Same', [harness.rootId]);
-  harness.addFolder('folder_AAAAAAAAAA', 'same', [harness.rootId]);
-  harness.addFile('photo_BBBBBBBBBBB', 'Same.jpg', 'image/jpeg', [1], [harness.rootId]);
-  harness.addFile('photo_AAAAAAAAAAA', 'same.JPG', 'image/jpg', [2], [harness.rootId]);
-  harness.addFile('photo_PNGAAAAAAAA', 'photo.png', 'image/png', [3], [harness.rootId]);
-  harness.addFile('photo_WEBPAAAAAAA', 'photo.webp', 'application/octet-stream', [4], [harness.rootId]);
-  harness.addFile('photo_JPGAAAAAAAA', 'photo.jpg', 'application/octet-stream', [4], [harness.rootId]);
-  harness.addFile('photo_HEICAAAAAAA', 'photo.heic', 'image/heic', [5], [harness.rootId]);
-  harness.addFile('photo_HEIFAAAAAAA', 'photo.heif', 'binary/octet-stream', [6], [harness.rootId]);
-  harness.addFile('photo_MISMATCHAAA', 'wrong.png', 'image/jpeg', [7], [harness.rootId]);
-
-  const result = harness.api.listDrivePhotoImportFolder(harness.tokenPayload({ folderId: '' }));
-  assert.equal(result.ok, true);
-  assert.deepEqual(JSON.parse(JSON.stringify(result.folders)).map((item) => item.id),
-    ['folder_AAAAAAAAAA', 'folder_BBBBBBBBBB']);
-  assert.deepEqual(JSON.parse(JSON.stringify(result.photos)).map((item) => [item.id, item.kind]), [
-    ['photo_HEICAAAAAAA', 'heic'],
-    ['photo_HEIFAAAAAAA', 'heic'],
-    ['photo_JPGAAAAAAAA', 'jpeg'],
-    ['photo_PNGAAAAAAAA', 'png'],
-    ['photo_WEBPAAAAAAA', 'webp'],
-    ['photo_AAAAAAAAAAA', 'jpeg'],
-    ['photo_BBBBBBBBBBB', 'jpeg']
-  ]);
-  assert.equal(result.photos.find((item) => item.id === 'photo_JPGAAAAAAAA').mimeType, 'image/jpeg');
-  assert.equal(result.ignoredUnsupportedFileCount, 1);
-});
-
-test('photo read validates containment/type/trash and returns exact base64 with one blob and byte read', () => {
-  const harness = createHarness();
-  seedTree(harness);
-  assert.equal(typeof harness.api.readDrivePhotoImportFile, 'function');
+  const ids = seedStructure(harness);
+  harness.addFile('root_photo_AAAAAAA', 'root.webp', 'image/webp', [1, 2, 3], [harness.rootId], {
+    metadataSize: 1
+  });
+  harness.addFile('nested_photo_AAAA', 'nested.jpg', 'image/jpeg', [1], [ids.photos]);
+  harness.addFile('trashed_photo_AAA', 'trash.jpg', 'image/jpeg', [1], [harness.rootId], { trashed: true });
+  harness.addFile('unsupported_AAAAA', 'notes.txt', 'text/plain', [1], [harness.rootId]);
 
   const result = harness.api.readDrivePhotoImportFile(
-    harness.tokenPayload({ fileId: 'photo_AAAAAAAAAAA' })
+    harness.tokenPayload({ fileId: 'root_photo_AAAAAAA' })
   );
+
   assert.equal(result.ok, true);
   assert.equal(result.file.base64, 'AQID');
   assert.equal(result.file.sizeBytes, 3);
-  assert.equal(result.file.kind, 'jpeg');
-  assert.equal(result.file.modifiedAt, '2026-07-12T01:02:03.000Z');
-  assert.equal(harness.audit.blobReads, 1);
-  assert.equal(harness.audit.byteReads, 1);
-  assert.deepEqual(harness.audit.writes, []);
-
-  const rootDirect = harness.api.readDrivePhotoImportFile(
-    harness.tokenPayload({ fileId: 'root_photo_AAAAAA' })
-  );
-  assert.equal(rootDirect.ok, true);
-  assert.equal(rootDirect.file.kind, 'webp');
-
-  const outside = harness.api.readDrivePhotoImportFile(
-    harness.tokenPayload({ fileId: 'outside_photo_AAAA' })
-  );
-  assert.equal(outside.errorCode, 'DRIVE_IMPORT_FILE_OUTSIDE_ROOT');
-  const unsupported = harness.api.readDrivePhotoImportFile(
+  assert.equal(result.file.kind, 'webp');
+  assert.equal(harness.api.readDrivePhotoImportFile(
+    harness.tokenPayload({ fileId: 'nested_photo_AAAA' })
+  ).errorCode, 'DRIVE_IMPORT_FILE_OUTSIDE_ROOT');
+  assert.equal(harness.api.readDrivePhotoImportFile(
+    harness.tokenPayload({ fileId: 'trashed_photo_AAA' })
+  ).errorCode, 'DRIVE_IMPORT_FILE_NOT_FOUND');
+  assert.equal(harness.api.readDrivePhotoImportFile(
     harness.tokenPayload({ fileId: 'unsupported_AAAAA' })
-  );
-  assert.equal(unsupported.errorCode, 'DRIVE_IMPORT_FILE_TYPE_UNSUPPORTED');
-  const shortcut = harness.api.readDrivePhotoImportFile(
-    harness.tokenPayload({ fileId: 'shortcut_AAAAAAAAA' })
-  );
-  assert.equal(shortcut.errorCode, 'DRIVE_IMPORT_FILE_TYPE_UNSUPPORTED');
-  const trashed = harness.api.readDrivePhotoImportFile(
-    harness.tokenPayload({ fileId: 'trashed_file_AAAAA' })
-  );
-  assert.equal(trashed.errorCode, 'DRIVE_IMPORT_FILE_NOT_FOUND');
-  assert.doesNotMatch(JSON.stringify([outside, unsupported, shortcut, trashed]),
-    /private|outside_photo|unsupported_A|shortcut_A|trashed_file/);
+  ).errorCode, 'DRIVE_IMPORT_FILE_TYPE_UNSUPPORTED');
+  assert.deepEqual(harness.audit.writes, []);
 });
 
-test('photo read enforces the actual-byte 15MB boundary and sanitizes read failures', () => {
+test('photo read rejects completed root sources and proven managed root files just like listing', () => {
+  const receiptHeaders = [
+    'idempotencyKey', 'jobId', 'itemId', 'payloadHash', 'state', 'leaseOwner',
+    'leaseUntil', 'pinId', 'targetFolderId', 'tempFileName', 'fileId', 'imageUrl',
+    'folderUrl', 'createdAt', 'updatedAt', 'lastErrorCode', 'sourceDriveFileId',
+    'mediaKind', 'operationMode', 'targetPinId', 'cleanupFileId'
+  ];
+  const completed = Array(receiptHeaders.length).fill('');
+  completed[receiptHeaders.indexOf('state')] = 'completed';
+  completed[receiptHeaders.indexOf('pinId')] = 'pin-completed-photo';
+  completed[receiptHeaders.indexOf('sourceDriveFileId')] = 'completed_photo_A';
+  completed[receiptHeaders.indexOf('mediaKind')] = 'photo';
+  const harness = createHarness({ sheets: {
+    map_info: [['ID', 'ファイルID', '音声ID'], ['pin-managed-photo', 'managed_photo_AAA', '']],
+    import_receipts: [receiptHeaders, completed]
+  } });
+  seedStructure(harness);
+  harness.addFile('completed_photo_A', 'completed.jpg', 'image/jpeg', [1], [harness.rootId]);
+  harness.addFile('managed_photo_AAA', 'managed.jpg', 'image/jpeg', [2], [harness.rootId]);
+
+  assert.equal(harness.api.readDrivePhotoImportFile(
+    harness.tokenPayload({ fileId: 'completed_photo_A' })
+  ).errorCode, 'DRIVE_IMPORT_FILE_OUTSIDE_ROOT');
+  assert.equal(harness.api.readDrivePhotoImportFile(
+    harness.tokenPayload({ fileId: 'managed_photo_AAA' })
+  ).errorCode, 'DRIVE_IMPORT_FILE_OUTSIDE_ROOT');
+  assert.equal(harness.audit.blobReads, 0);
+});
+
+test('photo read enforces the actual-byte 15MiB limit and revalidates replacement state', () => {
   const exact = createHarness();
-  exact.addFile('exact_file_AAAAAAA', 'exact.jpg', 'image/jpeg', new Uint8Array(15 * 1024 * 1024), [exact.rootId]);
-  const exactResult = exact.api.readDrivePhotoImportFile(exact.tokenPayload({ fileId: 'exact_file_AAAAAAA' }));
-  assert.equal(exactResult.ok, true);
-  assert.equal(exactResult.file.sizeBytes, 15 * 1024 * 1024);
+  seedStructure(exact);
+  exact.addFile('exact_photo_AAAAA', 'exact.jpg', 'image/jpeg', new Uint8Array(15 * 1024 * 1024),
+    [exact.rootId], { metadataSize: 1 });
+  assert.equal(exact.api.readDrivePhotoImportFile(
+    exact.tokenPayload({ fileId: 'exact_photo_AAAAA' })
+  ).file.sizeBytes, 15 * 1024 * 1024);
 
   const over = createHarness();
-  over.addFile('large_file_AAAAAAA', 'large.jpg', 'image/jpeg',
-    new Uint8Array(15 * 1024 * 1024 + 1), [over.rootId], { metadataSize: 1 });
-  const overResult = over.api.readDrivePhotoImportFile(over.tokenPayload({ fileId: 'large_file_AAAAAAA' }));
-  assert.equal(overResult.errorCode, 'DRIVE_IMPORT_FILE_TOO_LARGE');
-  assert.equal(over.audit.blobReads, 1);
-  assert.equal(over.audit.byteReads, 1);
+  seedStructure(over);
+  over.addFile('large_photo_AAAAA', 'large.jpg', 'image/jpeg', new Uint8Array(15 * 1024 * 1024 + 1),
+    [over.rootId], { metadataSize: 1 });
+  assert.equal(over.api.readDrivePhotoImportFile(
+    over.tokenPayload({ fileId: 'large_photo_AAAAA' })
+  ).errorCode, 'DRIVE_IMPORT_FILE_TOO_LARGE');
 
-  const failed = createHarness();
-  failed.addFile('failed_file_AAAAAA', 'failed.jpg', 'image/jpeg', [1], [failed.rootId], { blobError: true });
-  const failedResult = failed.api.readDrivePhotoImportFile(failed.tokenPayload({ fileId: 'failed_file_AAAAAA' }));
-  assert.equal(failedResult.errorCode, 'DRIVE_IMPORT_FILE_READ_FAILED');
-  assert.doesNotMatch(JSON.stringify(failedResult), /private|failed_file|failed\.jpg/);
+  const replaced = createHarness();
+  const ids = seedStructure(replaced);
+  replaced.addFile('replace_photo_AAA', 'replace.jpg', 'image/jpeg', [1], [replaced.rootId]);
+  assert.equal(replaced.api.listDriveMediaInbox(
+    replaced.tokenPayload({ mediaKind: 'photo' })
+  ).items.length, 1);
+  replaced.replaceFile('replace_photo_AAA', 'replace.jpg', 'image/jpeg', [1], [ids.photos]);
+  assert.equal(replaced.api.readDrivePhotoImportFile(
+    replaced.tokenPayload({ fileId: 'replace_photo_AAA' })
+  ).errorCode, 'DRIVE_IMPORT_FILE_OUTSIDE_ROOT');
+});
 
-  const mismatch = createHarness();
-  mismatch.addFile('mismatch_file_AAAA', 'mismatch.jpg', 'image/jpeg', [1, 2], [mismatch.rootId], {
-    metadataSize: 1
-  });
-  const mismatchResult = mismatch.api.readDrivePhotoImportFile(
-    mismatch.tokenPayload({ fileId: 'mismatch_file_AAAA' })
+test('compatibility wrappers delegate to media APIs instead of retaining descendant traversal', () => {
+  const listBody = codeJs.slice(
+    codeJs.indexOf('function listDrivePhotoImportFolder'),
+    codeJs.indexOf('function readDrivePhotoImportFile')
   );
-  assert.equal(mismatchResult.ok, true);
-  assert.equal(mismatchResult.file.sizeBytes, 2);
-  assert.equal(mismatchResult.file.base64, 'AQI=');
-  assert.equal(mismatch.audit.blobReads, 1);
-  assert.equal(mismatch.audit.byteReads, 1);
-});
-
-test('folder listing hides the exact root original folder and refuses direct browsing of its photos', () => {
-  const harness = createHarness();
-  harness.addFolder('original_AAAAAAAAA', 'original', [harness.rootId]);
-  harness.addFolder('Original_AAAAAAAAA', 'Original', [harness.rootId]);
-  harness.addFile('archived_AAAAAAAAA', 'archived.jpg', 'image/jpeg', [1, 2, 3], ['original_AAAAAAAAA']);
-
-  const rootResult = harness.api.listDrivePhotoImportFolder(harness.tokenPayload({ folderId: '' }));
-  assert.equal(rootResult.ok, true);
-  assert.deepEqual(JSON.parse(JSON.stringify(rootResult.folders)).map((folder) => folder.name), ['Original']);
-  assert.equal(rootResult.photos.some((photo) => photo.name === 'archived.jpg'), false);
-
-  const archivedResult = harness.api.listDrivePhotoImportFolder(
-    harness.tokenPayload({ folderId: 'original_AAAAAAAAA' })
+  const readBody = codeJs.slice(
+    codeJs.indexOf('function readDrivePhotoImportFile'),
+    codeJs.indexOf('\nfunction ', codeJs.indexOf('function readDrivePhotoImportFile') + 10)
   );
-  assert.equal(archivedResult.ok, false);
-  assert.equal(archivedResult.errorCode, 'DRIVE_IMPORT_FOLDER_NOT_FOUND');
-  assert.doesNotMatch(JSON.stringify(archivedResult), /archived\.jpg|archived_A/);
-});
-
-test('server never emits an unsafe basename or invalid modifiedAt descriptor', () => {
-  const harness = createHarness();
-  harness.addFile('unsafe_name_AAAAAAA', '../photo.jpg', 'image/jpeg', [1], [harness.rootId]);
-  harness.addFile('unsafe_c1_AAAAAAAAA', 'bad\u0085name.jpg', 'image/jpeg', [1], [harness.rootId]);
-  harness.addFile('unsafe_bidi_AAAAAAA', 'bad\u202Ename.jpg', 'image/jpeg', [1], [harness.rootId]);
-  harness.addFile('invalid_date_AAAAAA', 'photo.jpg', 'image/jpeg', [1], [harness.rootId], {
-    modifiedAt: 'not-a-date'
-  });
-  const listing = harness.api.listDrivePhotoImportFolder(harness.tokenPayload({ folderId: '' }));
-  assert.equal(listing.ok, true);
-  assert.deepEqual(JSON.parse(JSON.stringify(listing.photos)), []);
-  assert.equal(listing.ignoredUnsupportedFileCount, 4);
-  assert.equal(harness.api.readDrivePhotoImportFile(
-    harness.tokenPayload({ fileId: 'unsafe_name_AAAAAAA' })
-  ).errorCode, 'DRIVE_IMPORT_FILE_READ_FAILED');
-  assert.equal(harness.api.readDrivePhotoImportFile(
-    harness.tokenPayload({ fileId: 'invalid_date_AAAAAA' })
-  ).errorCode, 'DRIVE_IMPORT_FILE_READ_FAILED');
-  assert.equal(harness.api.readDrivePhotoImportFile(
-    harness.tokenPayload({ fileId: 'unsafe_c1_AAAAAAAAA' })
-  ).errorCode, 'DRIVE_IMPORT_FILE_READ_FAILED');
-  assert.equal(harness.api.readDrivePhotoImportFile(
-    harness.tokenPayload({ fileId: 'unsafe_bidi_AAAAAAA' })
-  ).errorCode, 'DRIVE_IMPORT_FILE_READ_FAILED');
-});
-
-test('folder listing accepts displayable path-like names and rejects dangerous folder controls safely', () => {
-  const safe = createHarness();
-  safe.addFolder('safe_name_AAAAAAAA', '<b>A/B\\C</b>', [safe.rootId]);
-  const safeResult = safe.api.listDrivePhotoImportFolder(safe.tokenPayload({ folderId: '' }));
-  assert.equal(safeResult.ok, true);
-  assert.equal(safeResult.folders[0].name, '<b>A/B\\C</b>');
-
-  ['bad\nname', 'bad\u0085name', 'bad\u202Ename'].forEach((name, index) => {
-    const hostile = createHarness();
-    hostile.addFolder(`hostile_${String(index).padStart(12, '0')}`, name, [hostile.rootId]);
-    const result = hostile.api.listDrivePhotoImportFolder(hostile.tokenPayload({ folderId: '' }));
-    assert.equal(result.ok, false);
-    assert.equal(result.errorCode, 'DRIVE_IMPORT_FOLDER_NOT_FOUND');
-    assert.doesNotMatch(JSON.stringify(result), /bad|name/);
-  });
-});
-
-test('folder failures ignore unknown or throwing provider codes and keep a safe folder fallback', () => {
-  ['unknown', 'throwing'].forEach((mode) => {
-    const harness = createHarness();
-    harness.folders.get(harness.rootId).getFolders = function() {
-      const error = new Error('private provider detail ' + harness.rootId);
-      if (mode === 'unknown') error.code = 'EIO';
-      else Object.defineProperty(error, 'code', {
-        get() { throw new Error('private code getter ' + harness.rootId); }
-      });
-      throw error;
-    };
-    const result = harness.api.listDrivePhotoImportFolder(harness.tokenPayload({ folderId: '' }));
-    assert.equal(result.ok, false);
-    assert.equal(result.errorCode, 'DRIVE_IMPORT_FOLDER_NOT_FOUND');
-    assert.doesNotMatch(JSON.stringify(result), /private|EIO|root_/);
-  });
-});
-
-test('non-root listing fails safely when its validated parent cannot be projected', () => {
-  const harness = createHarness();
-  const child = harness.addFolder('child_AAAAAAAAAAA', 'Child', [harness.rootId]);
-  const originalGetParents = child.getParents;
-  let parentReads = 0;
-  child.getParents = function() {
-    parentReads += 1;
-    if (parentReads > 1) throw new Error('private parent changed after containment');
-    return originalGetParents();
-  };
-  const result = harness.api.listDrivePhotoImportFolder(
-    harness.tokenPayload({ folderId: child.getId() })
-  );
-  assert.equal(result.ok, false);
-  assert.equal(result.errorCode, 'DRIVE_IMPORT_FOLDER_NOT_FOUND');
-  assert.doesNotMatch(JSON.stringify(result), /private|parent changed|child_A/);
-});
-
-test('Phase 9-1 server APIs contain no Drive or Sheet write path', () => {
-  const forbidden = [
-    'createFile', 'createFolder', 'makeCopy', 'moveTo', 'setName', 'setSharing',
-    'setTrashed', 'appendRow', 'setValues', 'saveImportPhotoItem', 'saveMapData'
-  ];
-  ['listDrivePhotoImportFolder', 'readDrivePhotoImportFile'].forEach((name) => {
-    const body = functionBody(name);
-    forbidden.forEach((operation) => {
-      assert.equal(body.includes(operation + '('), false, `${name} must not call ${operation}`);
-    });
-  });
+  assert.match(listBody, /listDriveMediaInbox/);
+  assert.match(readBody, /readDriveMediaImportFile_/);
+  assert.doesNotMatch(listBody, /getFolders\(/);
 });

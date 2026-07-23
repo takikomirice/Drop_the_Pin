@@ -53,6 +53,7 @@ const unguardedReadOnlyFunctions = [
   'getRouteCache',
   'getTracks',
   'getSharedViewData',
+  'getSharedPinAudioData',
   'getSharedRoadRouteCache'
 ];
 
@@ -160,6 +161,7 @@ test('index read-only calls are not forced through edit token', () => {
 
 test('shared view keeps read-only GAS calls without edit token dependency', () => {
   assertIncludes(sharedHtml, "withGAS('getSharedViewData', state.token)");
+  assertIncludes(sharedHtml, "withGAS('getSharedPinAudioData', {");
   assertIncludes(sharedHtml, "withGAS('getSharedRoadRouteCache', { token: state.token, routeId: key })");
   assert.equal(sharedHtml.includes('withEditToken'), false);
   assert.equal(sharedHtml.includes('__EDIT_TOKEN__'), false);

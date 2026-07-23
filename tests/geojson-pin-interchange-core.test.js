@@ -368,7 +368,9 @@ test('serialization emits immutable canonical GeoJSON with Point lng/lat order a
       id: 'pin-1', title: '東京🙂', description: '改行\n"引用"', lat: 35.6812, lng: 139.7671,
       color: '#2196f3', icon: 'photo', status: '', tags: ['観察'],
       eventAt: '2026-07-11T10:30:45', links: ['https://example.com'],
-      imageUrl: 'secret', fileId: 'file', folderUrl: 'folder', routeIds: ['route']
+      imageUrl: 'secret', fileId: 'file', folderUrl: 'folder', routeIds: ['route'],
+      hasAudio: true, audioId: 'managed_audio_secret', audioBase64: 'SUQz-secret',
+      sourceDriveFileId: 'source_audio_secret'
     },
     { id: 'pin-2', title: '未配置', description: '', lat: null, lng: null, tags: [], links: [] }
   ];
@@ -388,6 +390,9 @@ test('serialization emits immutable canonical GeoJSON with Point lng/lat order a
   assert.equal(text.includes('fileId'), false);
   assert.equal(text.includes('folderUrl'), false);
   assert.equal(text.includes('routeIds'), false);
+  assert.equal(text.includes('managed_audio_secret'), false);
+  assert.equal(text.includes('SUQz-secret'), false);
+  assert.equal(text.includes('source_audio_secret'), false);
   assert.equal(JSON.stringify(pins), before);
 });
 
@@ -432,4 +437,8 @@ test('serialized placed and unplaced pins round trip all exchange fields without
   })));
   assert.deepEqual(plain(job.items.map((item) => item.id)), ['generated-1', 'generated-2']);
   assert.equal(job.id, 'generated-3');
+  assert.equal(job.items.some((item) => (
+    Object.hasOwn(item, 'audioId') || Object.hasOwn(item, 'hasAudio')
+      || Object.hasOwn(item, 'audioBase64') || Object.hasOwn(item, 'sourceDriveFileId')
+  )), false);
 });

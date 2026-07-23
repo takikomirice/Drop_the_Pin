@@ -5,7 +5,9 @@ const test = require('node:test');
 
 const indexHtml = fs.readFileSync(path.resolve(__dirname, '..', 'index.html'), 'utf8');
 const css = indexHtml.match(/<style>([\s\S]*?)<\/style>/)[1];
-const bodyMarkup = indexHtml.slice(indexHtml.indexOf('<body'), indexHtml.indexOf('<script>', indexHtml.indexOf('<body')));
+const mainScriptStart = indexHtml.lastIndexOf('<script>', indexHtml.indexOf('const appStartupStartedAt'));
+const bodyMarkup = indexHtml.slice(indexHtml.indexOf('<body'), mainScriptStart)
+  .replace(/<script(?:\s[^>]*)?>[\s\S]*?<\/script>/gi, '');
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

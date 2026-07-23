@@ -451,5 +451,5 @@ test('README summarizes CSV limits, export exclusions, and manual verification s
   assert.match(readme, /CSVピン[^\n]*2MB[^\n]*20データ行/);
   assert.match(readme, /CSV／GeoJSON Pointのエクスポートには写真[^\n]*Drive ID[^\n]*ルート[^\n]*含めません/);
   assert.match(readme, /CSV／GeoJSON Pointの1件／20件取込[^\n]*上限超過[^\n]*不正項目削除[^\n]*エクスポート/);
-  assert.match(readme, /Apps Script[^\n]*実ブラウザ[^\n]*確認は未実施/);
+  assert.match(readme, /Nodeテスト[^\n]*Chromiumテスト[^\n]*Apps Script[^\n]*実Drive[^\n]*未実施/);
 });

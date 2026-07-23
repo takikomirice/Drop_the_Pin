@@ -12,12 +12,13 @@ const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
 const RECEIPT_HEADERS = [
   'idempotencyKey', 'jobId', 'itemId', 'payloadHash', 'state', 'leaseOwner',
   'leaseUntil', 'pinId', 'targetFolderId', 'tempFileName', 'fileId', 'imageUrl',
-  'folderUrl', 'createdAt', 'updatedAt', 'lastErrorCode', 'sourceDriveFileId'
+  'folderUrl', 'createdAt', 'updatedAt', 'lastErrorCode', 'sourceDriveFileId',
+  'mediaKind', 'operationMode', 'targetPinId', 'cleanupFileId'
 ];
 const MAP_HEADERS = [
   'タイムスタンプ', 'タイトル', '説明', '緯度', '経度', 'ピンの色',
   'ファイルID', '画像URL', 'ID', '参考URL一覧', '状態', 'タグ',
-  'イベント時刻', '更新時刻', 'アイコン'
+  'イベント時刻', '更新時刻', 'アイコン', '音声ID'
 ];
 
 function columnNumber(label) {
@@ -51,12 +52,13 @@ function lastUsedRow(rows) {
 function makeHarness(options = {}) {
   const audit = {
     sheetLookups: [], inserts: [], columnInserts: [], reads: [], writes: [], alerts: [],
-    errors: [],
+    errors: [], events: [],
     uuidCalls: 0,
-    locks: { attempts: 0, flushes: 0, releases: 0, held: false },
+    locks: { attempts: 0, flushes: 0, releases: 0, held: false, nestedAttempts: 0 },
     drive: {
-      creates: 0, renames: 0, shares: 0, folderGets: 0, fileGets: 0,
-      searches: 0, trashes: 0, moves: 0, folderCreates: 0, callsWhileLocked: 0,
+      creates: 0, guideCreates: 0, renames: 0, shares: 0, folderGets: 0, fileGets: 0,
+      searches: 0, trashes: 0, moves: 0, folderCreates: 0, mediaFolderCreates: 0,
+      callsWhileLocked: 0,
       renameIds: [], shareIds: [], trashIds: [], moveIds: []
     }
   };
@@ -74,6 +76,9 @@ function makeHarness(options = {}) {
 
   function makeSheet(name, initialRows = []) {
     const rows = initialRows.map((row) => row.slice());
+    const formulas = (options.sheetFormulas && options.sheetFormulas[name]
+      ? options.sheetFormulas[name]
+      : initialRows.map((row) => row.map(() => ''))).map((row) => row.slice());
     let maxRows = Math.max(1000, rows.length);
     let maxColumns = options.sheetMaxColumns && options.sheetMaxColumns[name] != null
       ? Number(options.sheetMaxColumns[name])
@@ -81,22 +86,29 @@ function makeHarness(options = {}) {
     const sheet = {
       name,
       rows,
+      formulas,
       getLastRow() { return lastUsedRow(rows); },
       getLastColumn() { return rows.reduce((max, row) => Math.max(max, row.length), 0); },
       getMaxRows() { return maxRows; },
       getMaxColumns() { return maxColumns; },
       insertRowsAfter(_after, count) { maxRows += count; },
       insertColumnsAfter(after, count) {
+        if (after < 1 || after > maxColumns || count < 1) throw new Error('Invalid column insertion');
         audit.columnInserts.push({ sheet: name, after, count, lockHeld: audit.locks.held });
         maxColumns += count;
       },
-      insertRowBefore(rowNumber) { rows.splice(rowNumber - 1, 0, []); },
+      insertRowBefore(rowNumber) {
+        rows.splice(rowNumber - 1, 0, []);
+        formulas.splice(rowNumber - 1, 0, []);
+      },
       appendRow(row) {
         if (name === 'map_info' && options.failMapAppendOnce && !mapAppendFailed) {
           mapAppendFailed = true;
           throw new Error('map append failed');
         }
         rows.push(row.slice());
+        formulas.push(row.map(() => ''));
+        audit.events.push({ type: 'sheet-append', sheet: name });
         audit.writes.push({ sheet: name, method: 'appendRow', values: row.slice(), lockHeld: audit.locks.held });
         if (name === 'import_receipts' && typeof options.afterReceiptAppend === 'function') {
           options.afterReceiptAppend(rows[rows.length - 1]);
@@ -109,6 +121,9 @@ function makeHarness(options = {}) {
         const info = typeof rowOrA1 === 'string'
           ? parseA1(rowOrA1)
           : { row: rowOrA1, column, numRows, numColumns };
+        if (info.column + info.numColumns - 1 > maxColumns) {
+          throw new Error(`Range exceeds physical columns on ${name}`);
+        }
         const range = {
           getValues() {
             audit.reads.push({ sheet: name, ...info, lockHeld: audit.locks.held });
@@ -120,7 +135,11 @@ function makeHarness(options = {}) {
           },
           getValue() { return range.getValues()[0][0]; },
           getFormulas() {
-            return Array.from({ length: info.numRows }, () => Array(info.numColumns).fill(''));
+            return Array.from({ length: info.numRows }, (_unused, rowOffset) =>
+              Array.from({ length: info.numColumns }, (_unusedColumn, columnOffset) =>
+                (formulas[info.row - 1 + rowOffset] || [])[info.column - 1 + columnOffset] || ''
+              )
+            );
           },
           setValues(values) {
             if (name === 'map_info'
@@ -155,17 +174,29 @@ function makeHarness(options = {}) {
               options.__receiptCompleteWriteFailed = true;
               throw new Error('receipt completion write failed');
             }
+            if (name === 'import_receipts'
+                && options.failSourceMoveJournalWrites
+                && values[0]
+                && values[0][receiptColumn('state')] === 'completed'
+                && values[0][receiptColumn('lastErrorCode')]) {
+              throw new Error('source move journal write failed');
+            }
             audit.writes.push({
               sheet: name, method: 'setValues', ...info,
               values: values.map((row) => row.slice()), lockHeld: audit.locks.held
             });
             values.forEach((sourceRow, rowOffset) => {
               const targetRow = info.row - 1 + rowOffset;
-              while (rows.length <= targetRow) rows.push([]);
+              while (rows.length <= targetRow) {
+                rows.push([]);
+                formulas.push([]);
+              }
               sourceRow.forEach((value, columnOffset) => {
                 const targetColumn = info.column - 1 + columnOffset;
                 while (rows[targetRow].length <= targetColumn) rows[targetRow].push('');
+                while (formulas[targetRow].length <= targetColumn) formulas[targetRow].push('');
                 rows[targetRow][targetColumn] = value;
+                formulas[targetRow][targetColumn] = '';
               });
             });
             return range;
@@ -252,7 +283,12 @@ function makeHarness(options = {}) {
         if (audit.locks.held) audit.drive.callsWhileLocked += 1;
         audit.drive.moves += 1;
         audit.drive.moveIds.push(id);
+        audit.events.push({ type: 'drive-move', id, targetFolderId: targetFolder.id });
         if (metadata.failMoveAlways) throw new Error('private source move failure');
+        if (metadata.failMoveOnce && !metadata.__moveFailed) {
+          metadata.__moveFailed = true;
+          throw new Error('private transient source move failure');
+        }
         if (!metadata.moveWithoutParentChange) {
           file.parentFolders.forEach((parent) => {
             parent.files = parent.files.filter((candidate) => candidate !== file);
@@ -293,11 +329,19 @@ function makeHarness(options = {}) {
         const children = folder.folders.slice();
         return { hasNext: () => index < children.length, next() { return children[index++]; } };
       },
+      getFiles() {
+        let index = 0;
+        const children = folder.files.slice();
+        return { hasNext: () => index < children.length, next() { return children[index++]; } };
+      },
       createFolder(name) {
         if (audit.locks.held) audit.drive.callsWhileLocked += 1;
-        audit.drive.folderCreates += 1;
-        if (options.failOriginalFolderCreate) throw new Error('private folder create failure');
-        const child = makeFolder(`folder-original-${audit.drive.folderCreates}`, { name: String(name) });
+        audit.drive.mediaFolderCreates += 1;
+        if (String(name) === 'original') audit.drive.folderCreates += 1;
+        if (options.failOriginalFolderCreate && String(name) === 'original') {
+          throw new Error('private folder create failure');
+        }
+        const child = makeFolder(`folder-media-${audit.drive.mediaFolderCreates}`, { name: String(name) });
         child.parentFolders = [folder];
         folder.folders.push(child);
         return child;
@@ -310,11 +354,15 @@ function makeHarness(options = {}) {
       },
       createFile(blob) {
         if (audit.locks.held) audit.drive.callsWhileLocked += 1;
-        audit.drive.creates += 1;
+        const isGuide = blob && blob.name === 'ここに直接ファイルを入れてください.txt';
+        if (isGuide) audit.drive.guideCreates += 1;
+        else audit.drive.creates += 1;
         if (options.failCreatePermission) {
           throw new Error('Access denied: DriveApp. You do not have permission to create files.');
         }
-        const file = makeFile(folder, `file-${String(audit.drive.creates).padStart(10, '0')}`, blob.name, {
+        const file = makeFile(folder,
+          `file-${String(audit.drive.creates + audit.drive.guideCreates).padStart(10, '0')}`,
+          blob.name, {
           managed: true,
           sharingAccess: 'PRIVATE',
           failSharingAlways: options.failManagedSharingAlways === true,
@@ -343,6 +391,18 @@ function makeHarness(options = {}) {
   Object.entries(options.sheets || {}).forEach(([name, rows]) => makeSheet(name, rows));
   const defaultFolder = makeFolder('folder-1', { name: 'Selected' });
   const rootFolder = makeFolder('123456789012345', { name: 'Root' });
+  let mediaFolders = null;
+  if (options.seedMediaStructure !== false) {
+    const photos = rootFolder.seedFolder('media_photos_AAAAA', 'photos');
+    const audio = rootFolder.seedFolder('media_audio_AAAAAA', 'audio');
+    const original = rootFolder.seedFolder('media_original_AAA', 'original');
+    const originalPhotos = original.seedFolder('media_original_photo', 'photos');
+    const originalAudio = original.seedFolder('media_original_audio', 'audio');
+    rootFolder.seedFile('media_guide_AAAAAA', 'ここに直接ファイルを入れてください.txt', {
+      mimeType: 'text/plain', sizeBytes: 0, bytes: []
+    });
+    mediaFolders = { photos, audio, original, originalPhotos, originalAudio };
+  }
   const spreadsheet = {
     getSheetByName(name) { audit.sheetLookups.push(name); return sheets.get(name) || null; },
     insertSheet(name) { audit.inserts.push(name); return makeSheet(name); }
@@ -351,6 +411,10 @@ function makeHarness(options = {}) {
     tryLock() {
       audit.locks.attempts += 1;
       if (options.lockAcquired === false) return false;
+      if (audit.locks.held) {
+        audit.locks.nestedAttempts += 1;
+        return false;
+      }
       audit.locks.held = true;
       return true;
     },
@@ -422,6 +486,7 @@ function makeHarness(options = {}) {
       + 'setupSheet,\n'
       + 'saveImportPhotoItem: typeof saveImportPhotoItem === "undefined" ? null : saveImportPhotoItem,\n'
       + 'saveImportPinItem: typeof saveImportPinItem === "undefined" ? null : saveImportPinItem,\n'
+      + 'saveImportAudioItem: typeof saveImportAudioItem === "undefined" ? null : saveImportAudioItem,\n'
       + 'saveMapData: typeof saveMapData === "undefined" ? null : saveMapData,\n'
       + 'getMapData: typeof getMapData === "undefined" ? null : getMapData,\n'
       + 'PinData: typeof PinData === "undefined" ? null : PinData,\n'
@@ -438,7 +503,10 @@ function makeHarness(options = {}) {
       + '};',
     context
   );
-  return { api: context.__api, audit, sheets, folders, filesById, defaultFolder, rootFolder, context };
+  return {
+    api: context.__api, audit, sheets, folders, filesById, defaultFolder, rootFolder,
+    mediaFolders, context
+  };
 }
 
 function baseSheets(includeReceipts = true) {
@@ -528,7 +596,7 @@ test('setupSheet creates import_receipts with fixed headers and preserves existi
   assert.deepEqual(repaired.sheets.get('import_receipts').rows[0].slice(0, RECEIPT_HEADERS.length), RECEIPT_HEADERS);
   assert.deepEqual(repaired.sheets.get('import_receipts').rows[1], ['preserved-key', 'preserved-job']);
 
-  const oldHeaders = RECEIPT_HEADERS.slice(0, -1);
+  const oldHeaders = RECEIPT_HEADERS.slice(0, 17);
   const oldRow = ['legacy-key', 'legacy-job', 'legacy-item', 'legacy-hash', 'completed'];
   const migrated = makeHarness({ sheets: {
     ...baseSheets(false), import_receipts: [oldHeaders, oldRow]
@@ -536,6 +604,80 @@ test('setupSheet creates import_receipts with fixed headers and preserves existi
   migrated.api.setupSheet();
   assert.deepEqual(migrated.sheets.get('import_receipts').rows[0].slice(0, RECEIPT_HEADERS.length), RECEIPT_HEADERS);
   assert.deepEqual(migrated.sheets.get('import_receipts').rows[1], oldRow);
+});
+
+test('setupSheet grows an exact 17-column receipt grid by appending headers once', () => {
+  const legacyHeaders = RECEIPT_HEADERS.slice(0, 17);
+  const legacyRow = legacyHeaders.map((header) => ({
+    idempotencyKey: 'legacy-key',
+    state: 'completed',
+    pinId: 'legacy-pin',
+    imageUrl: 'https://example.com/photo.jpg'
+  })[header] || '');
+  legacyRow[11] = 'computed-image-url';
+  const formulas = [legacyHeaders.map(() => ''), legacyRow.map(() => '')];
+  formulas[0][16] = '="sourceDriveFileId"';
+  formulas[1][11] = '=IMAGE("https://example.com/photo.jpg")';
+  const harness = makeHarness({
+    sheetMaxColumns: { import_receipts: 17 },
+    sheetFormulas: { import_receipts: formulas },
+    sheets: {
+      ...baseSheets(false),
+      import_receipts: [legacyHeaders, legacyRow]
+    }
+  });
+
+  harness.api.setupSheet();
+  harness.api.setupSheet();
+
+  const receiptSheet = harness.sheets.get('import_receipts');
+  assert.deepEqual(receiptSheet.rows[0], RECEIPT_HEADERS);
+  assert.deepEqual(receiptSheet.rows[1], legacyRow);
+  assert.equal(receiptSheet.formulas[0][16], '="sourceDriveFileId"');
+  assert.equal(receiptSheet.formulas[1][11], '=IMAGE("https://example.com/photo.jpg")');
+  assert.deepEqual(harness.audit.columnInserts, [{
+    sheet: 'import_receipts', after: 17, count: 4, lockHeld: false
+  }]);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(
+      harness.audit.writes.filter((write) => write.sheet === 'import_receipts')
+    )),
+    [{
+      sheet: 'import_receipts', method: 'setValues', row: 1, column: 18,
+      numRows: 1, numColumns: 4,
+      values: [['mediaKind', 'operationMode', 'targetPinId', 'cleanupFileId']],
+      lockHeld: false
+    }]
+  );
+});
+
+test('setupSheet preserves an appended receipt header formula that evaluates empty', () => {
+  const headerValues = RECEIPT_HEADERS.slice(0, 17).concat(['', '', '', '']);
+  const headerFormulas = [headerValues.map(() => '')];
+  headerFormulas[0][17] = '=""';
+  const harness = makeHarness({
+    sheetMaxColumns: { import_receipts: 21 },
+    sheetFormulas: { import_receipts: headerFormulas },
+    sheets: {
+      ...baseSheets(false),
+      import_receipts: [headerValues]
+    }
+  });
+
+  harness.api.setupSheet();
+
+  const receiptSheet = harness.sheets.get('import_receipts');
+  assert.equal(receiptSheet.formulas[0][17], '=""');
+  assert.equal(receiptSheet.rows[0][17], '');
+  assert.deepEqual(receiptSheet.rows[0].slice(18), RECEIPT_HEADERS.slice(18));
+  assert.deepEqual(
+    harness.audit.writes.filter((write) => write.sheet === 'import_receipts'
+      && (write.method === 'setValue' || write.method === 'setValues')
+      && write.row === 1
+      && write.column <= 18
+      && write.column + write.numColumns - 1 >= 18),
+    []
+  );
 });
 
 test('authentication happens before Spreadsheet and Drive access', () => {
@@ -564,7 +706,8 @@ test('saveImportPinItem stores one photo-less pin and completes an empty-storage
     timestamp: '2026/07/11 12:00:00', title: 'CSVピン', description: '説明',
     lat: 35.5, lng: 139.5, color: '#e53935', fileId: '', imageUrl: '',
     id: 'uuid-2', links: ['https://example.com/path'], status: '', tags: ['観察'],
-    eventAt: '2026-07-11T10:30', updatedAt: '', icon: 'default', folderUrl: ''
+    eventAt: '2026-07-11T10:30', updatedAt: '', icon: 'default', folderUrl: '',
+    hasAudio: false
   });
   const receipt = harness.sheets.get('import_receipts').rows[1];
   assert.equal(receipt[receiptColumn('state')], 'completed');
@@ -1138,8 +1281,37 @@ test('receipt auto-migration rejects reordered duplicate and missing-middle head
   });
 });
 
+test('photo save rejects an evaluated-empty formula in the receipt header suffix without mutation', () => {
+  const headerValues = RECEIPT_HEADERS.slice(0, 17).concat(['', '', '', '']);
+  const headerFormulas = [headerValues.map(() => '')];
+  headerFormulas[0][17] = '=""';
+  const harness = makeHarness({
+    sheetMaxColumns: { import_receipts: 21 },
+    sheetFormulas: { import_receipts: headerFormulas },
+    sheets: {
+      ...baseSheets(false),
+      import_receipts: [headerValues]
+    }
+  });
+
+  const result = harness.api.saveImportPhotoItem(payload());
+
+  const receiptSheet = harness.sheets.get('import_receipts');
+  assert.equal(receiptSheet.formulas[0][17], '=""');
+  assert.equal(result.ok, false);
+  assert.equal(result.errorCode, 'IMPORT_RECEIPT_CORRUPTED');
+  assert.equal(result.retryable, false);
+  assert.deepEqual(receiptSheet.rows, [headerValues]);
+  assert.equal(harness.sheets.get('map_info').rows.length, 1);
+  assert.deepEqual(harness.audit.columnInserts, []);
+  assert.deepEqual(harness.audit.writes, []);
+  assert.equal(harness.audit.uuidCalls, 0);
+  assert.equal(harness.audit.drive.creates, 0);
+  assert.equal(harness.audit.drive.fileGets + harness.audit.drive.folderGets, 0);
+});
+
 test('legacy 16-column schema reproduces the prior IMPORT_RECEIPT_CORRUPTED failure before claim or Drive access', () => {
-  const legacyHeaders = RECEIPT_HEADERS.slice(0, -1);
+  const legacyHeaders = RECEIPT_HEADERS.slice(0, 16);
   const harness = makeHarness({ sheets: {
     ...baseSheets(false), import_receipts: [legacyHeaders]
   } });
@@ -1155,7 +1327,7 @@ test('legacy 16-column schema reproduces the prior IMPORT_RECEIPT_CORRUPTED fail
 });
 
 test('photo save auto-migrates the exact legacy 16-column receipt schema before Drive access', () => {
-  const legacyHeaders = RECEIPT_HEADERS.slice(0, -1);
+  const legacyHeaders = RECEIPT_HEADERS.slice(0, 16);
   const legacyRow = [
     'legacy-key', 'legacy-job', 'legacy-item', 'legacy-hash', 'completed', '', '',
     'legacy-pin', 'folder-1', '__drop_pin_import_legacy-pin.jpg', 'legacy-file',
@@ -1179,15 +1351,16 @@ test('photo save auto-migrates the exact legacy 16-column receipt schema before 
   const migrationWrite = harness.audit.writes.find((write) => (
     write.sheet === 'import_receipts'
       && write.row === 1
-      && write.column === RECEIPT_HEADERS.length
+      && write.column === 17
       && write.numRows === 1
-      && write.numColumns === 1
+      && write.numColumns === 5
   ));
-  assert.ok(migrationWrite, 'migration must write only the new header cell');
+  assert.ok(migrationWrite, 'migration must write only the five appended header cells');
   assert.deepEqual(harness.audit.columnInserts, [{
-    sheet: 'import_receipts', after: 16, count: 1, lockHeld: true
+    sheet: 'import_receipts', after: 16, count: 5, lockHeld: true
   }]);
-  assert.equal(harness.audit.drive.callsWhileLocked, 0);
+  assert.equal(harness.audit.locks.nestedAttempts, 0);
+  assert.equal(harness.audit.locks.releases, harness.audit.locks.attempts);
 
   const replay = harness.api.saveImportPhotoItem(payload());
   assert.equal(replay.ok, true);
@@ -1195,16 +1368,43 @@ test('photo save auto-migrates the exact legacy 16-column receipt schema before 
   assert.equal(harness.audit.writes.filter((write) => (
     write.sheet === 'import_receipts'
       && write.row === 1
-      && write.column === RECEIPT_HEADERS.length
+      && write.column === 17
       && write.numRows === 1
-      && write.numColumns === 1
+      && write.numColumns === 5
   )).length, 1, 'repeated saves must not repeat the schema migration');
   assert.equal(harness.audit.drive.creates, 1);
   assert.equal(harness.sheets.get('map_info').rows.length, 2);
 });
 
+test('legacy 17-column completed receipt replays as photo without rewriting its row', () => {
+  const initial = makeHarness({ sheets: baseSheets() });
+  const first = initial.api.saveImportPhotoItem(payload());
+  assert.equal(first.ok, true, JSON.stringify(first));
+
+  const legacyHeaders = RECEIPT_HEADERS.slice(0, 17);
+  const legacyRow = initial.sheets.get('import_receipts').rows[1].slice(0, 17);
+  const replayHarness = makeHarness({
+    sheetMaxColumns: { import_receipts: 17 },
+    sheets: {
+      ...baseSheets(false),
+      map_info: initial.sheets.get('map_info').rows.map((row) => row.slice()),
+      import_receipts: [legacyHeaders, legacyRow]
+    }
+  });
+
+  const replay = replayHarness.api.saveImportPhotoItem(payload());
+
+  assert.equal(replay.ok, true, JSON.stringify(replay));
+  assert.equal(replay.deduplicated, true);
+  assert.equal(replay.pin.imageUrl, 'https://drive.google.com/thumbnail?id=file-0000000001&sz=w1920');
+  assert.deepEqual(replayHarness.sheets.get('import_receipts').rows[1], legacyRow);
+  assert.deepEqual(replayHarness.audit.columnInserts, [{
+    sheet: 'import_receipts', after: 17, count: 4, lockHeld: true
+  }]);
+});
+
 test('legacy receipt migration lock contention is retryable and performs no schema or Drive write', () => {
-  const legacyHeaders = RECEIPT_HEADERS.slice(0, -1);
+  const legacyHeaders = RECEIPT_HEADERS.slice(0, 16);
   const harness = makeHarness({ lockAcquired: false, sheets: {
     ...baseSheets(false), import_receipts: [legacyHeaders]
   } });
@@ -1218,7 +1418,7 @@ test('legacy receipt migration lock contention is retryable and performs no sche
 
 test('legacy receipt migration enables device and managed Drive photos', () => {
   const deviceHarness = makeHarness({ sheets: {
-    ...baseSheets(false), import_receipts: [RECEIPT_HEADERS.slice(0, -1)]
+    ...baseSheets(false), import_receipts: [RECEIPT_HEADERS.slice(0, 16)]
   } });
   const deviceRequests = [
     payload({ itemId: 'item-1', idempotencyKey: 'job-1:item-1', filename: 'one.jpg', title: '一枚目' }),
@@ -1231,7 +1431,7 @@ test('legacy receipt migration enables device and managed Drive photos', () => {
   assert.equal(deviceHarness.sheets.get('import_receipts').rows.length, 3);
 
   const driveHarness = makeHarness({ sheets: {
-    ...baseSheets(false), import_receipts: [RECEIPT_HEADERS.slice(0, -1)]
+    ...baseSheets(false), import_receipts: [RECEIPT_HEADERS.slice(0, 16)]
   } });
   driveHarness.rootFolder.seedFile('photo_MIGRATEAAAAA', 'drive.jpg');
   const driveRequest = payload({
@@ -1246,7 +1446,7 @@ test('legacy receipt migration enables device and managed Drive photos', () => {
 
 test('response loss after legacy migration retries without duplicate photo map row or receipt', () => {
   const harness = makeHarness({ failCreateAfterFileOnce: true, sheets: {
-    ...baseSheets(false), import_receipts: [RECEIPT_HEADERS.slice(0, -1)]
+    ...baseSheets(false), import_receipts: [RECEIPT_HEADERS.slice(0, 16)]
   } });
   const request = payload({ title: '応答喪失後の再試行' });
   const lost = harness.api.saveImportPhotoItem(request);
@@ -1267,12 +1467,12 @@ test('first save creates one file and row; completed retry deduplicates; changed
   assert.equal(harness.audit.drive.renames, 1);
   assert.equal(harness.audit.drive.shares, 1);
   assert.equal(harness.sheets.get('map_info').rows.length, 2);
-  assert.equal(harness.audit.locks.attempts, 3);
+  assert.equal(harness.audit.locks.attempts, 4);
   assert.equal(harness.audit.locks.flushes, 3);
-  assert.equal(harness.audit.locks.releases, 3);
+  assert.equal(harness.audit.locks.releases, 4);
+  assert.equal(harness.audit.locks.nestedAttempts, 0);
   assert.equal(harness.audit.writes.filter((write) => write.sheet === 'import_receipts').length, 3);
   assert.equal(harness.audit.writes.filter((write) => write.sheet === 'map_info').length, 1);
-  assert.equal(harness.audit.drive.callsWhileLocked, 0);
 
   const second = harness.api.saveImportPhotoItem(payload());
   assert.equal(second.ok, true);
@@ -1292,8 +1492,8 @@ test('first save creates one file and row; completed retry deduplicates; changed
   assert.equal(harness.sheets.get('map_info').rows.length, 2);
 });
 
-test('Drive save stores the managed JPEG at root, creates original once, and moves only the source', () => {
-  const harness = makeHarness({ sheets: baseSheets() });
+test('Drive save stores the managed JPEG in photos and archives the source after pin linkage', () => {
+  const harness = makeHarness({ sheets: baseSheets(), seedMediaStructure: false });
   const source = harness.rootFolder.seedFile('photo_ARCHIVEAAAAA', 'source.png', {
     mimeType: 'image/png', sizeBytes: 3
   });
@@ -1305,25 +1505,35 @@ test('Drive save stores the managed JPEG at root, creates original once, and mov
   }));
 
   assert.equal(result.ok, true, JSON.stringify(result));
+  const photos = harness.rootFolder.folders.filter((folder) => folder.name === 'photos');
   const originals = harness.rootFolder.folders.filter((folder) => folder.name === 'original');
+  const originalPhotos = originals[0].folders.filter((folder) => folder.name === 'photos');
+  assert.equal(photos.length, 1);
   assert.equal(originals.length, 1);
-  assert.equal(harness.audit.drive.folderCreates, 1);
-  assert.deepEqual(source.parentFolders, [originals[0]]);
+  assert.equal(originalPhotos.length, 1);
+  assert.equal(harness.audit.drive.mediaFolderCreates, 5);
+  assert.deepEqual(source.parentFolders, [originalPhotos[0]]);
   assert.equal(harness.audit.drive.moves, 1);
   assert.equal(harness.audit.drive.moveIds[0], source.id);
   assert.equal(harness.defaultFolder.files.length, 0, 'Drive managed JPEG must ignore the selected folder');
-  assert.equal(harness.rootFolder.files.filter((file) => file.id !== source.id && !file.trashed).length, 1);
+  assert.equal(photos[0].files.filter((file) => file.id !== source.id && !file.trashed).length, 1);
   const receipt = harness.sheets.get('import_receipts').rows[1];
-  assert.equal(receipt[receiptColumn('targetFolderId')], harness.rootFolder.id);
+  assert.equal(receipt[receiptColumn('targetFolderId')], photos[0].id);
   assert.notEqual(receipt[receiptColumn('fileId')], source.id);
+  const mapAppendAt = harness.audit.events.findIndex((event) =>
+    event.type === 'sheet-append' && event.sheet === 'map_info');
+  const sourceMoveAt = harness.audit.events.findIndex((event) =>
+    event.type === 'drive-move' && event.id === source.id);
+  assert.equal(mapAppendAt >= 0 && sourceMoveAt > mapAppendAt, true);
 });
 
-test('Drive save reuses one active exact original, preserves its files, and ignores case variants and trash', () => {
+test('Drive save reuses original/photos, preserves its files, and ignores case variants and trash', () => {
   const harness = makeHarness({ sheets: baseSheets() });
-  const original = harness.rootFolder.seedFolder('original_ACTIVEAAA', 'original');
   harness.rootFolder.seedFolder('original_TRASHAAAA', 'original', { trashed: true });
   harness.rootFolder.seedFolder('original_CASEAAAAA', 'Original');
-  const existing = original.seedFile('photo_EXISTINGAAAA', 'existing.jpg', { mimeType: 'image/jpeg' });
+  const existing = harness.mediaFolders.originalPhotos.seedFile(
+    'photo_EXISTINGAAAA', 'existing.jpg', { mimeType: 'image/jpeg' }
+  );
   const source = harness.rootFolder.seedFile('photo_REUSEORIGAAA', 'source.webp', {
     mimeType: 'image/webp', sizeBytes: 3
   });
@@ -1336,14 +1546,13 @@ test('Drive save reuses one active exact original, preserves its files, and igno
 
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(harness.audit.drive.folderCreates, 0);
-  assert.equal(original.files.includes(existing), true);
-  assert.equal(original.files.includes(source), true);
+  assert.equal(harness.mediaFolders.originalPhotos.files.includes(existing), true);
+  assert.equal(harness.mediaFolders.originalPhotos.files.includes(source), true);
   assert.equal(existing.trashed, false);
 });
 
-test('ambiguous original folders reject before map commit and compensate the managed JPEG', () => {
+test('ambiguous media folders reject before claim, managed creation, or map commit', () => {
   const harness = makeHarness({ sheets: baseSheets() });
-  harness.rootFolder.seedFolder('original_FIRSTAAAA', 'original');
   harness.rootFolder.seedFolder('original_SECONDAAA', 'original');
   const source = harness.rootFolder.seedFile('photo_AMBIGUOUSAA', 'source.jpg', {
     mimeType: 'image/jpeg', sizeBytes: 3
@@ -1352,26 +1561,33 @@ test('ambiguous original folders reject before map commit and compensate the man
   const result = harness.api.saveImportPhotoItem(payload({ sourceDriveFileId: source.id }));
 
   assert.equal(result.ok, false);
-  assert.equal(result.errorCode, 'DRIVE_ORIGINAL_FOLDER_AMBIGUOUS');
-  assert.equal(result.error, 'originalフォルダが複数あります。1つに整理してから再試行してください。');
+  assert.equal(result.errorCode, 'DRIVE_MEDIA_STRUCTURE_AMBIGUOUS');
   assert.equal(harness.sheets.get('map_info').rows.length, 1);
   assert.equal(harness.audit.drive.moves, 0);
-  assert.equal(harness.audit.drive.trashes, 1);
-  const receipt = harness.sheets.get('import_receipts').rows[1];
-  assert.equal(receipt[receiptColumn('state')], 'failed');
-  assert.equal(receipt[receiptColumn('fileId')], '');
-  assert.equal(receipt[receiptColumn('imageUrl')], '');
-  assert.equal(receipt[receiptColumn('lastErrorCode')], 'DRIVE_ORIGINAL_FOLDER_AMBIGUOUS');
+  assert.equal(harness.audit.drive.creates, 0);
+  assert.equal(harness.audit.drive.trashes, 0);
+  assert.equal(harness.sheets.get('import_receipts').rows.length, 1);
 });
 
-test('original creation failure and source move failures never commit map_info and compensate the managed JPEG', () => {
+test('media structure creation failure stops before claim or managed creation', () => {
+  const harness = makeHarness({
+    sheets: baseSheets(), seedMediaStructure: false, failOriginalFolderCreate: true
+  });
+  const result = harness.api.saveImportPhotoItem(payload());
+  assert.equal(result.errorCode, 'DRIVE_MEDIA_STRUCTURE_FAILED');
+  assert.equal(harness.sheets.get('map_info').rows.length, 1);
+  assert.equal(harness.sheets.get('import_receipts').rows.length, 1);
+  assert.equal(harness.audit.drive.creates, 0);
+  assert.equal(harness.audit.drive.trashes, 0);
+});
+
+test('source move failures stay journaled after map linkage and a transient failure retries', () => {
   const cases = [
-    [{ failOriginalFolderCreate: true }, {}, 'DRIVE_ORIGINAL_FOLDER_CREATE_FAILED'],
-    [{}, { failMoveAlways: true }, 'DRIVE_SOURCE_MOVE_FAILED'],
-    [{}, { moveWithoutParentChange: true }, 'DRIVE_SOURCE_MOVE_VERIFY_FAILED']
+    [{ failMoveOnce: true }, 'DRIVE_SOURCE_MOVE_FAILED', true],
+    [{ moveWithoutParentChange: true }, 'DRIVE_SOURCE_MOVE_VERIFY_FAILED', false]
   ];
-  for (const [harnessOptions, sourceMetadata, errorCode] of cases) {
-    const harness = makeHarness({ ...harnessOptions, sheets: baseSheets() });
+  for (const [sourceMetadata, errorCode, canRecover] of cases) {
+    const harness = makeHarness({ sheets: baseSheets() });
     const source = harness.rootFolder.seedFile(`photo_${errorCode}`, 'source.jpg', {
       mimeType: 'image/jpeg', sizeBytes: 3, ...sourceMetadata
     });
@@ -1380,15 +1596,75 @@ test('original creation failure and source move failures never commit map_info a
 
     assert.equal(result.ok, false, errorCode);
     assert.equal(result.errorCode, errorCode);
-    assert.equal(harness.sheets.get('map_info').rows.length, 1, errorCode);
-    assert.equal(harness.audit.drive.trashes, 1, errorCode);
+    assert.equal(harness.sheets.get('map_info').rows.length, 2, errorCode);
+    assert.equal(harness.audit.drive.trashes, 0, errorCode);
     const receipt = harness.sheets.get('import_receipts').rows[1];
-    assert.equal(receipt[receiptColumn('state')], 'failed', errorCode);
-    assert.equal(receipt[receiptColumn('fileId')], '', errorCode);
+    assert.equal(receipt[receiptColumn('state')], 'completed', errorCode);
+    assert.notEqual(receipt[receiptColumn('fileId')], '', errorCode);
+    assert.equal(receipt[receiptColumn('lastErrorCode')], errorCode);
+    if (canRecover) {
+      const recovered = harness.api.saveImportPhotoItem(payload({ sourceDriveFileId: source.id }));
+      assert.equal(recovered.ok, true, JSON.stringify(recovered));
+      assert.deepEqual(source.parentFolders, [harness.mediaFolders.originalPhotos]);
+      assert.equal(receipt[receiptColumn('lastErrorCode')], '');
+    }
   }
 });
 
-test('map failure after source move keeps the archive and retries without another JPEG or move', () => {
+test('completed replay keeps retrying repeated source move failures until physical archive succeeds', () => {
+  const harness = makeHarness({ sheets: baseSheets() });
+  const metadata = { mimeType: 'image/jpeg', sizeBytes: 3, failMoveAlways: true };
+  const source = harness.rootFolder.seedFile('photo_REPEATMOVEAA', 'repeat.jpg', metadata);
+  const request = payload({ sourceDriveFileId: source.id });
+
+  assert.equal(harness.api.saveImportPhotoItem(request).errorCode, 'DRIVE_SOURCE_MOVE_FAILED');
+  assert.equal(harness.api.saveImportPhotoItem(request).errorCode, 'DRIVE_SOURCE_MOVE_FAILED');
+  metadata.failMoveAlways = false;
+  const recovered = harness.api.saveImportPhotoItem(request);
+
+  assert.equal(recovered.ok, true, JSON.stringify(recovered));
+  assert.equal(recovered.deduplicated, true);
+  assert.deepEqual(source.parentFolders.map((folder) => folder.id), [harness.mediaFolders.originalPhotos.id]);
+  assert.equal(harness.audit.drive.creates, 1);
+  assert.equal(harness.sheets.get('map_info').rows.length, 2);
+});
+
+test('completed replay keeps retrying source move verification failures until parentage recovers', () => {
+  const harness = makeHarness({ sheets: baseSheets() });
+  const metadata = { mimeType: 'image/jpeg', sizeBytes: 3, moveWithoutParentChange: true };
+  const source = harness.rootFolder.seedFile('photo_REPEATVERIFY', 'verify.jpg', metadata);
+  const request = payload({ sourceDriveFileId: source.id });
+
+  assert.equal(harness.api.saveImportPhotoItem(request).errorCode, 'DRIVE_SOURCE_MOVE_VERIFY_FAILED');
+  assert.equal(harness.api.saveImportPhotoItem(request).errorCode, 'DRIVE_SOURCE_MOVE_VERIFY_FAILED');
+  metadata.moveWithoutParentChange = false;
+  const recovered = harness.api.saveImportPhotoItem(request);
+
+  assert.equal(recovered.ok, true, JSON.stringify(recovered));
+  assert.deepEqual(source.parentFolders.map((folder) => folder.id), [harness.mediaFolders.originalPhotos.id]);
+  assert.equal(harness.audit.drive.creates, 1);
+  assert.equal(harness.sheets.get('map_info').rows.length, 2);
+});
+
+test('completed replay archives by physical state after source-move journal writes fail', () => {
+  const options = { sheets: baseSheets(), failSourceMoveJournalWrites: true };
+  const harness = makeHarness(options);
+  const metadata = { mimeType: 'image/jpeg', sizeBytes: 3, failMoveAlways: true };
+  const source = harness.rootFolder.seedFile('photo_JOURNALFAILA', 'journal.jpg', metadata);
+  const request = payload({ sourceDriveFileId: source.id });
+
+  assert.equal(harness.api.saveImportPhotoItem(request).errorCode, 'DRIVE_SOURCE_MOVE_FAILED');
+  metadata.failMoveAlways = false;
+  options.failSourceMoveJournalWrites = false;
+  const recovered = harness.api.saveImportPhotoItem(request);
+
+  assert.equal(recovered.ok, true, JSON.stringify(recovered));
+  assert.deepEqual(source.parentFolders.map((folder) => folder.id), [harness.mediaFolders.originalPhotos.id]);
+  assert.equal(harness.audit.drive.creates, 1);
+  assert.equal(harness.sheets.get('map_info').rows.length, 2);
+});
+
+test('map failure leaves the source in Inbox and retry reuses the JPEG before archiving once', () => {
   const harness = makeHarness({ sheets: baseSheets(), failMapAppendOnce: true });
   const source = harness.rootFolder.seedFile('photo_MAPRETRYAAAA', 'source.heic', {
     mimeType: 'image/heic', sizeBytes: 3
@@ -1396,11 +1672,10 @@ test('map failure after source move keeps the archive and retries without anothe
   const request = payload({ sourceDriveFileId: source.id, targetFolderId: 'folder-1' });
 
   const failed = harness.api.saveImportPhotoItem(request);
-  assert.equal(failed.errorCode, 'IMPORT_MAP_ROW_FAILED_AFTER_SOURCE_MOVE');
+  assert.equal(failed.errorCode, 'IMPORT_MAP_ROW_FAILED');
   assert.equal(harness.audit.drive.creates, 1);
-  assert.equal(harness.audit.drive.moves, 1);
-  const original = harness.rootFolder.folders.find((folder) => folder.name === 'original');
-  assert.deepEqual(source.parentFolders, [original]);
+  assert.equal(harness.audit.drive.moves, 0);
+  assert.deepEqual(source.parentFolders, [harness.rootFolder]);
 
   const retried = harness.api.saveImportPhotoItem(request);
   assert.equal(retried.ok, true, JSON.stringify(retried));
@@ -1409,13 +1684,13 @@ test('map failure after source move keeps the archive and retries without anothe
   assert.equal(harness.sheets.get('map_info').rows.length, 2);
 });
 
-test('local photo save never resolves original or moves a source', () => {
+test('local photo save stores its managed JPEG in photos without moving a source', () => {
   const harness = makeHarness({ sheets: baseSheets() });
   const result = harness.api.saveImportPhotoItem(payload({ sourceDriveFileId: '' }));
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(harness.audit.drive.folderCreates, 0);
   assert.equal(harness.audit.drive.moves, 0);
-  assert.equal(harness.defaultFolder.files.filter((file) => !file.trashed).length, 1);
+  assert.equal(harness.mediaFolders.photos.files.filter((file) => !file.trashed).length, 1);
 });
 
 test('attach-existing-pin updates only G H and N on one photo-less row and replays idempotently', () => {
@@ -1448,7 +1723,7 @@ test('attach-existing-pin updates only G H and N on one photo-less row and repla
   );
   const receipt = harness.sheets.get('import_receipts').rows[1];
   assert.equal(receipt[receiptColumn('pinId')], 'pin-existing-0001');
-  assert.equal(receipt[receiptColumn('targetFolderId')], '123456789012345');
+  assert.equal(receipt[receiptColumn('targetFolderId')], harness.mediaFolders.photos.id);
   assert.equal(receipt[receiptColumn('state')], 'completed');
 
   const replay = harness.api.saveImportPhotoItem(attachPayload());
@@ -1567,15 +1842,15 @@ test('Drive photo attach moves one source only after the final target check and 
   assert.equal(photoAtManagedCreate, '');
   assert.equal(harness.audit.drive.creates, 1);
   assert.equal(harness.audit.drive.moves, 1);
-  assert.deepEqual(source.parentFolders.map((folder) => folder.name), ['original']);
+  assert.deepEqual(source.parentFolders, [harness.mediaFolders.originalPhotos]);
   assert.equal(harness.sheets.get('map_info').rows.length, 2);
   assert.equal(
     harness.sheets.get('import_receipts').rows[1][receiptColumn('targetFolderId')],
-    '123456789012345'
+    harness.mediaFolders.photos.id
   );
 });
 
-test('Drive photo attach conflict compensates before source move and move failure leaves the pin unchanged', () => {
+test('Drive photo attach conflict compensates before linkage and move failure keeps the linked photo', () => {
   const conflictSheets = baseSheets();
   conflictSheets.map_info.push(existingPhotoLessPinRow());
   const conflictHarness = makeHarness({
@@ -1605,13 +1880,12 @@ test('Drive photo attach conflict compensates before source move and move failur
     sourceDriveFileId: moveSource.id
   }));
   assert.equal(moveFailure.errorCode, 'PIN_PHOTO_ATTACH_SOURCE_MOVE_FAILED');
-  assert.equal(moveFailure.error, '元写真をoriginalフォルダへ移動できませんでした。写真は追加していません。');
-  assert.equal(moveHarness.audit.drive.trashes, 1);
-  assert.equal(moveHarness.sheets.get('map_info').rows[1][6], '');
-  assert.equal(moveHarness.sheets.get('map_info').rows[1][7], '');
+  assert.equal(moveHarness.audit.drive.trashes, 0);
+  assert.notEqual(moveHarness.sheets.get('map_info').rows[1][6], '');
+  assert.notEqual(moveHarness.sheets.get('map_info').rows[1][7], '');
 });
 
-test('photo attach map failure after source move reuses the JPEG and move on retry', () => {
+test('photo attach map failure leaves the source in Inbox and retry moves it after linkage', () => {
   const sheets = baseSheets();
   sheets.map_info.push(existingPhotoLessPinRow());
   const harness = makeHarness({ sheets, failMapAttachUpdateOnce: true });
@@ -1624,7 +1898,7 @@ test('photo attach map failure after source move reuses the JPEG and move on ret
   assert.equal(failed.errorCode, 'PIN_PHOTO_ATTACH_MAP_UPDATE_FAILED');
   assert.equal(failed.error, '写真ファイルは準備できましたが、ピンへ設定できませんでした。再試行してください。');
   assert.equal(harness.audit.drive.creates, 1);
-  assert.equal(harness.audit.drive.moves, 1);
+  assert.equal(harness.audit.drive.moves, 0);
   assert.equal(harness.audit.drive.trashes, 0);
   assert.equal(harness.sheets.get('map_info').rows[1][6], '');
 
@@ -1714,7 +1988,7 @@ test('private JPEG with no source sharing permission saves a placed pin through 
   assert.equal(harness.sheets.get('map_info').rows[1][MAP_HEADERS.indexOf('経度')], 139.75);
 });
 
-test('JPEG, PNG, WebP, HEIC, and HEIF Drive sources each create one root JPEG and archive the source', () => {
+test('JPEG, PNG, WebP, HEIC, and HEIF Drive sources each create one photos JPEG and archive the source', () => {
   [
     { id: 'photo_JPEGSOURCEAAA', name: 'photo.jpg', mimeType: 'image/jpeg' },
     { id: 'photo_PNGSOURCEAAAA', name: 'private.png', mimeType: 'image/png' },
@@ -1741,11 +2015,11 @@ test('JPEG, PNG, WebP, HEIC, and HEIF Drive sources each create one root JPEG an
     assert.equal(source.trashed, false, sample.name);
     assert.equal(harness.audit.drive.renameIds.includes(sample.id), false, sample.name);
     assert.equal(harness.audit.drive.shareIds.includes(sample.id), false, sample.name);
-    assert.deepEqual(source.parentFolders.map((folder) => folder.name), ['original'], sample.name);
+    assert.deepEqual(source.parentFolders, [harness.mediaFolders.originalPhotos], sample.name);
     const receipt = harness.sheets.get('import_receipts').rows[1];
     assert.equal(receipt[receiptColumn('sourceDriveFileId')], sample.id, sample.name);
     assert.equal(receipt[receiptColumn('fileId')], result.pin.fileId, sample.name);
-    assert.equal(receipt[receiptColumn('targetFolderId')], '123456789012345', sample.name);
+    assert.equal(receipt[receiptColumn('targetFolderId')], harness.mediaFolders.photos.id, sample.name);
   });
 });
 
@@ -1866,7 +2140,7 @@ test('managed-copy rename failure is stage-specific and never compensates the pe
   assert.match(harness.audit.errors.join('\n'), /"stage":"managed-copy-finalize"/);
 });
 
-test('anonymous PNG Drive source uses a root managed JPEG and archives the unchanged source', () => {
+test('anonymous PNG Drive source uses a photos managed JPEG and archives the unchanged source', () => {
   const harness = makeHarness({ sheets: baseSheets() });
   const source = harness.rootFolder.seedFile('photo_AAAAAAAAAAA', 'before.PNG', {
     mimeType: 'image/png', sizeBytes: 3
@@ -1882,11 +2156,11 @@ test('anonymous PNG Drive source uses a root managed JPEG and archives the uncha
   assert.equal(harness.audit.drive.creates, 1);
   assert.equal(harness.audit.drive.renameIds.includes('photo_AAAAAAAAAAA'), false);
   assert.equal(harness.audit.drive.shareIds.includes('photo_AAAAAAAAAAA'), false);
-  assert.deepEqual(source.parentFolders.map((folder) => folder.name), ['original']);
+  assert.deepEqual(source.parentFolders, [harness.mediaFolders.originalPhotos]);
   const receipt = harness.sheets.get('import_receipts').rows[1];
   assert.equal(receipt[receiptColumn('sourceDriveFileId')], 'photo_AAAAAAAAAAA');
   assert.equal(receipt[receiptColumn('fileId')], first.pin.fileId);
-  assert.equal(receipt[receiptColumn('targetFolderId')], '123456789012345');
+  assert.equal(receipt[receiptColumn('targetFolderId')], harness.mediaFolders.photos.id);
   assert.equal(receipt[receiptColumn('state')], 'completed');
 
   const replay = harness.api.saveImportPhotoItem(request);
@@ -1918,7 +2192,7 @@ test('a different job cannot link the same surviving Drive source while the same
   assert.equal(harness.audit.drive.creates, 1);
 });
 
-test('a completed Drive receipt does not block reimport after its pin is deleted', () => {
+test('a completed Drive source remains excluded after its pin is deleted', () => {
   const harness = makeHarness({ sheets: baseSheets() });
   const source = harness.rootFolder.seedFile('photo_REIMPORTAAAA', 'reimport.jpg');
   const first = harness.api.saveImportPhotoItem(payload({
@@ -1933,15 +2207,16 @@ test('a completed Drive receipt does not block reimport after its pin is deleted
     sourceDriveFileId: 'photo_REIMPORTAAAA', targetFolderId: 'folder-1'
   }));
 
-  assert.equal(second.ok, true, JSON.stringify(second));
-  assert.notEqual(second.pin.id, first.pin.id);
-  assert.notEqual(second.pin.fileId, first.pin.fileId);
-  assert.equal(harness.audit.drive.creates, 2);
+  assert.equal(second.ok, false);
+  assert.equal(second.errorCode, 'DRIVE_SOURCE_ALREADY_LINKED');
+  assert.equal(second.retryable, false);
+  assert.equal(harness.audit.drive.creates, 1);
   assert.equal(source.name, 'reimport.jpg');
   assert.equal(source.trashed, false);
+  assert.deepEqual(source.parentFolders, [harness.mediaFolders.originalPhotos]);
 });
 
-test('a live map row without a completed receipt does not block Drive source import', () => {
+test('a live managed map file without a completed receipt is not accepted as a source', () => {
   const sheets = baseSheets();
   sheets.map_info.push([
     '', '既存', '', 35, 139, '#e53935', 'photo_ORPHANAAAAAA',
@@ -1949,14 +2224,18 @@ test('a live map row without a completed receipt does not block Drive source imp
     '', '', '', '', '', 'photo'
   ]);
   const harness = makeHarness({ sheets });
-  harness.rootFolder.seedFile('photo_ORPHANAAAAAA', 'orphan.jpg');
+  const source = harness.rootFolder.seedFile('photo_ORPHANAAAAAA', 'orphan.jpg');
+  const writesBefore = harness.audit.writes.length;
   const result = harness.api.saveImportPhotoItem(payload({
     sourceDriveFileId: 'photo_ORPHANAAAAAA', targetFolderId: ''
   }));
-  assert.equal(result.ok, true, JSON.stringify(result));
-  assert.notEqual(result.pin.fileId, 'photo_ORPHANAAAAAA');
-  assert.equal(harness.audit.drive.creates, 1);
-  assert.equal(harness.sheets.get('map_info').rows.length, 3);
+  assert.equal(result.ok, false);
+  assert.equal(result.errorCode, 'DRIVE_SOURCE_ALREADY_LINKED');
+  assert.equal(result.retryable, false);
+  assert.equal(harness.audit.writes.length, writesBefore);
+  assert.equal(harness.audit.drive.creates, 0);
+  assert.equal(harness.sheets.get('map_info').rows.length, 2);
+  assert.deepEqual(source.parentFolders, [harness.rootFolder]);
 });
 
 test('completed receipts from the legacy managed-copy path remain replayable without touching either file', () => {
@@ -2006,14 +2285,14 @@ test('HEIC Drive source creates one managed JPEG, links it, and preserves the or
   assert.equal(first.ok, true);
   assert.notEqual(first.pin.fileId, 'photo_HEICAAAAAAA');
   assert.equal(harness.audit.drive.creates, 1);
-  assert.equal(harness.rootFolder.files.some((file) => file.id === first.pin.fileId), true);
+  assert.equal(harness.mediaFolders.photos.files.some((file) => file.id === first.pin.fileId), true);
   assert.equal(harness.filesById.get(first.pin.fileId).name, 'photo.jpg');
   assert.equal(source.trashed, false);
   const receipt = harness.sheets.get('import_receipts').rows[1];
   assert.equal(receipt[receiptColumn('state')], 'completed');
   assert.equal(receipt[receiptColumn('fileId')], first.pin.fileId);
   assert.equal(receipt[receiptColumn('sourceDriveFileId')], 'photo_HEICAAAAAAA');
-  assert.equal(receipt[receiptColumn('targetFolderId')], '123456789012345');
+  assert.equal(receipt[receiptColumn('targetFolderId')], harness.mediaFolders.photos.id);
 
   const replay = harness.api.saveImportPhotoItem(request);
   assert.equal(replay.ok, true);
@@ -2024,7 +2303,7 @@ test('HEIC Drive source creates one managed JPEG, links it, and preserves the or
   assert.equal(harness.sheets.get('map_info').rows.length, 2);
 });
 
-test('HEIC map failure preserves the archived source and retry reuses one managed JPEG', () => {
+test('HEIC map failure preserves the Inbox source and retry reuses one managed JPEG before archiving', () => {
   const harness = makeHarness({ sheets: baseSheets(), failMapAppendOnce: true });
   const source = harness.rootFolder.seedFile('photo_HEICBBBBBBB', 'retry.heif', {
     mimeType: 'image/heif', sizeBytes: 3
@@ -2033,10 +2312,10 @@ test('HEIC map failure preserves the archived source and retry reuses one manage
     sourceDriveFileId: 'photo_HEICBBBBBBB', targetFolderId: '', title: '再試行'
   });
   const failed = harness.api.saveImportPhotoItem(request);
-  assert.equal(failed.errorCode, 'IMPORT_MAP_ROW_FAILED_AFTER_SOURCE_MOVE');
+  assert.equal(failed.errorCode, 'IMPORT_MAP_ROW_FAILED');
   assert.equal(source.trashed, false);
   assert.equal(harness.audit.drive.creates, 1);
-  assert.equal(harness.audit.drive.moves, 1);
+  assert.equal(harness.audit.drive.moves, 0);
 
   const retry = harness.api.saveImportPhotoItem(request);
   assert.equal(retry.ok, true);
@@ -2109,6 +2388,40 @@ test('Drive source save revalidates root containment, trash, type, and size befo
     assert.equal(harness.audit.drive.renames, 0, label);
     assert.equal(harness.audit.drive.shares, 0, label);
     assert.equal(harness.sheets.get('map_info').rows.length, 1, label);
+  });
+});
+
+test('Drive photo save rejects nested and reserved-folder sources before new Drive or Sheet writes', () => {
+  const cases = [
+    ['nested', (harness, id) => {
+      const folder = harness.rootFolder.seedFolder('nested_source_AAA', 'Nested');
+      return folder.seedFile(id, 'nested.jpg', { mimeType: 'image/jpeg', sizeBytes: 3 });
+    }],
+    ['photos', (harness, id) => harness.mediaFolders.photos.seedFile(
+      id, 'managed.jpg', { mimeType: 'image/jpeg', sizeBytes: 3 }
+    )],
+    ['original/photos', (harness, id) => harness.mediaFolders.originalPhotos.seedFile(
+      id, 'archived.jpg', { mimeType: 'image/jpeg', sizeBytes: 3 }
+    )]
+  ];
+
+  cases.forEach(([label, seed], index) => {
+    const harness = makeHarness({ sheets: baseSheets() });
+    const sourceId = `nested_guard_${String(index).padStart(10, '0')}`;
+    seed(harness, sourceId);
+    const writesBefore = harness.audit.writes.length;
+
+    const result = harness.api.saveImportPhotoItem(payload({
+      sourceDriveFileId: sourceId,
+      targetFolderId: ''
+    }));
+
+    assert.equal(result.errorCode, 'IMPORT_DRIVE_SOURCE_INVALID', label);
+    assert.equal(harness.audit.writes.length, writesBefore, label);
+    assert.equal(harness.audit.drive.creates, 0, label);
+    assert.equal(harness.audit.drive.moves, 0, label);
+    assert.equal(harness.sheets.get('map_info').rows.length, 1, label);
+    assert.equal(harness.sheets.get('import_receipts').rows.length, 1, label);
   });
 });
 
@@ -2205,7 +2518,7 @@ test('Drive-create interruption loses the lease safely and retry reuses the temp
   assert.equal(harness.sheets.get('map_info').rows.length, 1);
   const receipt = harness.sheets.get('import_receipts').rows[1];
   const tempName = receipt[receiptColumn('tempFileName')];
-  assert.equal(harness.defaultFolder.files[0].name, tempName);
+  assert.equal(harness.mediaFolders.photos.files[0].name, tempName);
 
   receipt[receiptColumn('leaseUntil')] = '2000-01-01T00:00:00.000Z';
   const retried = harness.api.saveImportPhotoItem(payload());
@@ -2226,7 +2539,7 @@ test('Drive create response loss is recovered by deterministic temporary file re
   const recovered = harness.api.saveImportPhotoItem(payload());
   assert.equal(recovered.ok, true);
   assert.equal(harness.audit.drive.creates, 1);
-  assert.equal(harness.defaultFolder.files.filter((file) => !file.trashed).length, 1);
+  assert.equal(harness.mediaFolders.photos.files.filter((file) => !file.trashed).length, 1);
   assert.equal(harness.sheets.get('map_info').rows.length, 2);
 });
 
@@ -2236,7 +2549,7 @@ test('receipt file metadata write failure compensates the newly-created owned fi
   assert.equal(failed.errorCode, 'IMPORT_ITEM_SAVE_FAILED');
   assert.equal(harness.audit.drive.creates, 1);
   assert.equal(harness.audit.drive.trashes, 1);
-  assert.equal(harness.defaultFolder.files.filter((file) => !file.trashed).length, 0);
+  assert.equal(harness.mediaFolders.photos.files.filter((file) => !file.trashed).length, 0);
   assert.equal(harness.sheets.get('map_info').rows.length, 1);
   const failedReceipt = harness.sheets.get('import_receipts').rows[1];
   assert.equal(failedReceipt[receiptColumn('fileId')], '');
@@ -2245,7 +2558,7 @@ test('receipt file metadata write failure compensates the newly-created owned fi
   const recovered = harness.api.saveImportPhotoItem(payload());
   assert.equal(recovered.ok, true);
   assert.equal(harness.audit.drive.creates, 2);
-  assert.equal(harness.defaultFolder.files.filter((file) => !file.trashed).length, 1);
+  assert.equal(harness.mediaFolders.photos.files.filter((file) => !file.trashed).length, 1);
   assert.equal(harness.sheets.get('map_info').rows.length, 2);
   const receipt = harness.sheets.get('import_receipts').rows[1];
   assert.equal(receipt[receiptColumn('pinId')], recovered.pin.id);
@@ -2331,7 +2644,7 @@ test('an invalid recorded fileId fails retryably without creating a replacement'
   assert.equal(receipt[receiptColumn('lastErrorCode')], 'DRIVE_MANAGED_COPY_FINALIZE_FAILED');
 });
 
-test('receipt target and temporary filename corruption is rejected before Drive access', () => {
+test('receipt target and temporary filename corruption is rejected before managed file access', () => {
   for (const corrupt of [
     (receipt) => { receipt[receiptColumn('targetFolderId')] = 'folder-elsewhere'; },
     (receipt) => { receipt[receiptColumn('tempFileName')] = 'user-controlled.jpg'; }
@@ -2343,10 +2656,14 @@ test('receipt target and temporary filename corruption is rejected before Drive 
     corrupt(receipt);
     receipt[receiptColumn('leaseOwner')] = '';
     receipt[receiptColumn('leaseUntil')] = '';
-    const driveCalls = harness.audit.drive.fileGets + harness.audit.drive.folderGets;
+    const fileGets = harness.audit.drive.fileGets;
+    const creates = harness.audit.drive.creates;
+    const moves = harness.audit.drive.moves;
     const result = harness.api.saveImportPhotoItem(payload());
     assert.equal(result.errorCode, 'IMPORT_RECEIPT_CORRUPTED');
-    assert.equal(harness.audit.drive.fileGets + harness.audit.drive.folderGets, driveCalls);
+    assert.equal(harness.audit.drive.fileGets, fileGets);
+    assert.equal(harness.audit.drive.creates, creates);
+    assert.equal(harness.audit.drive.moves, moves);
   }
 });
 
@@ -2378,14 +2695,12 @@ test('recorded fileId must resolve to a file in the receipt target folder', () =
   assert.equal(shared, false);
 });
 
-test('provider error codes are not exposed or persisted', () => {
+test('provider error codes during media structure verification are not exposed', () => {
   const harness = makeHarness({ sheets: baseSheets(), folderErrorCode: 'SECRET_PROVIDER_CODE' });
   const result = harness.api.saveImportPhotoItem(payload());
-  assert.equal(result.errorCode, 'DRIVE_MANAGED_COPY_CREATE_FAILED');
+  assert.equal(result.errorCode, 'DRIVE_MEDIA_STRUCTURE_FAILED');
   assert.equal(result.error.includes('provider detail'), false);
-  const receipt = harness.sheets.get('import_receipts').rows[1];
-  assert.equal(receipt[receiptColumn('lastErrorCode')], 'DRIVE_MANAGED_COPY_CREATE_FAILED');
-  assert.match(harness.audit.errors.join('\n'), /"stage":"managed-copy-create"/);
+  assert.equal(harness.sheets.get('import_receipts').rows.length, 1);
 });
 
 test('managed-copy creation permission denial is specific and non-retryable', () => {
@@ -2448,7 +2763,7 @@ test('a stale failed file-backed Drive receipt is safely taken over by a new pag
   });
   const request = payload({ sourceDriveFileId: 'photo_FILEOWNERAAA', targetFolderId: '' });
   const failed = harness.api.saveImportPhotoItem(request);
-  assert.equal(failed.errorCode, 'IMPORT_MAP_ROW_FAILED_AFTER_SOURCE_MOVE');
+  assert.equal(failed.errorCode, 'IMPORT_MAP_ROW_FAILED');
   assert.equal(harness.audit.drive.creates, 1);
   const originalReceipt = harness.sheets.get('import_receipts').rows[1];
   const originalPinId = originalReceipt[receiptColumn('pinId')];
@@ -2497,7 +2812,7 @@ test('an empty current-key failure converges on another stale file-backed owner'
   });
   assert.equal(
     harness.api.saveImportPhotoItem(requestA).errorCode,
-    'IMPORT_MAP_ROW_FAILED_AFTER_SOURCE_MOVE'
+    'IMPORT_MAP_ROW_FAILED'
   );
   const fileOwnerReceipt = harness.sheets.get('import_receipts').rows.find((row) => (
     row[receiptColumn('jobId')] === 'job-file'
@@ -2509,9 +2824,7 @@ test('an empty current-key failure converges on another stale file-backed owner'
   assert.equal(recovered.ok, true, JSON.stringify(recovered));
   assert.equal(recovered.pin.id, ownedPinId);
   assert.equal(recovered.pin.fileId, ownedFileId);
-  const activeManagedFiles = harness.rootFolder.files.filter((file) => (
-    file.id !== 'photo_TWOSTALEOWNR' && !file.trashed
-  ));
+  const activeManagedFiles = harness.mediaFolders.photos.files.filter((file) => !file.trashed);
   assert.equal(activeManagedFiles.length, 1);
   assert.equal(harness.sheets.get('map_info').rows.length, 2);
   assert.equal(harness.sheets.get('import_receipts').rows.slice(1).filter((row) => (
@@ -2527,7 +2840,7 @@ test('an active file-backed Drive receipt still blocks a different page job', ()
   const request = payload({ sourceDriveFileId: 'photo_ACTIVEOWNERAA', targetFolderId: '' });
   assert.equal(
     harness.api.saveImportPhotoItem(request).errorCode,
-    'IMPORT_MAP_ROW_FAILED_AFTER_SOURCE_MOVE'
+    'IMPORT_MAP_ROW_FAILED'
   );
   const receipt = harness.sheets.get('import_receipts').rows[1];
   receipt[receiptColumn('state')] = 'file_saved';
@@ -2603,11 +2916,11 @@ test('Drive source sharing visibility is not consulted before creating the manag
   assert.equal(harness.audit.drive.creates, 1);
   assert.equal(
     harness.sheets.get('import_receipts').rows[1][receiptColumn('targetFolderId')],
-    '123456789012345'
+    harness.mediaFolders.photos.id
   );
 });
 
-test('stale no-file HEIC takeover uses the configured root fallback target', () => {
+test('stale no-file HEIC takeover uses the managed photos fallback target', () => {
   const harness = makeHarness({ sheets: baseSheets(), failCreateAfterFileOnce: true });
   harness.rootFolder.seedFile('photo_LEGACYTEMPHC', 'legacy-temp.heic', {
     mimeType: 'image/heic', sizeBytes: 3, sharingAccess: 'PRIVATE'
@@ -2633,7 +2946,7 @@ test('stale no-file HEIC takeover uses the configured root fallback target', () 
   assert.equal(harness.audit.drive.creates, 1);
   assert.equal(
     harness.sheets.get('import_receipts').rows[1][receiptColumn('targetFolderId')],
-    '123456789012345'
+    harness.mediaFolders.photos.id
   );
 });
 
@@ -2664,7 +2977,7 @@ test('file_saved Drive retry reuses the managed JPEG without consulting source s
   const request = payload({ sourceDriveFileId: 'photo_SHARECHECKAA', targetFolderId: '' });
   assert.equal(
     harness.api.saveImportPhotoItem(request).errorCode,
-    'IMPORT_MAP_ROW_FAILED_AFTER_SOURCE_MOVE'
+    'IMPORT_MAP_ROW_FAILED'
   );
   metadata.failSharingReadOnce = true;
 

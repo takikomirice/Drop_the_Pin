@@ -1,2 +1,8 @@
 # Preserve the Pencil source exactly across platforms.
 design/pencil/*.pen -text
+
+# Keep deterministic audio vendor artifacts byte-identical on every platform.
+.claspignore text eol=lf
+index.html text eol=lf
+shared.html text eol=lf
+vendor/*.txt text eol=lf
