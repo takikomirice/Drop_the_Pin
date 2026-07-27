@@ -1126,6 +1126,12 @@ AUDIO_VENDOR_BUNDLE_END
     }
     .photo-viewer-zoom-hint svg { width: 17px; height: 17px; }
     #upload-preview-trigger, #pin-detail-image-trigger { margin-top: 10px; }
+    .pin-detail-photo-state {
+      display: flex; align-items: center; gap: 10px; min-height: 44px; margin-top: 10px;
+      color: var(--text-sub); font-size: 13px;
+    }
+    .pin-detail-photo-state[hidden] { display: none; }
+    .pin-detail-photo-state .ghost-btn { width: auto; margin-left: auto; }
     .photo-viewer-overlay {
       align-items: stretch; overflow: hidden;
       padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right))
@@ -2115,6 +2121,8 @@ AUDIO_VENDOR_BUNDLE_END
       body.narrow-view #topbar { padding: 0 16px; }
       body.narrow-view .topbar-title { max-width: none; font-size: 16px; }
       body.narrow-view .pin-panel-actions::after { display: none; }
+      body.narrow-view #share-open-btn,
+      body.narrow-view #data-toggle,
       body.narrow-view #panel-toggle,
       body.narrow-view #edit-toggle,
       body.narrow-view #mode-badge,
@@ -2776,6 +2784,10 @@ AUDIO_VENDOR_BUNDLE_END
       <img id="pin-detail-image" class="photo-fit-cover protected-photo" draggable="false" alt="ピン画像">
       <span class="photo-viewer-zoom-hint" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m15.5 15.5 5 5M10.5 7.5v6M7.5 10.5h6"></path></svg></span>
     </button>
+    <div id="pin-detail-photo-state" class="pin-detail-photo-state" aria-live="polite" aria-busy="false" hidden>
+      <span id="pin-detail-photo-status"></span>
+      <button id="pin-detail-photo-retry" class="ghost-btn" type="button" hidden>再試行</button>
+    </div>
     <button id="pin-detail-photo-add" class="ghost-btn" type="button" style="display:none;margin-bottom:12px;">写真を追加</button>
     <div id="pin-detail-audio-actions" class="inline-actions" style="display:none;margin-bottom:12px;">
       <button id="pin-detail-audio-add" class="ghost-btn" type="button" style="display:none;">音声を追加</button>
@@ -18947,6 +18959,207 @@ AUDIO_VENDOR_BUNDLE_END
       photoViewerState.errorHandler = null;
     }
 
+    function createPinPhotoLoader(options) {
+      const config = options || {};
+      const fetchPhoto = config.fetchPhoto;
+      const renderState = config.renderState;
+      const lifecycleTarget = config.lifecycleTarget
+        || (typeof window !== 'undefined' ? window : null);
+      if (typeof fetchPhoto !== 'function' || typeof renderState !== 'function') {
+        throw new Error('Photo loader configuration is invalid.');
+      }
+
+      const maxResponseBytes = 15 * 1024 * 1024;
+      let generation = 0;
+      let currentPinId = '';
+      let currentTitle = '';
+      let currentStatus = 'hidden';
+      let currentObjectUrl = '';
+      let inFlight = null;
+      let destroyed = false;
+
+      function isSupportedMimeType(mimeType) {
+        return mimeType === 'image/jpeg'
+          || mimeType === 'image/png'
+          || mimeType === 'image/gif'
+          || mimeType === 'image/webp';
+      }
+
+      function responseToBlob(response) {
+        const mimeType = response && typeof response.mimeType === 'string'
+          ? response.mimeType.toLowerCase() : '';
+        if (!response || response.ok !== true
+            || !isSupportedMimeType(mimeType)
+            || !Number.isSafeInteger(response.byteLength)
+            || response.byteLength < 1
+            || response.byteLength > maxResponseBytes
+            || typeof response.base64 !== 'string'
+            || !response.base64
+            || response.base64.length % 4 !== 0
+            || !/^[A-Za-z0-9+/]*={0,2}$/.test(response.base64)) {
+          throw new Error('Photo response is invalid.');
+        }
+        let binary;
+        try {
+          binary = atob(response.base64);
+        } catch (_error) {
+          throw new Error('Photo response is invalid.');
+        }
+        if (binary.length !== response.byteLength) {
+          throw new Error('Photo response is invalid.');
+        }
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) {
+          bytes[index] = binary.charCodeAt(index) & 0xff;
+        }
+        return new Blob([bytes], { type: mimeType });
+      }
+
+      function render(status) {
+        currentStatus = status;
+        renderState({
+          status: status,
+          pinId: currentPinId,
+          title: currentTitle,
+          objectUrl: status === 'ready' ? currentObjectUrl : ''
+        });
+      }
+
+      function revokeCurrent() {
+        if (!currentObjectUrl) return false;
+        const url = currentObjectUrl;
+        currentObjectUrl = '';
+        try { URL.revokeObjectURL(url); } catch (_error) {}
+        return true;
+      }
+
+      function isCurrent(pinId, requestGeneration) {
+        return !destroyed
+          && currentPinId === pinId
+          && generation === requestGeneration;
+      }
+
+      function beginFetch(pinId) {
+        if (destroyed || !pinId) return Promise.resolve(false);
+        const requestGeneration = generation;
+        render('loading');
+        let request;
+        try {
+          request = fetchPhoto(pinId);
+        } catch (error) {
+          request = Promise.reject(error);
+        }
+
+        let pending;
+        pending = Promise.resolve(request).then(function(response) {
+          if (!isCurrent(pinId, requestGeneration)) return false;
+          const blob = responseToBlob(response);
+          if (!isCurrent(pinId, requestGeneration)) return false;
+          const objectUrl = URL.createObjectURL(blob);
+          if (!isCurrent(pinId, requestGeneration)) {
+            URL.revokeObjectURL(objectUrl);
+            return false;
+          }
+          revokeCurrent();
+          currentObjectUrl = objectUrl;
+          render('ready');
+          return true;
+        }).catch(function() {
+          if (!isCurrent(pinId, requestGeneration)) return false;
+          revokeCurrent();
+          render('error');
+          return false;
+        }).finally(function() {
+          if (inFlight && inFlight.promise === pending) inFlight = null;
+        });
+        inFlight = {
+          pinId: pinId,
+          generation: requestGeneration,
+          promise: pending
+        };
+        return pending;
+      }
+
+      function open(pinId, title) {
+        const normalizedPinId = String(pinId || '').trim();
+        if (destroyed || !normalizedPinId) return Promise.resolve(false);
+        const normalizedTitle = String(title || '').trim() || 'ピン';
+        if (currentPinId === normalizedPinId) {
+          currentTitle = normalizedTitle;
+          if (currentStatus === 'loading'
+              && inFlight
+              && inFlight.pinId === normalizedPinId
+              && inFlight.generation === generation) {
+            return inFlight.promise;
+          }
+          if (currentStatus === 'ready' && currentObjectUrl) {
+            render('ready');
+            return Promise.resolve(true);
+          }
+        }
+
+        generation += 1;
+        inFlight = null;
+        revokeCurrent();
+        currentPinId = normalizedPinId;
+        currentTitle = normalizedTitle;
+        return beginFetch(normalizedPinId);
+      }
+
+      function retry() {
+        if (destroyed || !currentPinId) return Promise.resolve(false);
+        generation += 1;
+        inFlight = null;
+        revokeCurrent();
+        return beginFetch(currentPinId);
+      }
+
+      function close() {
+        if (destroyed) return false;
+        generation += 1;
+        inFlight = null;
+        revokeCurrent();
+        currentPinId = '';
+        currentTitle = '';
+        render('hidden');
+        return true;
+      }
+
+      function invalidate(pinId) {
+        const normalizedPinId = String(pinId || '').trim();
+        if (destroyed || !normalizedPinId || normalizedPinId !== currentPinId) return false;
+        return close();
+      }
+
+      function destroy() {
+        if (destroyed) return false;
+        destroyed = true;
+        generation += 1;
+        inFlight = null;
+        revokeCurrent();
+        currentPinId = '';
+        currentTitle = '';
+        if (lifecycleTarget && typeof lifecycleTarget.removeEventListener === 'function') {
+          lifecycleTarget.removeEventListener('pagehide', destroy);
+        }
+        render('hidden');
+        return true;
+      }
+
+      if (lifecycleTarget && typeof lifecycleTarget.addEventListener === 'function') {
+        lifecycleTarget.addEventListener('pagehide', destroy);
+      }
+      render('hidden');
+
+      return Object.freeze({
+        open: open,
+        retry: retry,
+        close: close,
+        invalidate: invalidate,
+        destroy: destroy
+      });
+    }
+
     function updatePhotoViewerTrigger(trigger, image, options) {
       if (!trigger || !image) return false;
       const config = options || {};
@@ -19319,6 +19532,7 @@ AUDIO_VENDOR_BUNDLE_END
       getAppSettings: true,
       getMapData: true,
       getPinAudioData: true,
+      getPinPhotoData: true,
       getPinDriveMeta: true,
       getRootFolderContents: true,
       getRouteCache: true,
@@ -21963,6 +22177,54 @@ AUDIO_VENDOR_BUNDLE_END
         ? function() { removeAudioFromPinDetail(pin, detailSnapshot); } : null;
     }
 
+    function renderPinPhotoLoaderState(view) {
+      const source = view || {};
+      const status = typeof source.status === 'string' ? source.status : 'hidden';
+      const title = String(source.title || '').trim() || 'ピン';
+      const loading = status === 'loading';
+      const ready = status === 'ready' && !!source.objectUrl;
+      const failed = status === 'error';
+      const stateElement = document.getElementById('pin-detail-photo-state');
+      const statusElement = document.getElementById('pin-detail-photo-status');
+      const retryButton = document.getElementById('pin-detail-photo-retry');
+      const trigger = document.getElementById('pin-detail-image-trigger');
+      const image = document.getElementById('pin-detail-image');
+
+      stateElement.hidden = !loading && !failed;
+      stateElement.setAttribute('aria-busy', loading ? 'true' : 'false');
+      statusElement.textContent = loading
+        ? '写真を読み込み中…'
+        : (failed ? '写真を表示できませんでした' : '');
+      retryButton.hidden = !failed;
+      retryButton.disabled = !failed;
+
+      if (ready) {
+        updatePhotoViewerTrigger(trigger, image, {
+          sourceUrl: view.objectUrl,
+          title: title,
+          alt: title + 'の写真'
+        });
+      } else {
+        closePhotoViewerForTrigger(trigger, { restoreFocus: false });
+        updatePhotoViewerTrigger(trigger, image, {
+          sourceUrl: '',
+          title: title,
+          alt: title + 'の写真'
+        });
+      }
+    }
+
+    function createPinPhotoLoaderController() {
+      return createPinPhotoLoader({
+        fetchPhoto: function(pinId) {
+          return withGAS('getPinPhotoData',
+            withEditToken({ pinId: String(pinId || '') }));
+        },
+        renderState: renderPinPhotoLoaderState,
+        lifecycleTarget: window
+      });
+    }
+
     function createPinAudioPlayerController() {
       const audioElement = document.getElementById('pin-audio-runtime');
       const retryButton = document.getElementById('pin-audio-player-retry');
@@ -21982,6 +22244,10 @@ AUDIO_VENDOR_BUNDLE_END
       return controller;
     }
 
+    const pinPhotoLoader = createPinPhotoLoaderController();
+    document.getElementById('pin-detail-photo-retry').addEventListener('click', function() {
+      pinPhotoLoader.retry();
+    });
     const pinAudioPlayer = createPinAudioPlayerController();
     window.addEventListener('pagehide', function() { pinAudioPlayer.destroy(); });
 
@@ -22125,8 +22391,9 @@ AUDIO_VENDOR_BUNDLE_END
       const image = document.getElementById('pin-detail-image');
       closePhotoViewerForTrigger(imageTrigger, { restoreFocus: false });
       const photoTitle = String(pin.title || '').trim() || 'ピン';
+      const hasPhoto = !!(pin.fileId || pin.imageUrl);
       updatePhotoViewerTrigger(imageTrigger, image, {
-        sourceUrl: pin.imageUrl || '',
+        sourceUrl: '',
         title: photoTitle,
         alt: photoTitle + 'の写真'
       });
@@ -22162,6 +22429,11 @@ AUDIO_VENDOR_BUNDLE_END
       state.shownPinId = pin.id;
       renderPinRouteAddControl(pin);
       openOverlay('pin-detail-overlay');
+      if (hasEditToken && hasPhoto) {
+        pinPhotoLoader.open(pin.id, photoTitle);
+      } else {
+        pinPhotoLoader.close();
+      }
       if (hasEditToken && pin.hasAudio) {
         pinAudioPlayer.open(pin.id);
       } else {
@@ -22175,9 +22447,7 @@ AUDIO_VENDOR_BUNDLE_END
       pinAudioPlayer.close();
       const trigger = document.getElementById('pin-detail-image-trigger');
       closePhotoViewerForTrigger(trigger, { restoreFocus: false });
-      updatePhotoViewerTrigger(trigger, document.getElementById('pin-detail-image'), {
-        sourceUrl: '', title: 'ピン', alt: 'ピン画像'
-      });
+      pinPhotoLoader.close();
       closeOverlay('pin-detail-overlay', options);
       return true;
     }

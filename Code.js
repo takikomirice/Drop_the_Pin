@@ -588,6 +588,39 @@ function getPinAudioData(payload) {
   }
 }
 
+function getPinPhotoData(payload) {
+  assertEditToken_(payload);
+  let pinId;
+  try {
+    pinId = normalizeImportIdentifier_(
+      payload && payload.pinId,
+      'pinId',
+      IMPORT_ITEM_ID_MAX_LENGTH
+    );
+    return pinPhotoDataFromBlob_(readPinPhotoBlobByPinId_(pinId));
+  } catch (_error) {
+    throw importItemError_('PIN_PHOTO_NOT_FOUND', 'pin photo is unavailable.', false);
+  }
+}
+
+function pinPhotoDataFromBlob_(blob) {
+  const mimeType = blob ? String(blob.getContentType() || '').toLowerCase() : '';
+  if (!isPinPhotoReadMimeType_(mimeType)) {
+    throw new Error('pin photo is unavailable.');
+  }
+  const bytes = blob.getBytes();
+  const byteLength = bytes && Number.isSafeInteger(bytes.length) ? bytes.length : -1;
+  if (byteLength < 1 || byteLength > DRIVE_PHOTO_IMPORT_MAX_FILE_BYTES) {
+    throw new Error('pin photo is unavailable.');
+  }
+  return {
+    ok: true,
+    mimeType: mimeType,
+    byteLength: byteLength,
+    base64: Utilities.base64Encode(bytes)
+  };
+}
+
 function pinAudioDataFromBlob_(blob) {
   if (!blob || String(blob.getContentType()) !== 'audio/mpeg') {
     throw new Error('pin audio is unavailable.');
@@ -10352,6 +10385,40 @@ function trashManagedAudioFileIfOwned_(fileId, structure) {
       'managed audio cleanup failed.',
       true
     );
+  }
+}
+
+function isPinPhotoReadMimeType_(mimeType) {
+  return mimeType === 'image/jpeg'
+    || mimeType === 'image/png'
+    || mimeType === 'image/gif'
+    || mimeType === 'image/webp';
+}
+
+function readPinPhotoBlobByPinId_(pinId) {
+  var normalizedPinId = String(pinId || '');
+  if (!normalizedPinId) {
+    throw importItemError_('PIN_PHOTO_NOT_FOUND', 'pin photo is unavailable.', false);
+  }
+  var target = findMapInfoRowByPinId_(openMapInfoSheet_(), normalizedPinId);
+  var fileId = target ? String(target.row[6] || '') : '';
+  if (!fileId) {
+    throw importItemError_('PIN_PHOTO_NOT_FOUND', 'pin photo is unavailable.', false);
+  }
+  try {
+    var file = DriveApp.getFileById(fileId);
+    var mimeType = String(file.getMimeType() || '').toLowerCase();
+    var sizeBytes = Number(file.getSize());
+    if (file.isTrashed()
+        || !isPinPhotoReadMimeType_(mimeType)
+        || !Number.isSafeInteger(sizeBytes)
+        || sizeBytes < 1
+        || sizeBytes > DRIVE_PHOTO_IMPORT_MAX_FILE_BYTES) {
+      throw new Error('pin photo validation failed');
+    }
+    return file.getBlob();
+  } catch (_error) {
+    throw importItemError_('PIN_PHOTO_NOT_FOUND', 'pin photo is unavailable.', false);
   }
 }
 

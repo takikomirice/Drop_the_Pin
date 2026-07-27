@@ -198,6 +198,7 @@ function createHarness() {
     csvInterchangeController: { invalidate() { return true; } },
     geoJsonInterchangeController: { invalidate() { return true; } },
     pinAudioPlayer: { close() { return true; } },
+    pinPhotoLoader: { close() { return true; } },
     trackImportController: {
       busy: false,
       discard() {

@@ -36,6 +36,19 @@ function productionPin(overrides) {
   }, overrides || {});
 }
 
+function photoResponse() {
+  const bytes = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64'
+  );
+  return {
+    ok: true,
+    mimeType: 'image/png',
+    byteLength: bytes.length,
+    base64: bytes.toString('base64')
+  };
+}
+
 test('processed index template uses real detail, hasAudio and source chooser wiring', async ({ page }) => {
   const expectCleanRuntime = observeRuntimeErrors(page);
   await page.goto('/production-edit');
@@ -92,6 +105,58 @@ test('processed index template uses real detail, hasAudio and source chooser wir
   await expect(page.locator('#pin-audio-player')).toBeHidden();
   await page.locator('#pin-detail-audio-add').click();
   await expect(page.locator('#pin-audio-source-title')).toHaveText('音声を追加');
+  await expectCleanRuntime();
+});
+
+test('processed edit template lazy-loads photo bytes and hides unavailable mobile actions', async ({ page }) => {
+  const expectCleanRuntime = observeRuntimeErrors(page);
+  await page.goto('/production-edit');
+  await expect.poll(() => page.evaluate(() => typeof window.__productionEdit)).toBe('object');
+
+  const pin = productionPin({
+    id: 'production-photo-pin',
+    title: '本番テンプレートの写真ピン',
+    hasPhoto: true,
+    hasAudio: false,
+    fileId: 'private-drive-photo-id',
+    imageUrl: 'https://drive.google.com/thumbnail?id=private-drive-photo-id'
+  });
+  await enqueue(page, 'getPinPhotoData', { response: photoResponse() });
+  await page.evaluate((photoPin) => {
+    window.__productionEdit.state.pins = [photoPin];
+    window.__productionEdit.openPinDetail(photoPin);
+  }, pin);
+
+  await expect(page.locator('#pin-detail-image-trigger')).toBeVisible();
+  const detailSource = await page.locator('#pin-detail-image').getAttribute('src');
+  expect(detailSource).toMatch(/^blob:/);
+  expect(detailSource).not.toContain('drive.google.com');
+  const photoCalls = await page.evaluate(() =>
+    window.__gasMock.calls.filter((call) => call.method === 'getPinPhotoData'));
+  expect(photoCalls).toEqual([{
+    method: 'getPinPhotoData',
+    payload: { __editToken: 'edit-token-browser-test', pinId: pin.id }
+  }]);
+
+  await page.locator('#pin-detail-image-trigger').click();
+  await expect(page.locator('#photo-viewer-overlay')).toHaveClass(/open/);
+  await expect(page.locator('#photo-viewer-image')).toHaveAttribute('src', detailSource);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => {
+    document.body.classList.add('narrow-view');
+    window.__productionEdit.state.narrowView = true;
+  });
+  await expect(page.locator('#share-open-btn')).toBeHidden();
+  await expect(page.locator('#data-toggle')).toBeHidden();
+
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.evaluate(() => {
+    document.body.classList.remove('narrow-view');
+    window.__productionEdit.state.narrowView = false;
+  });
+  await expect(page.locator('#share-open-btn')).toBeVisible();
+  await expect(page.locator('#data-toggle')).toBeVisible();
   await expectCleanRuntime();
 });
 

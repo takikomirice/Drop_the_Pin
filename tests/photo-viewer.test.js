@@ -346,6 +346,36 @@ test('surface cleanup closes viewers before owners revoke or replace photo URLs'
   assert.match(functionSource(sharedHtml, 'closeSharedDetail'), /closeSharedPhotoViewerForTrigger[\s\S]*closeSharedSurface/);
 });
 
+test('edit pin detail lazily loads authenticated photo bytes and never embeds the Drive URL', () => {
+  const stateTag = openingTag(indexBody, 'pin-detail-photo-state');
+  assert.match(stateTag, /aria-live="polite"/);
+  assert.match(indexBody, /id="pin-detail-photo-status"/);
+  assert.match(indexBody, /id="pin-detail-photo-retry"[^>]*>再試行<\/button>/);
+
+  const controllerSource = functionSource(indexHtml, 'createPinPhotoLoaderController');
+  assert.match(
+    controllerSource,
+    /withGAS\('getPinPhotoData',\s*withEditToken\(\{\s*pinId:/
+  );
+  const rendererSource = functionSource(indexHtml, 'renderPinPhotoLoaderState');
+  assert.match(rendererSource, /写真を読み込み中…/);
+  assert.match(rendererSource, /写真を表示できませんでした/);
+  assert.match(rendererSource, /sourceUrl:\s*view\.objectUrl/);
+
+  const openSource = functionSource(indexHtml, 'openPinDetail');
+  assert.doesNotMatch(openSource, /sourceUrl:\s*pin\.imageUrl/);
+  assert.match(openSource, /hasEditToken\s*&&\s*hasPhoto/);
+  assert.match(openSource, /pinPhotoLoader\.open\(\s*pin\.id,\s*photoTitle\s*\)/);
+  assert.ok(
+    openSource.indexOf("openOverlay('pin-detail-overlay')") < openSource.indexOf('pinPhotoLoader.open'),
+    'photo fetch starts only after the detail is opened'
+  );
+
+  const closeSource = functionSource(indexHtml, 'closePinDetail');
+  assert.match(closeSource, /closePhotoViewerForTrigger[\s\S]*pinPhotoLoader\.close\(\)/);
+  assert.doesNotMatch(controllerSource, /imageUrl|fileId|thumbnail/);
+});
+
 test('viewer controller state retains no binary, Drive, credential, or base64 payload fields', () => {
   const indexState = indexHtml.match(/const photoViewerState = \{([\s\S]*?)\n\s*\};/);
   const sharedState = sharedHtml.match(/const sharedPhotoViewerState = \{([\s\S]*?)\n\s*\};/);

@@ -258,6 +258,7 @@ NodeテストとローカルのChromiumテストは実施していますが、Ap
 - `v1.3.0`: 編集URL運用、HEIC / HEIF、シート書込みとUIの安定化
 - `v2.0.0`: 複数写真・データ交換・GPX／GeoJSONトラック、Drive写真、UIと共有機能の大幅更新
 - `v2.1.0`: 音声ピン、ブラウザ内切り出し・MP3変換、Driveメディア振り分け、編集／共有ビューの音声再生
+- `v2.1.1`: iPhone Safariを含む編集画面の写真表示を安定化し、スマートフォンでは利用できない共有・データ操作を非表示
 
 各バージョンの詳細は[GitHub Releases](https://github.com/takikomirice/Drop_the_Pin/releases)を参照してください。
 

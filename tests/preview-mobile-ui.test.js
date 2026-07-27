@@ -167,7 +167,12 @@ test('narrow view hides edit-only controls, keeps core topbar actions, and resto
   assert.doesNotMatch(indexHtml, /body\.narrow-view #route-map-add-bar,/);
   assert.match(indexHtml, /body\.narrow-view \.mobile-icon-action[\s\S]*?width:\s*44px/);
   assert.match(indexHtml, /body\.narrow-view \.mobile-icon-action \.topbar-action-label\s*\{\s*display:\s*none/);
-  assert.doesNotMatch(indexHtml, /body\.narrow-view #(?:data-toggle|share-open-btn),/);
+  [
+    'body.narrow-view #share-open-btn',
+    'body.narrow-view #data-toggle'
+  ].forEach((selector) => {
+    assert.ok(indexHtml.includes(selector), `missing narrow gate ${selector}`);
+  });
 
   const viewport = functionBody('setNarrowView');
   assert.match(viewport, /state\.narrowView\s*=\s*narrow/);

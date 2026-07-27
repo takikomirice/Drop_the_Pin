@@ -349,6 +349,7 @@ function makeHarness(options = {}) {
     ' removePinAudio: typeof removePinAudio === "function" ? removePinAudio : null,',
     ' readPinAudioBlobByPinId_: typeof readPinAudioBlobByPinId_ === "function" ? readPinAudioBlobByPinId_ : null,',
     ' getPinAudioData: typeof getPinAudioData === "function" ? getPinAudioData : null,',
+    ' getPinPhotoData: typeof getPinPhotoData === "function" ? getPinPhotoData : null,',
     ' resolveSharedProjection_: typeof resolveSharedProjection_ === "function" ? resolveSharedProjection_ : null,',
     ' getSharedViewData: typeof getSharedViewData === "function" ? getSharedViewData : null,',
     ' getSharedPinAudioData: typeof getSharedPinAudioData === "function" ? getSharedPinAudioData : null,',

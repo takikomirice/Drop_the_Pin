@@ -10,6 +10,7 @@ const READ_METHODS = [
   'getAppSettings',
   'getMapData',
   'getPinAudioData',
+  'getPinPhotoData',
   'getPinDriveMeta',
   'getRootFolderContents',
   'getRouteCache',
