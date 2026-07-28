@@ -14729,6 +14729,10 @@ AUDIO_VENDOR_BUNDLE_END
 
     const GpxTrackInterchangeCore = (function(trackGeometry, colors) {
       const MAX_GPX_TEXT_LENGTH = 5 * 1024 * 1024;
+      const MAX_SOURCE_POINTS = 100000;
+      const MAX_GENERATED_TRACKS = 20;
+      const INTERRUPTION_MS = 4 * 60 * 60 * 1000;
+      const COMPRESSION_INTERVAL_SECONDS = [1, 2, 3, 4, 5];
       const GPX_ERROR_BRAND = Symbol('GpxTrackInterchangeCoreError');
       const GPX_NAMESPACES = [
         '',
@@ -14923,14 +14927,40 @@ AUDIO_VENDOR_BUNDLE_END
         return { lat: lat, lng: lng, elevation: elevation, time: time };
       }
 
-      function appendSegment(segments, pointElements, stats) {
+      function duplicatePointKey(point) {
+        if (!point.time) return '';
+        return [
+          point.time,
+          point.lat,
+          point.lng,
+          point.elevation === null ? 'null' : point.elevation
+        ].join('|');
+      }
+
+      function appendSegment(segments, pointElements, stats, options) {
+        const config = options || {};
+        const maxPoints = Number.isInteger(config.maxPoints)
+          ? config.maxPoints : trackGeometry.MAX_POINTS;
         if (segments.length >= trackGeometry.MAX_SEGMENTS) {
           fail('TRACK_SEGMENT_LIMIT_EXCEEDED', 'トラックのsegment数が上限を超えています。');
         }
-        if (stats.pointCount + pointElements.length > trackGeometry.MAX_POINTS) {
-          fail('TRACK_POINT_LIMIT_EXCEEDED', 'トラックのpoint数が上限を超えています。');
+        if (stats.sourcePointCount + pointElements.length > maxPoints) {
+          fail(
+            config.limitCode || 'TRACK_POINT_LIMIT_EXCEEDED',
+            'トラックのpoint数が上限を超えています。'
+          );
         }
-        const points = pointElements.map(pointFromElement);
+        stats.sourcePointCount += pointElements.length;
+        const seen = new Set();
+        const points = pointElements.map(pointFromElement).filter(function(point) {
+          const key = config.deduplicate === true ? duplicatePointKey(point) : '';
+          if (!key || !seen.has(key)) {
+            if (key) seen.add(key);
+            return true;
+          }
+          stats.duplicatePointCount += 1;
+          return false;
+        });
         points.forEach(function(point) {
           if (point.time) stats.timedPointCount += 1;
           if (point.elevation !== null) stats.elevatedPointCount += 1;
@@ -14939,13 +14969,15 @@ AUDIO_VENDOR_BUNDLE_END
         segments.push({ index: segments.length, points: points });
       }
 
-      function collectSegments(root) {
+      function collectSegments(root, options) {
         const segments = [];
         const stats = {
           trackElementCount: 0,
           routeElementCount: 0,
           segmentCount: 0,
           pointCount: 0,
+          sourcePointCount: 0,
+          duplicatePointCount: 0,
           timedPointCount: 0,
           elevatedPointCount: 0,
           ignoredWaypointCount: 0,
@@ -14972,7 +15004,7 @@ AUDIO_VENDOR_BUNDLE_END
                 stats.ignoredEmptySegmentCount += 1;
                 return;
               }
-              appendSegment(segments, points, stats);
+              appendSegment(segments, points, stats, options);
               adopted = true;
             });
             if (adopted && !firstAdoptedSource) firstAdoptedSource = child;
@@ -14985,7 +15017,7 @@ AUDIO_VENDOR_BUNDLE_END
               stats.ignoredEmptySegmentCount += 1;
               return;
             }
-            appendSegment(segments, points, stats);
+            appendSegment(segments, points, stats, options);
             if (!firstAdoptedSource) firstAdoptedSource = child;
           }
         });
@@ -15099,7 +15131,7 @@ AUDIO_VENDOR_BUNDLE_END
         return track;
       }
 
-      function parse(text, options) {
+      function readSource(text, options, collectionOptions) {
         const config = options || {};
         preflight(text);
         const root = parseDocument(text, config);
@@ -15108,24 +15140,32 @@ AUDIO_VENDOR_BUNDLE_END
         let metadata;
         try {
           sourceName = sourceNameFromOptions(config);
-          collected = collectSegments(root);
+          collected = collectSegments(root, collectionOptions);
           metadata = readMetadata(root, collected.firstAdoptedSource, sourceName);
         } catch (error) {
           if (error && error[GPX_ERROR_BRAND] === true) throw error;
           fail('GPX_INVALID_XML', 'GPXファイルを解析できませんでした。');
         }
+        return {
+          sourceName: sourceName,
+          collected: collected,
+          metadata: metadata
+        };
+      }
+
+      function parsedFromSource(source) {
         let normalized;
         try {
           normalized = trackGeometry.normalizeTrack({
             id: 'gpx-track-parse',
             trackId: 'gpx-track-parse',
             revisionId: 'gpx-track-parse-revision',
-            name: metadata.name,
-            description: metadata.description,
+            name: source.metadata.name,
+            description: source.metadata.description,
             color: colors[0] && colors[0].hex,
             sourceType: 'gpx',
-            sourceName: sourceName,
-            segments: collected.segments,
+            sourceName: source.sourceName,
+            segments: source.collected.segments,
             visible: true,
             lineStyle: 'solid',
             lineWidth: 4,
@@ -15144,9 +15184,249 @@ AUDIO_VENDOR_BUNDLE_END
           visible: normalized.visible,
           lineStyle: normalized.lineStyle,
           lineWidth: normalized.lineWidth,
-          stats: cloneStats(collected.stats),
-          warnings: cloneWarnings(buildWarnings(collected.stats))
+          stats: cloneStats(source.collected.stats),
+          warnings: cloneWarnings(buildWarnings(source.collected.stats))
         };
+      }
+
+      function segmentPointCount(segments) {
+        return segments.reduce(function(total, segment) {
+          return total + segment.points.length;
+        }, 0);
+      }
+
+      function cloneSegments(segments) {
+        return segments.map(function(segment, index) {
+          return { index: index, points: segment.points.slice() };
+        });
+      }
+
+      function statsForSegments(sourceStats, segments) {
+        let timedPointCount = 0;
+        let elevatedPointCount = 0;
+        segments.forEach(function(segment) {
+          segment.points.forEach(function(point) {
+            if (point.time) timedPointCount += 1;
+            if (point.elevation !== null) elevatedPointCount += 1;
+          });
+        });
+        return {
+          trackElementCount: sourceStats.trackElementCount,
+          routeElementCount: sourceStats.routeElementCount,
+          segmentCount: segments.length,
+          pointCount: segmentPointCount(segments),
+          timedPointCount: timedPointCount,
+          elevatedPointCount: elevatedPointCount,
+          ignoredWaypointCount: sourceStats.ignoredWaypointCount,
+          ignoredEmptySegmentCount: sourceStats.ignoredEmptySegmentCount
+        };
+      }
+
+      function splitSegmentsAtInterruptions(segments, stats) {
+        const stages = [];
+        let stage = [];
+        function flushStage() {
+          if (stage.length) stages.push(stage);
+          stage = [];
+        }
+        segments.forEach(function(segment) {
+          let points = [];
+          let previousTimedMs = null;
+          segment.points.forEach(function(point) {
+            const currentMs = point.time ? Date.parse(point.time) : NaN;
+            if (points.length && previousTimedMs !== null && Number.isFinite(currentMs)
+                && currentMs - previousTimedMs >= INTERRUPTION_MS) {
+              stage.push({ index: stage.length, points: points });
+              flushStage();
+              points = [];
+              stats.interruptionCount += 1;
+            }
+            points.push(point);
+            previousTimedMs = Number.isFinite(currentMs) ? currentMs : null;
+          });
+          if (points.length) stage.push({ index: stage.length, points: points });
+        });
+        flushStage();
+        return stages;
+      }
+
+      function sampleSegmentBySeconds(segment, intervalSeconds) {
+        if (segment.points.length <= 2) {
+          return { index: segment.index, points: segment.points.slice() };
+        }
+        const points = [segment.points[0]];
+        let lastTimedMs = segment.points[0].time ? Date.parse(segment.points[0].time) : null;
+        segment.points.slice(1, -1).forEach(function(point) {
+          const currentMs = point.time ? Date.parse(point.time) : NaN;
+          if (!Number.isFinite(currentMs) || lastTimedMs === null
+              || currentMs - lastTimedMs >= intervalSeconds * 1000) {
+            points.push(point);
+            lastTimedMs = Number.isFinite(currentMs) ? currentMs : null;
+          }
+        });
+        const last = segment.points[segment.points.length - 1];
+        if (points[points.length - 1] !== last) points.push(last);
+        return { index: segment.index, points: points };
+      }
+
+      function selectEvenly(values, count) {
+        if (count >= values.length) return values.slice();
+        if (count <= 0) return [];
+        return Array.from({ length: count }, function(_unused, slot) {
+          return values[Math.floor(slot * values.length / count)];
+        });
+      }
+
+      function reduceUntimedPoints(segments) {
+        const mandatory = new Set();
+        const optional = [];
+        segments.forEach(function(segment) {
+          segment.points.forEach(function(point, index) {
+            if (point.time || index === 0 || index === segment.points.length - 1) {
+              mandatory.add(point);
+            } else {
+              optional.push(point);
+            }
+          });
+        });
+        if (mandatory.size > trackGeometry.MAX_POINTS) return cloneSegments(segments);
+        const optionalCount = Math.min(
+          optional.length,
+          trackGeometry.MAX_POINTS - mandatory.size
+        );
+        const retained = new Set(selectEvenly(optional, optionalCount));
+        mandatory.forEach(function(point) { retained.add(point); });
+        return segments.map(function(segment, index) {
+          return {
+            index: index,
+            points: segment.points.filter(function(point) { return retained.has(point); })
+          };
+        }).filter(function(segment) { return segment.points.length > 0; });
+      }
+
+      function compressStage(stageSegments, stats) {
+        const original = cloneSegments(stageSegments);
+        const originalCount = segmentPointCount(original);
+        if (originalCount <= trackGeometry.MAX_POINTS) return original;
+        let candidate = original;
+        let selectedInterval = 0;
+        COMPRESSION_INTERVAL_SECONDS.some(function(intervalSeconds) {
+          candidate = original.map(function(segment) {
+            return sampleSegmentBySeconds(segment, intervalSeconds);
+          });
+          if (segmentPointCount(candidate) <= trackGeometry.MAX_POINTS) {
+            selectedInterval = intervalSeconds;
+            return true;
+          }
+          return false;
+        });
+        if (!selectedInterval) {
+          const fiveSecondSamplingReduced = segmentPointCount(candidate) < originalCount
+            && original.some(function(segment) {
+              return segment.points.some(function(point) { return !!point.time; });
+            });
+          candidate = reduceUntimedPoints(candidate);
+          if (fiveSecondSamplingReduced) selectedInterval = 5;
+        }
+        const retainedCount = segmentPointCount(candidate);
+        stats.compressedPointCount += originalCount - retainedCount;
+        if (selectedInterval) stats.compressionIntervals.push(selectedInterval);
+        return candidate;
+      }
+
+      function partitionStage(stageSegments) {
+        const parts = [];
+        let current = [];
+        let currentCount = 0;
+        function flush() {
+          if (current.length) parts.push(current);
+          current = [];
+          currentCount = 0;
+        }
+        stageSegments.forEach(function(segment) {
+          if (segment.points.length <= trackGeometry.MAX_POINTS) {
+            if (currentCount && currentCount + segment.points.length > trackGeometry.MAX_POINTS) {
+              flush();
+            }
+            current.push({ index: current.length, points: segment.points.slice() });
+            currentCount += segment.points.length;
+            return;
+          }
+          let offset = 0;
+          while (offset < segment.points.length) {
+            if (currentCount === trackGeometry.MAX_POINTS) flush();
+            const take = Math.min(
+              trackGeometry.MAX_POINTS - currentCount,
+              segment.points.length - offset
+            );
+            current.push({
+              index: current.length,
+              points: segment.points.slice(offset, offset + take)
+            });
+            currentCount += take;
+            offset += take;
+          }
+        });
+        flush();
+        return parts;
+      }
+
+      function partName(baseName, index, total) {
+        if (total === 1) return baseName;
+        const suffix = '(' + (index + 1) + '/' + total + ')';
+        return baseName.slice(0, Math.max(0, 100 - suffix.length)) + suffix;
+      }
+
+      function aggregateSummaries(drafts) {
+        const result = {
+          segmentCount: 0,
+          pointCount: 0,
+          distanceMeters: 0,
+          minElevation: null,
+          maxElevation: null,
+          startTime: '',
+          endTime: '',
+          bounds: null
+        };
+        drafts.forEach(function(draft) {
+          const summary = draft.summary;
+          result.segmentCount += summary.segmentCount;
+          result.pointCount += summary.pointCount;
+          result.distanceMeters += summary.distanceMeters;
+          if (summary.minElevation !== null
+              && (result.minElevation === null || summary.minElevation < result.minElevation)) {
+            result.minElevation = summary.minElevation;
+          }
+          if (summary.maxElevation !== null
+              && (result.maxElevation === null || summary.maxElevation > result.maxElevation)) {
+            result.maxElevation = summary.maxElevation;
+          }
+          if (!result.startTime && summary.startTime) result.startTime = summary.startTime;
+          if (summary.endTime) result.endTime = summary.endTime;
+          if (summary.bounds) {
+            if (!result.bounds) {
+              result.bounds = {
+                south: summary.bounds.south,
+                west: summary.bounds.west,
+                north: summary.bounds.north,
+                east: summary.bounds.east
+              };
+            } else {
+              result.bounds.south = Math.min(result.bounds.south, summary.bounds.south);
+              result.bounds.west = Math.min(result.bounds.west, summary.bounds.west);
+              result.bounds.north = Math.max(result.bounds.north, summary.bounds.north);
+              result.bounds.east = Math.max(result.bounds.east, summary.bounds.east);
+            }
+          }
+        });
+        return result;
+      }
+
+      function parse(text, options) {
+        return parsedFromSource(readSource(text, options, {
+          maxPoints: trackGeometry.MAX_POINTS,
+          deduplicate: false
+        }));
       }
 
       function fallbackId(prefix) {
@@ -15161,15 +15441,16 @@ AUDIO_VENDOR_BUNDLE_END
         return value || fallbackId(prefix);
       }
 
-      function buildDraft(text, options) {
-        const config = options || {};
-        const parsed = parse(text, config);
-        const generator = typeof config.generateId === 'function'
+      function idGenerator(config) {
+        return typeof config.generateId === 'function'
           ? config.generateId
           : function() {
             return typeof crypto !== 'undefined' && crypto
               && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : '';
           };
+      }
+
+      function draftFromParsed(parsed, generator) {
         const trackId = createId(generator, 'track');
         let revisionId = createId(generator, 'revision');
         if (revisionId === trackId) revisionId = fallbackId('revision');
@@ -15188,6 +15469,115 @@ AUDIO_VENDOR_BUNDLE_END
           lineWidth: parsed.lineWidth,
           orderIndex: 0
         }, parsed.stats, parsed.warnings);
+      }
+
+      function buildDraft(text, options) {
+        const config = options || {};
+        const parsed = parse(text, config);
+        return draftFromParsed(parsed, idGenerator(config));
+      }
+
+      function buildDraftBatch(text, options) {
+        const config = options || {};
+        const source = readSource(text, config, {
+          maxPoints: MAX_SOURCE_POINTS,
+          deduplicate: true,
+          limitCode: 'GPX_SOURCE_POINT_LIMIT_EXCEEDED'
+        });
+        const transformStats = {
+          sourcePointCount: source.collected.stats.sourcePointCount,
+          pointCount: 0,
+          duplicatePointCount: source.collected.stats.duplicatePointCount,
+          interruptionCount: 0,
+          compressedPointCount: 0,
+          generatedTrackCount: 0,
+          compressionIntervals: []
+        };
+        const parts = [];
+        splitSegmentsAtInterruptions(source.collected.segments, transformStats)
+          .forEach(function(stage) {
+            partitionStage(compressStage(stage, transformStats)).forEach(function(part) {
+              parts.push(part);
+            });
+          });
+        if (!parts.length) fail('GPX_TRACK_REQUIRED', 'GPXにトラックまたはルートがありません。');
+        if (parts.length > MAX_GENERATED_TRACKS) {
+          fail('GPX_GENERATED_TRACK_LIMIT_EXCEEDED', 'GPXの生成トラック数が上限を超えています。');
+        }
+        const generator = idGenerator(config);
+        const drafts = parts.map(function(segments, index) {
+          const partStats = statsForSegments(source.collected.stats, segments);
+          return draftFromParsed({
+            name: partName(source.metadata.name, index, parts.length),
+            description: source.metadata.description,
+            color: colors[0] && colors[0].hex,
+            sourceType: 'gpx',
+            sourceName: source.sourceName,
+            segments: segments,
+            visible: true,
+            lineStyle: 'solid',
+            lineWidth: 4,
+            stats: partStats,
+            warnings: buildWarnings(partStats)
+          }, generator);
+        });
+        transformStats.pointCount = drafts.reduce(function(total, draft) {
+          return total + draft.summary.pointCount;
+        }, 0);
+        transformStats.generatedTrackCount = drafts.length;
+        const aggregateStats = statsForSegments(
+          source.collected.stats,
+          parts.reduce(function(all, segments) { return all.concat(segments); }, [])
+        );
+        return {
+          drafts: drafts,
+          baseName: source.metadata.name,
+          summary: aggregateSummaries(drafts),
+          stats: transformStats,
+          warnings: cloneWarnings(buildWarnings(aggregateStats))
+        };
+      }
+
+      function updateDraftBatch(batch, patch) {
+        if (!isObject(batch) || !Array.isArray(batch.drafts) || !batch.drafts.length) {
+          fail('GPX_METADATA_INVALID', 'GPXの解析結果を確認してください。');
+        }
+        const changes = isObject(patch) ? patch : {};
+        const rawBaseName = hasOwn(changes, 'name') ? changes.name : batch.baseName;
+        if (typeof rawBaseName !== 'string' || !rawBaseName.trim()) {
+          fail('GPX_METADATA_INVALID', 'GPXのトラック情報を確認してください。');
+        }
+        const baseName = rawBaseName.trim();
+        const drafts = batch.drafts.map(function(draft, index) {
+          const partPatch = {};
+          ['description', 'color', 'visible', 'lineStyle'].forEach(function(key) {
+            if (hasOwn(changes, key)) partPatch[key] = changes[key];
+          });
+          partPatch.name = partName(baseName, index, batch.drafts.length);
+          return updateDraft(draft, partPatch);
+        });
+        return {
+          drafts: drafts,
+          baseName: baseName,
+          summary: aggregateSummaries(drafts),
+          stats: {
+            sourcePointCount: batch.stats.sourcePointCount,
+            pointCount: batch.stats.pointCount,
+            duplicatePointCount: batch.stats.duplicatePointCount,
+            interruptionCount: batch.stats.interruptionCount,
+            compressedPointCount: batch.stats.compressedPointCount,
+            generatedTrackCount: batch.stats.generatedTrackCount,
+            compressionIntervals: batch.stats.compressionIntervals.slice()
+          },
+          warnings: cloneWarnings(batch.warnings)
+        };
+      }
+
+      function toSavePayloads(batch) {
+        if (!isObject(batch) || !Array.isArray(batch.drafts) || !batch.drafts.length) {
+          fail('GPX_METADATA_INVALID', 'GPXの解析結果を確認してください。');
+        }
+        return batch.drafts.map(toSavePayload);
       }
 
       function updateDraft(draft, patch) {
@@ -15234,8 +15624,11 @@ AUDIO_VENDOR_BUNDLE_END
         MAX_GPX_TEXT_LENGTH: MAX_GPX_TEXT_LENGTH,
         parse: parse,
         buildDraft: buildDraft,
+        buildDraftBatch: buildDraftBatch,
         updateDraft: updateDraft,
-        toSavePayload: toSavePayload
+        updateDraftBatch: updateDraftBatch,
+        toSavePayload: toSavePayload,
+        toSavePayloads: toSavePayloads
       };
     })(
       TrackGeometryCore,
