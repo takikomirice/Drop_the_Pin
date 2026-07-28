@@ -14618,6 +14618,170 @@ AUDIO_VENDOR_BUNDLE_END
       });
     })();
 
+    const TrackShapeSimplificationCore = (function() {
+      function cloneSegments(segments) {
+        if (!Array.isArray(segments)) return [];
+        return segments.map(function(segment, index) {
+          return {
+            index: index,
+            points: segment && Array.isArray(segment.points) ? segment.points.slice() : []
+          };
+        });
+      }
+
+      function normalizedLongitudeDelta(value) {
+        return ((value + 540) % 360) - 180;
+      }
+
+      function triangleArea(node) {
+        if (!node.previous || !node.next) return Infinity;
+        const radians = Math.PI / 180;
+        const latitude = node.point.lat * radians;
+        const previousX = normalizedLongitudeDelta(
+          node.previous.point.lng - node.point.lng
+        ) * radians * Math.cos(latitude);
+        const previousY = (node.previous.point.lat - node.point.lat) * radians;
+        const nextX = normalizedLongitudeDelta(
+          node.next.point.lng - node.point.lng
+        ) * radians * Math.cos(latitude);
+        const nextY = (node.next.point.lat - node.point.lat) * radians;
+        return Math.abs(previousX * nextY - previousY * nextX) / 2;
+      }
+
+      function compareCandidates(a, b) {
+        if (a.area !== b.area) return a.area - b.area;
+        if (a.segmentIndex !== b.segmentIndex) return a.segmentIndex - b.segmentIndex;
+        return a.pointIndex - b.pointIndex;
+      }
+
+      function heapPush(heap, value) {
+        heap.push(value);
+        let index = heap.length - 1;
+        while (index > 0) {
+          const parent = Math.floor((index - 1) / 2);
+          if (compareCandidates(heap[parent], value) <= 0) break;
+          heap[index] = heap[parent];
+          index = parent;
+        }
+        heap[index] = value;
+      }
+
+      function heapPop(heap) {
+        if (!heap.length) return null;
+        const first = heap[0];
+        const last = heap.pop();
+        if (heap.length) {
+          let index = 0;
+          while (true) {
+            const left = index * 2 + 1;
+            const right = left + 1;
+            if (left >= heap.length) break;
+            let child = left;
+            if (right < heap.length && compareCandidates(heap[right], heap[left]) < 0) {
+              child = right;
+            }
+            if (compareCandidates(last, heap[child]) <= 0) break;
+            heap[index] = heap[child];
+            index = child;
+          }
+          heap[index] = last;
+        }
+        return first;
+      }
+
+      function reduce(segments, maxPoints) {
+        const cloned = cloneSegments(segments);
+        if (!Number.isInteger(maxPoints) || maxPoints <= 0) return cloned;
+
+        const segmentNodes = [];
+        const allNodes = [];
+        let minElevationNode = null;
+        let maxElevationNode = null;
+        cloned.forEach(function(segment, segmentIndex) {
+          const nodes = segment.points.map(function(point, pointIndex) {
+            const node = {
+              segmentIndex: segmentIndex,
+              pointIndex: pointIndex,
+              point: point,
+              previous: null,
+              next: null,
+              protected: pointIndex === 0 || pointIndex === segment.points.length - 1
+                || point.time !== '',
+              removed: false,
+              version: 0
+            };
+            if (point.elevation !== null && typeof point.elevation === 'number'
+                && Number.isFinite(point.elevation)) {
+              if (!minElevationNode || point.elevation < minElevationNode.point.elevation) {
+                minElevationNode = node;
+              }
+              if (!maxElevationNode || point.elevation > maxElevationNode.point.elevation) {
+                maxElevationNode = node;
+              }
+            }
+            allNodes.push(node);
+            return node;
+          });
+          nodes.forEach(function(node, index) {
+            node.previous = index > 0 ? nodes[index - 1] : null;
+            node.next = index + 1 < nodes.length ? nodes[index + 1] : null;
+          });
+          segmentNodes.push(nodes);
+        });
+
+        if (minElevationNode) minElevationNode.protected = true;
+        if (maxElevationNode) maxElevationNode.protected = true;
+        if (allNodes.length <= maxPoints) return cloned;
+
+        const heap = [];
+        function enqueue(node) {
+          if (!node || node.removed || node.protected || !node.previous || !node.next) return;
+          heapPush(heap, {
+            area: triangleArea(node),
+            segmentIndex: node.segmentIndex,
+            pointIndex: node.pointIndex,
+            version: node.version,
+            node: node
+          });
+        }
+        allNodes.forEach(enqueue);
+
+        let retainedCount = allNodes.length;
+        while (retainedCount > maxPoints && heap.length) {
+          const candidate = heapPop(heap);
+          const node = candidate.node;
+          if (node.removed || node.protected || candidate.version !== node.version
+              || !node.previous || !node.next) {
+            continue;
+          }
+          node.removed = true;
+          retainedCount -= 1;
+          const previous = node.previous;
+          const next = node.next;
+          previous.next = next;
+          next.previous = previous;
+          node.previous = null;
+          node.next = null;
+          previous.version += 1;
+          next.version += 1;
+          enqueue(previous);
+          enqueue(next);
+        }
+
+        return segmentNodes.map(function(nodes, index) {
+          return {
+            index: index,
+            points: nodes.filter(function(node) { return !node.removed; })
+              .map(function(node) { return node.point; })
+          };
+        }).filter(function(segment) {
+          return segment.points.length > 0;
+        });
+      }
+
+      return Object.freeze({ reduce: reduce });
+    })();
+
     const GeoJsonTrackInterchangeCore = (function(geoJsonPinCore, trackGeometry, colors) {
       function text(value) {
         return value == null ? '' : String(value);
