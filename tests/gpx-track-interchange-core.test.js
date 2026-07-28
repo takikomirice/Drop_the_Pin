@@ -132,6 +132,9 @@ function parse(xml, overrides = {}) { return loadCore().parse(xml, options(overr
 function build(xml, overrides = {}) { return loadCore().buildDraft(xml, options(overrides)); }
 function error(run) { try { run(); } catch (caught) { return caught; } return null; }
 function code(run) { return error(run)?.code || ''; }
+function trkptXml(lat, lon, time, elevation = 10) {
+  return `<trkpt lat="${lat}" lon="${lon}"><ele>${elevation}</ele><time>${time}</time></trkpt>`;
+}
 
 test('GPX 1.0 track fixture parses direct metadata and points without IDs', () => {
   const result = parse(fixture('gpx-1.0-track.gpx'));
@@ -338,6 +341,162 @@ test('segment and point limits reject the whole GPX without truncation', () => {
   assert.equal(code(() => parse(`<gpx version="1.1"><trk>${segments}</trk></gpx>`)), 'TRACK_SEGMENT_LIMIT_EXCEEDED');
   const points = '<trkpt lat="1" lon="2"/>'.repeat(20001);
   assert.equal(code(() => parse(`<gpx version="1.1"><trk><trkseg>${points}</trkseg></trk></gpx>`)), 'TRACK_POINT_LIMIT_EXCEEDED');
+});
+
+test('GPX batch removes exact timed duplicates before applying the saved point limit', () => {
+  const point = trkptXml(35, 139, '2026-01-01T00:00:00Z');
+  const batch = loadCore().buildDraftBatch(
+    `<gpx version="1.1"><trk><trkseg>${point.repeat(20001)}</trkseg></trk></gpx>`,
+    options()
+  );
+  assert.equal(batch.stats.sourcePointCount, 20001);
+  assert.equal(batch.stats.duplicatePointCount, 20000);
+  assert.equal(batch.drafts.length, 1);
+  assert.equal(batch.drafts[0].summary.pointCount, 1);
+});
+
+test('GPX duplicate removal is exact timed and scoped to its source segment', () => {
+  const same = trkptXml(35, 139, '2026-01-01T00:00:00Z');
+  const noTime = '<trkpt lat="35" lon="139"><ele>10</ele></trkpt>';
+  const differentElevation = trkptXml(35, 139, '2026-01-01T00:00:00Z', 11);
+  const xml = '<gpx version="1.1"><trk>'
+    + `<trkseg>${same}${noTime}${same}${noTime}${differentElevation}</trkseg>`
+    + `<trkseg>${same}</trkseg></trk></gpx>`;
+  const batch = loadCore().buildDraftBatch(xml, options());
+  assert.equal(batch.stats.duplicatePointCount, 1);
+  assert.deepEqual(plain(batch.drafts[0].segments.map((segment) => segment.points.length)), [4, 1]);
+});
+
+test('GPX batch splits a four-hour interruption but not a midnight crossing', () => {
+  const continuous = [
+    trkptXml(35, 139, '2026-01-01T23:59:59Z'),
+    trkptXml(35.001, 139.001, '2026-01-02T00:00:01Z')
+  ].join('');
+  assert.equal(loadCore().buildDraftBatch(
+    `<gpx version="1.1"><trk><trkseg>${continuous}</trkseg></trk></gpx>`,
+    options()
+  ).drafts.length, 1);
+
+  const interrupted = [
+    trkptXml(35, 139, '2026-01-01T18:00:00Z'),
+    trkptXml(35.001, 139.001, '2026-01-01T21:59:59Z'),
+    trkptXml(35.002, 139.002, '2026-01-02T02:00:00Z')
+  ].join('');
+  const batch = loadCore().buildDraftBatch(
+    `<gpx version="1.1"><trk><trkseg>${interrupted}</trkseg></trk></gpx>`,
+    options()
+  );
+  assert.equal(batch.stats.interruptionCount, 1);
+  assert.deepEqual(plain(batch.drafts.map((draft) => draft.name)), ['walk(1/2)', 'walk(2/2)']);
+  assert.deepEqual(plain(batch.drafts.map((draft) => draft.summary.pointCount)), [2, 1]);
+});
+
+test('GPX batch chooses the smallest whole-second interval that fits 20000 points', () => {
+  const start = Date.parse('2026-01-01T00:00:00Z');
+  const points = Array.from({ length: 20001 }, (_, index) =>
+    trkptXml(35 + index / 1000000, 139, new Date(start + index * 1000).toISOString())
+  ).join('');
+  const batch = loadCore().buildDraftBatch(
+    `<gpx version="1.1"><trk><trkseg>${points}</trkseg></trk></gpx>`,
+    options()
+  );
+  assert.deepEqual(plain(batch.stats.compressionIntervals), [2]);
+  assert.equal(batch.drafts.length, 1);
+  assert.equal(batch.drafts[0].summary.pointCount, 10001);
+  assert.equal(batch.drafts[0].segments[0].points[0].time, '2026-01-01T00:00:00.000Z');
+  assert.equal(batch.drafts[0].segments[0].points.at(-1).time,
+    new Date(start + 20000 * 1000).toISOString());
+});
+
+test('GPX batch partitions a stage that still exceeds 20000 points without losing sampled points', () => {
+  const start = Date.parse('2026-01-01T00:00:00Z');
+  const points = Array.from({ length: 60001 }, (_, index) =>
+    `<trkpt lat="35" lon="139"><time>${
+      new Date(start + index * 2000).toISOString()
+    }</time></trkpt>`
+  ).join('');
+  const batch = loadCore().buildDraftBatch(
+    `<gpx version="1.1"><trk><trkseg>${points}</trkseg></trk></gpx>`,
+    options()
+  );
+  assert.equal(batch.drafts.length, 2);
+  assert.deepEqual(plain(batch.drafts.map((draft) => draft.name)), ['walk(1/2)', 'walk(2/2)']);
+  assert.deepEqual(plain(batch.drafts.map((draft) => draft.summary.pointCount)), [20000, 1]);
+  assert.equal(batch.stats.compressedPointCount, 40000);
+  assert.deepEqual(plain(batch.stats.compressionIntervals), [5]);
+  const savedTimes = batch.drafts.flatMap((draft) =>
+    draft.segments.flatMap((segment) => segment.points.map((point) => point.time)));
+  assert.equal(savedTimes.length, 20001);
+  assert.equal(new Set(savedTimes).size, 20001);
+});
+
+test('GPX batch uniformly reduces untimed overflow without claiming a time interval', () => {
+  const points = Array.from({ length: 20001 }, (_, index) =>
+    `<trkpt lat="${35 + index / 1000000}" lon="139"/>`
+  ).join('');
+  const batch = loadCore().buildDraftBatch(
+    `<gpx version="1.1"><trk><trkseg>${points}</trkseg></trk></gpx>`,
+    options()
+  );
+  assert.equal(batch.drafts.length, 1);
+  assert.equal(batch.drafts[0].summary.pointCount, 20000);
+  assert.equal(batch.drafts[0].segments[0].points[0].lat, 35);
+  assert.equal(batch.drafts[0].segments[0].points.at(-1).lat, 35.02);
+  assert.equal(batch.stats.compressedPointCount, 1);
+  assert.deepEqual(plain(batch.stats.compressionIntervals), []);
+});
+
+test('GPX batch rejects source points and generated tracks at their independent limits', () => {
+  const root = new ElementNode('gpx', '', { version: '1.1' });
+  const track = new ElementNode('trk', '', {});
+  const segment = new ElementNode('trkseg', '', {});
+  segment.childNodes = Array.from({ length: 100001 }, () =>
+    new ElementNode('trkpt', '', { lat: '35', lon: '139' }));
+  track.childNodes.push(segment);
+  root.childNodes.push(track);
+  assert.equal(code(() => loadCore().buildDraftBatch('<gpx version="1.1"/>', {
+    sourceName: 'walk.gpx',
+    parseXml: () => new DocumentNode(root)
+  })), 'GPX_SOURCE_POINT_LIMIT_EXCEEDED');
+
+  const start = Date.parse('2026-01-01T00:00:00Z');
+  const interrupted = (count) => Array.from({ length: count }, (_, index) =>
+    trkptXml(35, 139, new Date(start + index * 4 * 60 * 60 * 1000).toISOString())
+  ).join('');
+  const accepted = loadCore().buildDraftBatch(
+    `<gpx version="1.1"><trk><trkseg>${interrupted(20)}</trkseg></trk></gpx>`,
+    options()
+  );
+  assert.equal(accepted.drafts.length, 20);
+  assert.equal(code(() => loadCore().buildDraftBatch(
+    `<gpx version="1.1"><trk><trkseg>${interrupted(21)}</trkseg></trk></gpx>`,
+    options()
+  )), 'GPX_GENERATED_TRACK_LIMIT_EXCEEDED');
+});
+
+test('GPX batch common edits regenerate suffixes and save independent payloads', () => {
+  const core = loadCore();
+  const xml = '<gpx version="1.1"><trk><trkseg>'
+    + trkptXml(35, 139, '2026-01-01T18:00:00Z')
+    + trkptXml(35.1, 139.1, '2026-01-02T02:00:00Z')
+    + '</trkseg></trk></gpx>';
+  const batch = core.buildDraftBatch(xml, options());
+  const updated = core.updateDraftBatch(batch, {
+    name: '縦走',
+    description: '2泊3日',
+    color: '#2196f3',
+    visible: false,
+    lineStyle: 'dashed'
+  });
+  assert.deepEqual(plain(updated.drafts.map((draft) => draft.name)), ['縦走(1/2)', '縦走(2/2)']);
+  assert.ok(updated.drafts.every((draft) =>
+    draft.description === '2泊3日' && draft.color === '#2196f3'
+    && draft.visible === false && draft.lineStyle === 'dashed'));
+  const payloads = core.toSavePayloads(updated);
+  assert.equal(payloads.length, 2);
+  payloads[0].segments[0].points[0].lat = 0;
+  assert.notEqual(payloads[1].segments[0].points[0].lat, 0);
+  assert.notEqual(updated.drafts[0].segments[0].points[0].lat, 0);
 });
 
 test('metadata priority uses direct children and enforces safe length boundaries', () => {

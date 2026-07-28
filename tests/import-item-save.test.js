@@ -243,6 +243,9 @@ function makeHarness(options = {}) {
         if (metadata.failSharingRead) throw new Error('private sharing read failure for photo_SECRET123456');
         return metadata.sharingAccess || (metadata.managed ? 'PRIVATE' : 'ANYONE_WITH_LINK');
       },
+      getSharingPermission() {
+        return metadata.sharingPermission || (metadata.managed ? 'NONE' : 'VIEW');
+      },
       isTrashed() { return file.trashed; },
       setTrashed(value) {
         if (audit.locks.held) audit.drive.callsWhileLocked += 1;
@@ -264,7 +267,7 @@ function makeHarness(options = {}) {
         file.name = String(next);
         return file;
       },
-      setSharing(access) {
+      setSharing(access, permission) {
         if (audit.locks.held) audit.drive.callsWhileLocked += 1;
         audit.drive.shares += 1;
         audit.drive.shareIds.push(id);
@@ -277,6 +280,7 @@ function makeHarness(options = {}) {
           throw new Error('sharing failed');
         }
         metadata.sharingAccess = access;
+        metadata.sharingPermission = permission;
         return file;
       },
       moveTo(targetFolder) {
@@ -364,7 +368,8 @@ function makeHarness(options = {}) {
           `file-${String(audit.drive.creates + audit.drive.guideCreates).padStart(10, '0')}`,
           blob.name, {
           managed: true,
-          sharingAccess: 'PRIVATE',
+          sharingAccess: options.managedSharingAccess || 'PRIVATE',
+          sharingPermission: options.managedSharingPermission || 'NONE',
           failSharingAlways: options.failManagedSharingAlways === true,
           failRenameAlways: options.failManagedRenameAlways === true
         });
@@ -1986,6 +1991,25 @@ test('private JPEG with no source sharing permission saves a placed pin through 
   assert.equal(receipt[receiptColumn('fileId')], result.pin.fileId);
   assert.equal(harness.sheets.get('map_info').rows[1][MAP_HEADERS.indexOf('緯度')], 35.25);
   assert.equal(harness.sheets.get('map_info').rows[1][MAP_HEADERS.indexOf('経度')], 139.75);
+});
+
+test('managed JPEG inheriting anonymous view access skips a denied redundant sharing write', () => {
+  const harness = makeHarness({
+    sheets: baseSheets(),
+    managedSharingAccess: 'ANYONE_WITH_LINK',
+    managedSharingPermission: 'VIEW',
+    failManagedSharingAlways: true
+  });
+
+  const result = harness.api.saveImportPhotoItem(payload());
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(harness.audit.drive.shares, 0);
+  assert.equal(harness.sheets.get('map_info').rows.length, 2);
+  assert.equal(
+    harness.sheets.get('import_receipts').rows[1][receiptColumn('state')],
+    'completed'
+  );
 });
 
 test('JPEG, PNG, WebP, HEIC, and HEIF Drive sources each create one photos JPEG and archive the source', () => {

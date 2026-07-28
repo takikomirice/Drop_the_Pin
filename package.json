@@ -1,6 +1,6 @@
 {
   "name": "drop-the-pin",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "private": true,
   "scripts": {
     "check": "node --check Code.js && node --test tests/*.test.js",

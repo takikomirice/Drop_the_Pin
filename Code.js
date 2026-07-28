@@ -2279,7 +2279,9 @@ function listDrivePhotoImportFolder(payload) {
             ? 'DRIVE_IMPORT_FOLDER_TOO_LARGE' : 'DRIVE_IMPORT_FOLDER_READ_FAILED'));
       throw drivePhotoImportError_(mappedCode);
     }
-    const photos = Array.isArray(inbox.items) ? inbox.items : [];
+    const photos = Array.isArray(inbox.items) ? inbox.items.map(function(item) {
+      return Object.assign({}, item, { imported: false });
+    }) : [];
     return {
       ok: true,
       folder: { id: '', name: '取込Inbox', isRoot: true },
@@ -6885,11 +6887,20 @@ function finalizeImportDisplayFile_(driveResult, normalized) {
   if (!driveResult || !driveResult.managed) return driveResult;
   let sharingWasConfirmedDenied = false;
   try {
-    driveResult.file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-    const access = driveResult.file.getSharingAccess();
-    if (access !== DriveApp.Access.ANYONE && access !== DriveApp.Access.ANYONE_WITH_LINK) {
+    let access = driveResult.file.getSharingAccess();
+    let hasAnonymousViewAccess = (
+      access === DriveApp.Access.ANYONE || access === DriveApp.Access.ANYONE_WITH_LINK
+    ) && driveResult.file.getSharingPermission() === DriveApp.Permission.VIEW;
+    if (!hasAnonymousViewAccess) {
+      driveResult.file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      access = driveResult.file.getSharingAccess();
+      hasAnonymousViewAccess = (
+        access === DriveApp.Access.ANYONE || access === DriveApp.Access.ANYONE_WITH_LINK
+      ) && driveResult.file.getSharingPermission() === DriveApp.Permission.VIEW;
+    }
+    if (!hasAnonymousViewAccess) {
       sharingWasConfirmedDenied = true;
-      throw new Error('anonymous link sharing was not applied');
+      throw new Error('anonymous view sharing was not applied');
     }
   } catch (error) {
     logDrivePhotoImportFailure_('sharing', error);

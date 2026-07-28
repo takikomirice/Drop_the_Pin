@@ -49,13 +49,13 @@ Google Apps Script と Leaflet.js で動作する、写真・音声・ピン・�
 | 音声の切り出しと保存 | 0.5〜120秒、48kHz・192kbpsのMP3、保存時4MBまで |
 | CSVピン | UTF-8、2MB・20データ行まで |
 | GeoJSONピン | FeatureCollection、Pointまたはgeometry: null、2MB・20 Featureまで |
-| GeoJSONトラック | LineString／MultiLineString、2MB、20 Feature、200 segment、20,000 pointまで |
-| GPXトラック | GPX 1.0 / 1.1、trk／rte、5MB、200 segment、20,000 pointまで |
+| GeoJSONトラック | LineString／MultiLineString、5MB・100,000 source point、20 Feature・200 source segmentまで。完全重複を除去し、時刻付きpointは必要時に最大5秒間隔へ圧縮、時刻なしpointは形状を保って圧縮、4時間以上の中断で分割。保存は1ルート200 segment・20,000 point、1回最大20ルート |
+| GPXトラック | GPX 1.0 / 1.1、trk／rte、5MB・100,000 source pointまで。完全重複を除去し、必要時は最大5秒間隔に圧縮、4時間以上の中断で分割。保存は1ルート200 segment・20,000 point、1回最大20ルート |
 | 保存済みトラック | 100件まで、線幅は4で統一 |
 | 入力プリセット | 100件まで |
 | ピンのタグ | 1ピン5件まで |
 
-上限を超えたデータは切り捨てや自動分割を行わず、取込前にエラーとして扱います。CSV／GeoJSON Pointのエクスポートには写真、Drive ID、編集・共有トークン、ルート、取込管理情報を含めません。
+CSV／GeoJSON Pointの上限超過は切り捨てず、取込前にエラーとして扱います。GPX／GeoJSONトラックは上記ルールで正規化・圧縮・分割し、生成したルートを表示順に保存します。CSV／GeoJSON Pointのエクスポートには写真、Drive ID、編集・共有トークン、ルート、取込管理情報を含めません。
 
 ## 位置情報と安全設計
 
@@ -199,7 +199,7 @@ v2.1.0へ更新する場合も、既存データを維持したまま新しい�
 
 ### Phase 6〜7: GeoJSON／GPXトラック
 
-LineString、MultiLineString、GPXのtrk／rteを独立したトラックとして保存・表示できるようにしました。segment順を維持し、トラック間やsegment間を自動接続しません。
+LineString、MultiLineString、GPXのtrk／rteを独立したトラックとして保存・表示できるようにしました。segment順を維持し、トラック間やsegment間を自動接続しません。大容量GPXとGeoJSONは完全重複を除去し、時刻付きpointを必要最小限の最大5秒間隔へ圧縮します。さらにGeoJSONの時刻なしpointはsegment端、時刻付きpoint、標高極値を残しながら形状を保って圧縮し、4時間以上の記録中断または保存上限に応じて複数ルートへ分割します。
 
 ### Phase 8〜9: 写真時刻照合とDrive写真
 
@@ -240,7 +240,7 @@ NodeテストとローカルのChromiumテストは実施していますが、Ap
 - [ ] GPS付きiPhone HEIC、GPSなしiPhone HEIC、GPS付きJPEGを取り込み、JPEG変換、未配置保存と自動配置を確認する
 - [ ] Chrome または EdgeとSafariで、写真を外して再選択した際に以前のプレビューや位置情報が残らないことを確認する
 - [ ] CSV／GeoJSON Pointの1件／20件取込、上限超過、不正項目削除、エクスポートからの再取込を確認する
-- [ ] YAMAPやGarminなどから出力した実GPXとGeoJSONトラックを取り込み、segment、時刻、標高、表示順を確認する
+- [ ] YAMAPやGarminなどから出力した実GPXとGeoJSONトラックを取り込み、完全重複除去、時刻ありの最大5秒圧縮、GeoJSON時刻なしの形状圧縮、4時間中断、複数suffix、segment、時刻、標高、表示順を確認する
 - [ ] 写真時刻照合でUTC offsetとカメラ時計補正を確認し、GPSのない写真へ正しい候補を適用できる
 - [ ] ピンルート、GPXルート、GeoJSONルートを通常画面と共有画面で表示し、共有条件と表示順を確認する
 - [ ] スマートフォン、タブレット、PCで、ダイアログ、検索、一覧、取込Preview、保存、破棄、再試行を操作できる
@@ -259,6 +259,7 @@ NodeテストとローカルのChromiumテストは実施していますが、Ap
 - `v2.0.0`: 複数写真・データ交換・GPX／GeoJSONトラック、Drive写真、UIと共有機能の大幅更新
 - `v2.1.0`: 音声ピン、ブラウザ内切り出し・MP3変換、Driveメディア振り分け、編集／共有ビューの音声再生
 - `v2.1.1`: iPhone Safariを含む編集画面の写真表示を安定化し、スマートフォンでは利用できない共有・データ操作を非表示
+- `v2.1.2`: 学校アカウントを含むDrive取込、写真の適応的な並列処理、GPX／GeoJSONの重複除去・圧縮・分割、ルート追加操作を安定化
 
 各バージョンの詳細は[GitHub Releases](https://github.com/takikomirice/Drop_the_Pin/releases)を参照してください。
 

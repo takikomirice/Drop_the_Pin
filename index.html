@@ -3540,6 +3540,7 @@ AUDIO_VENDOR_BUNDLE_END
           <dt>標高範囲</dt><dd id="track-import-preview-elevation">—</dd>
         </dl>
         <div id="track-import-preview-summary" class="track-import-preview-legacy-summary"></div>
+        <div id="track-import-preview-parts" class="section-card" style="display:none;white-space:pre-line;"></div>
         <div id="track-import-preview-stats" class="section-card" style="display:none;"></div>
         <div id="track-import-preview-warnings" class="section-card" style="display:none;white-space:pre-line;"></div>
         <div id="track-import-preview-state" class="route-preview-state" role="status" aria-live="polite"></div>
@@ -9909,7 +9910,9 @@ AUDIO_VENDOR_BUNDLE_END
         const folderSnapshot = snapshotOwnFields(
           snapshot.folder, ['id', 'name', 'isRoot'], code, 'Drive folder response is invalid.'
         );
-        if (!isValidId(folderSnapshot.id) || typeof folderSnapshot.isRoot !== 'boolean') {
+        if (typeof folderSnapshot.isRoot !== 'boolean'
+            || (folderSnapshot.id !== '' && !isValidId(folderSnapshot.id))
+            || (folderSnapshot.id === '' && !folderSnapshot.isRoot)) {
           throw errorWithCode(code, 'Drive folder response is invalid.');
         }
         const folder = Object.freeze({
@@ -12092,6 +12095,9 @@ AUDIO_VENDOR_BUNDLE_END
     })();
 
     const MultiPhotoImportWorkflow = (function() {
+      const PARALLEL_REGISTRATION_MAX_FILE_BYTES = 8 * 1024 * 1024;
+      const PARALLEL_REGISTRATION_MAX_BATCH_BYTES = 64 * 1024 * 1024;
+
       function codedError(code, message) {
         const error = new Error(message);
         error.code = code;
@@ -12106,6 +12112,25 @@ AUDIO_VENDOR_BUNDLE_END
         } catch (_error) {
           // Workflow observers never own Builder, Queue, or saved server results.
         }
+      }
+
+      function registrationConcurrency(job) {
+        const items = job && Array.isArray(job.items) ? job.items : [];
+        let readyItems = 0;
+        let totalBytes = 0;
+        for (let index = 0; index < items.length; index += 1) {
+          const runtime = items[index] && items[index].runtime;
+          const uploadFile = runtime && runtime.uploadFile;
+          if (!uploadFile) continue;
+          const size = Number(uploadFile.size);
+          if (!Number.isSafeInteger(size) || size <= 0
+              || size > PARALLEL_REGISTRATION_MAX_FILE_BYTES) return 1;
+          readyItems += 1;
+          totalBytes += size;
+          if (!Number.isSafeInteger(totalBytes)
+              || totalBytes > PARALLEL_REGISTRATION_MAX_BATCH_BYTES) return 1;
+        }
+        return readyItems > 1 ? 2 : 1;
       }
 
       function create(options) {
@@ -12259,7 +12284,7 @@ AUDIO_VENDOR_BUNDLE_END
             let controller;
             controller = flowApi.create({
               processItem: processor.processItem,
-              concurrency: 2,
+              concurrency: registrationConcurrency(job),
               validateJob: config.validator && config.validator.validateJob,
               onJobChange: function(nextJob, event) {
                 if (workflowState.requestToken !== token) return;
@@ -14345,7 +14370,430 @@ AUDIO_VENDOR_BUNDLE_END
       };
     })();
 
-    const GeoJsonTrackInterchangeCore = (function(geoJsonPinCore, trackGeometry, colors) {
+    const TrackBatchTransformCore = (function() {
+      function cloneSegments(segments) {
+        return segments.map(function(segment, index) {
+          return { index: index, points: segment.points.slice() };
+        });
+      }
+
+      function countPoints(segments) {
+        return segments.reduce(function(total, segment) {
+          return total + segment.points.length;
+        }, 0);
+      }
+
+      function validSegments(segments) {
+        return Array.isArray(segments) && segments.every(function(segment) {
+          return segment && typeof segment === 'object' && !Array.isArray(segment)
+            && Array.isArray(segment.points) && segment.points.length > 0;
+        });
+      }
+
+      function splitAtInterruptions(segments, interruptionMs, stats) {
+        const stages = [];
+        let stage = [];
+
+        function flushStage() {
+          if (stage.length) stages.push(stage);
+          stage = [];
+        }
+
+        segments.forEach(function(segment) {
+          let points = [];
+          let previousTimedMs = null;
+          segment.points.forEach(function(point) {
+            const currentMs = point.time ? Date.parse(point.time) : NaN;
+            if (points.length && previousTimedMs !== null && Number.isFinite(currentMs)
+                && currentMs - previousTimedMs >= interruptionMs) {
+              stage.push({ index: stage.length, points: points });
+              flushStage();
+              points = [];
+              stats.interruptionCount += 1;
+            }
+            points.push(point);
+            previousTimedMs = Number.isFinite(currentMs) ? currentMs : null;
+          });
+          if (points.length) stage.push({ index: stage.length, points: points });
+        });
+        flushStage();
+        return stages;
+      }
+
+      function sampleSegmentBySeconds(segment, intervalSeconds) {
+        if (segment.points.length <= 2) {
+          return { index: segment.index, points: segment.points.slice() };
+        }
+        const points = [segment.points[0]];
+        let lastTimedMs = segment.points[0].time ? Date.parse(segment.points[0].time) : null;
+        segment.points.slice(1, -1).forEach(function(point) {
+          const currentMs = point.time ? Date.parse(point.time) : NaN;
+          if (!Number.isFinite(currentMs) || lastTimedMs === null
+              || currentMs - lastTimedMs >= intervalSeconds * 1000) {
+            points.push(point);
+            lastTimedMs = Number.isFinite(currentMs) ? currentMs : null;
+          }
+        });
+        const last = segment.points[segment.points.length - 1];
+        if (points[points.length - 1] !== last) points.push(last);
+        return { index: segment.index, points: points };
+      }
+
+      function partitionStage(stageSegments, maxPoints) {
+        const parts = [];
+        let current = [];
+        let currentCount = 0;
+
+        function flush() {
+          if (current.length) parts.push(current);
+          current = [];
+          currentCount = 0;
+        }
+
+        stageSegments.forEach(function(segment) {
+          if (segment.points.length <= maxPoints) {
+            if (currentCount && currentCount + segment.points.length > maxPoints) flush();
+            current.push({ index: current.length, points: segment.points.slice() });
+            currentCount += segment.points.length;
+            return;
+          }
+          let offset = 0;
+          while (offset < segment.points.length) {
+            if (currentCount === maxPoints) flush();
+            const take = Math.min(maxPoints - currentCount, segment.points.length - offset);
+            current.push({
+              index: current.length,
+              points: segment.points.slice(offset, offset + take)
+            });
+            currentCount += take;
+            offset += take;
+          }
+        });
+        flush();
+        return parts;
+      }
+
+      function transform(segments, options) {
+        const config = options || {};
+        const maxPoints = config.maxPoints;
+        const interruptionMs = config.interruptionMs;
+        const intervals = config.compressionIntervals;
+        if (!validSegments(segments) || !Number.isInteger(maxPoints) || maxPoints <= 0
+            || typeof interruptionMs !== 'number' || !Number.isFinite(interruptionMs)
+            || interruptionMs < 0 || !Array.isArray(intervals)
+            || intervals.some(function(value, index) {
+              return !Number.isInteger(value) || value <= 0
+                || (index > 0 && value <= intervals[index - 1]);
+            })) {
+          throw new TypeError('Track batch transform options are invalid.');
+        }
+
+        const stats = {
+          interruptionCount: 0,
+          timeCompressedPointCount: 0,
+          overflowCompressedPointCount: 0,
+          compressedPointCount: 0,
+          compressionIntervals: []
+        };
+        const parts = [];
+        splitAtInterruptions(cloneSegments(segments), interruptionMs, stats)
+          .forEach(function(stage) {
+            const original = cloneSegments(stage);
+            const originalCount = countPoints(original);
+            let candidate = original;
+            let selectedInterval = 0;
+
+            if (originalCount > maxPoints) {
+              intervals.some(function(intervalSeconds) {
+                candidate = original.map(function(segment) {
+                  return sampleSegmentBySeconds(segment, intervalSeconds);
+                });
+                if (countPoints(candidate) <= maxPoints) {
+                  selectedInterval = intervalSeconds;
+                  return true;
+                }
+                return false;
+              });
+              if (!selectedInterval && intervals.length
+                  && countPoints(candidate) < originalCount
+                  && original.some(function(segment) {
+                    return segment.points.some(function(point) { return !!point.time; });
+                  })) {
+                selectedInterval = intervals[intervals.length - 1];
+              }
+
+              let afterTimeCount = countPoints(candidate);
+              let overflowCandidate = candidate;
+              if (afterTimeCount > maxPoints && typeof config.reduceOverflow === 'function') {
+                const reduced = config.reduceOverflow(cloneSegments(candidate), maxPoints);
+                if (validSegments(reduced)) {
+                  overflowCandidate = cloneSegments(reduced);
+                } else {
+                  candidate = original;
+                  afterTimeCount = originalCount;
+                  overflowCandidate = original;
+                  selectedInterval = 0;
+                }
+              }
+              const finalCount = countPoints(overflowCandidate);
+              stats.timeCompressedPointCount += Math.max(0, originalCount - afterTimeCount);
+              stats.overflowCompressedPointCount += Math.max(0, afterTimeCount - finalCount);
+              if (selectedInterval) stats.compressionIntervals.push(selectedInterval);
+              candidate = overflowCandidate;
+            }
+
+            partitionStage(candidate, maxPoints).forEach(function(part) {
+              parts.push(part);
+            });
+          });
+        stats.compressedPointCount = stats.timeCompressedPointCount
+          + stats.overflowCompressedPointCount;
+        return {
+          parts: parts,
+          interruptionCount: stats.interruptionCount,
+          timeCompressedPointCount: stats.timeCompressedPointCount,
+          overflowCompressedPointCount: stats.overflowCompressedPointCount,
+          compressedPointCount: stats.compressedPointCount,
+          compressionIntervals: stats.compressionIntervals
+        };
+      }
+
+      function partName(baseName, index, total) {
+        if (total === 1) return baseName;
+        const suffix = '(' + (index + 1) + '/' + total + ')';
+        return baseName.slice(0, Math.max(0, 100 - suffix.length)) + suffix;
+      }
+
+      function aggregateSummaries(drafts) {
+        const result = {
+          segmentCount: 0,
+          pointCount: 0,
+          distanceMeters: 0,
+          minElevation: null,
+          maxElevation: null,
+          startTime: '',
+          endTime: '',
+          bounds: null
+        };
+        drafts.forEach(function(draft) {
+          const summary = draft.summary;
+          result.segmentCount += summary.segmentCount;
+          result.pointCount += summary.pointCount;
+          result.distanceMeters += summary.distanceMeters;
+          if (summary.minElevation !== null
+              && (result.minElevation === null || summary.minElevation < result.minElevation)) {
+            result.minElevation = summary.minElevation;
+          }
+          if (summary.maxElevation !== null
+              && (result.maxElevation === null || summary.maxElevation > result.maxElevation)) {
+            result.maxElevation = summary.maxElevation;
+          }
+          if (!result.startTime && summary.startTime) result.startTime = summary.startTime;
+          if (summary.endTime) result.endTime = summary.endTime;
+          if (summary.bounds) {
+            if (!result.bounds) {
+              result.bounds = {
+                south: summary.bounds.south,
+                west: summary.bounds.west,
+                north: summary.bounds.north,
+                east: summary.bounds.east
+              };
+            } else {
+              result.bounds.south = Math.min(result.bounds.south, summary.bounds.south);
+              result.bounds.west = Math.min(result.bounds.west, summary.bounds.west);
+              result.bounds.north = Math.max(result.bounds.north, summary.bounds.north);
+              result.bounds.east = Math.max(result.bounds.east, summary.bounds.east);
+            }
+          }
+        });
+        return result;
+      }
+
+      return Object.freeze({
+        transform: transform,
+        partName: partName,
+        aggregateSummaries: aggregateSummaries,
+        cloneSegments: cloneSegments,
+        countPoints: countPoints
+      });
+    })();
+
+    const TrackShapeSimplificationCore = (function() {
+      function cloneSegments(segments) {
+        if (!Array.isArray(segments)) return [];
+        return segments.map(function(segment, index) {
+          return {
+            index: index,
+            points: segment && Array.isArray(segment.points) ? segment.points.slice() : []
+          };
+        });
+      }
+
+      function normalizedLongitudeDelta(value) {
+        return ((value + 540) % 360) - 180;
+      }
+
+      function triangleArea(node) {
+        if (!node.previous || !node.next) return Infinity;
+        const radians = Math.PI / 180;
+        const latitude = node.point.lat * radians;
+        const previousX = normalizedLongitudeDelta(
+          node.previous.point.lng - node.point.lng
+        ) * radians * Math.cos(latitude);
+        const previousY = (node.previous.point.lat - node.point.lat) * radians;
+        const nextX = normalizedLongitudeDelta(
+          node.next.point.lng - node.point.lng
+        ) * radians * Math.cos(latitude);
+        const nextY = (node.next.point.lat - node.point.lat) * radians;
+        return Math.abs(previousX * nextY - previousY * nextX) / 2;
+      }
+
+      function compareCandidates(a, b) {
+        if (a.area !== b.area) return a.area - b.area;
+        if (a.segmentIndex !== b.segmentIndex) return a.segmentIndex - b.segmentIndex;
+        return a.pointIndex - b.pointIndex;
+      }
+
+      function heapPush(heap, value) {
+        heap.push(value);
+        let index = heap.length - 1;
+        while (index > 0) {
+          const parent = Math.floor((index - 1) / 2);
+          if (compareCandidates(heap[parent], value) <= 0) break;
+          heap[index] = heap[parent];
+          index = parent;
+        }
+        heap[index] = value;
+      }
+
+      function heapPop(heap) {
+        if (!heap.length) return null;
+        const first = heap[0];
+        const last = heap.pop();
+        if (heap.length) {
+          let index = 0;
+          while (true) {
+            const left = index * 2 + 1;
+            const right = left + 1;
+            if (left >= heap.length) break;
+            let child = left;
+            if (right < heap.length && compareCandidates(heap[right], heap[left]) < 0) {
+              child = right;
+            }
+            if (compareCandidates(last, heap[child]) <= 0) break;
+            heap[index] = heap[child];
+            index = child;
+          }
+          heap[index] = last;
+        }
+        return first;
+      }
+
+      function reduce(segments, maxPoints) {
+        const cloned = cloneSegments(segments);
+        if (!Number.isInteger(maxPoints) || maxPoints <= 0) return cloned;
+
+        const segmentNodes = [];
+        const allNodes = [];
+        let minElevationNode = null;
+        let maxElevationNode = null;
+        cloned.forEach(function(segment, segmentIndex) {
+          const nodes = segment.points.map(function(point, pointIndex) {
+            const node = {
+              segmentIndex: segmentIndex,
+              pointIndex: pointIndex,
+              point: point,
+              previous: null,
+              next: null,
+              protected: pointIndex === 0 || pointIndex === segment.points.length - 1
+                || point.time !== '',
+              removed: false,
+              version: 0
+            };
+            if (point.elevation !== null && typeof point.elevation === 'number'
+                && Number.isFinite(point.elevation)) {
+              if (!minElevationNode || point.elevation < minElevationNode.point.elevation) {
+                minElevationNode = node;
+              }
+              if (!maxElevationNode || point.elevation > maxElevationNode.point.elevation) {
+                maxElevationNode = node;
+              }
+            }
+            allNodes.push(node);
+            return node;
+          });
+          nodes.forEach(function(node, index) {
+            node.previous = index > 0 ? nodes[index - 1] : null;
+            node.next = index + 1 < nodes.length ? nodes[index + 1] : null;
+          });
+          segmentNodes.push(nodes);
+        });
+
+        if (minElevationNode) minElevationNode.protected = true;
+        if (maxElevationNode) maxElevationNode.protected = true;
+        if (allNodes.length <= maxPoints) return cloned;
+
+        const heap = [];
+        function enqueue(node) {
+          if (!node || node.removed || node.protected || !node.previous || !node.next) return;
+          heapPush(heap, {
+            area: triangleArea(node),
+            segmentIndex: node.segmentIndex,
+            pointIndex: node.pointIndex,
+            version: node.version,
+            node: node
+          });
+        }
+        allNodes.forEach(enqueue);
+
+        let retainedCount = allNodes.length;
+        while (retainedCount > maxPoints && heap.length) {
+          const candidate = heapPop(heap);
+          const node = candidate.node;
+          if (node.removed || node.protected || candidate.version !== node.version
+              || !node.previous || !node.next) {
+            continue;
+          }
+          node.removed = true;
+          retainedCount -= 1;
+          const previous = node.previous;
+          const next = node.next;
+          previous.next = next;
+          next.previous = previous;
+          node.previous = null;
+          node.next = null;
+          previous.version += 1;
+          next.version += 1;
+          enqueue(previous);
+          enqueue(next);
+        }
+
+        return segmentNodes.map(function(nodes, index) {
+          return {
+            index: index,
+            points: nodes.filter(function(node) { return !node.removed; })
+              .map(function(node) { return node.point; })
+          };
+        }).filter(function(segment) {
+          return segment.points.length > 0;
+        });
+      }
+
+      return Object.freeze({ reduce: reduce });
+    })();
+
+    const GeoJsonTrackInterchangeCore = (function(
+      geoJsonPinCore,
+      trackGeometry,
+      batchTransform,
+      shapeSimplifier,
+      colors
+    ) {
+      const MAX_SOURCE_POINTS = 100000;
+      const MAX_GENERATED_TRACKS = 20;
+      const INTERRUPTION_MS = 4 * 60 * 60 * 1000;
+      const COMPRESSION_INTERVAL_SECONDS = [1, 2, 3, 4, 5];
+
       function text(value) {
         return value == null ? '' : String(value);
       }
@@ -14487,7 +14935,17 @@ AUDIO_VENDOR_BUNDLE_END
         }
       }
 
-      function addSegment(result, coordinates, times) {
+      function duplicatePointKey(point) {
+        if (!point.time) return '';
+        return JSON.stringify([
+          point.time,
+          point.lat,
+          point.lng,
+          point.elevation
+        ]);
+      }
+
+      function addSegment(result, coordinates, times, collectionState) {
         if (!Array.isArray(coordinates)) {
           fail('GEOJSON_TRACK_COORDINATES_INVALID', 'トラックの座標を確認してください。');
         }
@@ -14500,15 +14958,28 @@ AUDIO_VENDOR_BUNDLE_END
         if (result.length >= trackGeometry.MAX_SEGMENTS) {
           fail('TRACK_SEGMENT_LIMIT_EXCEEDED', 'トラックのsegment数が上限を超えています。');
         }
-        const points = coordinates.map(function(coordinate, index) {
+        if (collectionState.sourcePointCount + coordinates.length > collectionState.maxPoints) {
+          fail(collectionState.limitCode, 'GeoJSONのpoint数が上限を超えています。');
+        }
+        collectionState.sourcePointCount += coordinates.length;
+        const duplicateKeys = new Set();
+        const points = [];
+        coordinates.forEach(function(coordinate, index) {
           const point = normalizeCoordinate(coordinate);
           point.time = times === null ? '' : normalizeTime(times[index]);
-          return point;
+          const key = collectionState.deduplicate ? duplicatePointKey(point) : '';
+          if (key && duplicateKeys.has(key)) {
+            collectionState.duplicatePointCount += 1;
+            return;
+          }
+          if (key) duplicateKeys.add(key);
+          points.push(point);
         });
         result.push({ index: result.length, points: points });
+        collectionState.pointCount += points.length;
       }
 
-      function appendFeatureSegments(result, feature, pointCount) {
+      function appendFeatureSegments(result, feature, collectionState) {
         if (!isObject(feature) || !hasOwn(feature, 'type') || feature.type !== 'Feature'
             || !hasOwn(feature, 'geometry') || !hasOwn(feature, 'properties')
             || (feature.properties !== null && !isObject(feature.properties))) {
@@ -14545,16 +15016,16 @@ AUDIO_VENDOR_BUNDLE_END
         }
         const times = timeExtension(properties, geometry);
         if (geometry.type === 'LineString') {
-          addSegment(result, geometry.coordinates, times);
-          pointCount.value += result[result.length - 1].points.length;
+          addSegment(result, geometry.coordinates, times, collectionState);
         } else {
           geometry.coordinates.forEach(function(coordinates, index) {
-            addSegment(result, coordinates, times === null ? null : times[index]);
-            pointCount.value += result[result.length - 1].points.length;
+            addSegment(
+              result,
+              coordinates,
+              times === null ? null : times[index],
+              collectionState
+            );
           });
-        }
-        if (pointCount.value > trackGeometry.MAX_POINTS) {
-          fail('TRACK_POINT_LIMIT_EXCEEDED', 'トラックのpoint数が上限を超えています。');
         }
       }
 
@@ -14586,28 +15057,51 @@ AUDIO_VENDOR_BUNDLE_END
         }
       }
 
-      function parse(input, options) {
+      function readSource(input, options, collectionOptions) {
         const collection = geoJsonPinCore.parse(input);
         const segments = [];
-        const pointCount = { value: 0 };
+        const collectionState = {
+          maxPoints: collectionOptions.maxPoints,
+          limitCode: collectionOptions.limitCode,
+          deduplicate: collectionOptions.deduplicate === true,
+          sourcePointCount: 0,
+          pointCount: 0,
+          duplicatePointCount: 0
+        };
         collection.features.forEach(function(feature) {
-          appendFeatureSegments(segments, feature, pointCount);
+          appendFeatureSegments(segments, feature, collectionState);
         });
         const sourceName = sourceNameFromOptions(options || {});
         const metadata = readMetadata(collection, collection.features[0], sourceName);
+        return {
+          sourceName: sourceName,
+          metadata: metadata,
+          segments: segments,
+          sourcePointCount: collectionState.sourcePointCount,
+          pointCount: collectionState.pointCount,
+          duplicatePointCount: collectionState.duplicatePointCount
+        };
+      }
+
+      function parse(input, options) {
+        const source = readSource(input, options, {
+          maxPoints: trackGeometry.MAX_POINTS,
+          limitCode: 'TRACK_POINT_LIMIT_EXCEEDED',
+          deduplicate: false
+        });
         const normalized = normalizeDraft({
           id: 'geojson-track-parse',
           trackId: 'geojson-track-parse',
           revisionId: 'geojson-track-parse-revision',
-          name: metadata.name,
-          description: metadata.description,
-          color: metadata.color,
+          name: source.metadata.name,
+          description: source.metadata.description,
+          color: source.metadata.color,
           sourceType: 'geojson',
-          sourceName: sourceName,
-          segments: segments,
-          visible: metadata.visible,
-          lineStyle: metadata.lineStyle,
-          lineWidth: metadata.lineWidth,
+          sourceName: source.sourceName,
+          segments: source.segments,
+          visible: source.metadata.visible,
+          lineStyle: source.metadata.lineStyle,
+          lineWidth: source.metadata.lineWidth,
           orderIndex: 0
         });
         return {
@@ -14636,15 +15130,16 @@ AUDIO_VENDOR_BUNDLE_END
         return value || fallbackId(prefix);
       }
 
-      function buildDraft(input, options) {
-        const config = options || {};
-        const parsed = parse(input, config);
-        const generator = typeof config.generateId === 'function'
+      function idGenerator(config) {
+        return typeof config.generateId === 'function'
           ? config.generateId
           : function() {
             return typeof crypto !== 'undefined' && crypto
               && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : '';
           };
+      }
+
+      function draftFromParsed(parsed, generator) {
         const trackId = createId(generator, 'track');
         let revisionId = createId(generator, 'revision');
         if (revisionId === trackId) revisionId = fallbackId('revision');
@@ -14665,6 +15160,80 @@ AUDIO_VENDOR_BUNDLE_END
         });
       }
 
+      function buildDraft(input, options) {
+        const config = options || {};
+        return draftFromParsed(parse(input, config), idGenerator(config));
+      }
+
+      function buildDraftBatch(input, options) {
+        const config = options || {};
+        const source = readSource(input, config, {
+          maxPoints: MAX_SOURCE_POINTS,
+          limitCode: 'GEOJSON_SOURCE_POINT_LIMIT_EXCEEDED',
+          deduplicate: true
+        });
+        const transformed = batchTransform.transform(source.segments, {
+          maxPoints: trackGeometry.MAX_POINTS,
+          interruptionMs: INTERRUPTION_MS,
+          compressionIntervals: COMPRESSION_INTERVAL_SECONDS,
+          reduceOverflow: function(segments, maxPoints) {
+            return shapeSimplifier.reduce(segments, maxPoints);
+          }
+        });
+        if (transformed.parts.length > MAX_GENERATED_TRACKS) {
+          fail(
+            'GEOJSON_GENERATED_TRACK_LIMIT_EXCEEDED',
+            'GeoJSONの生成トラック数が上限を超えています。'
+          );
+        }
+
+        const templates = transformed.parts.map(function(segments, index) {
+          return normalizeDraft({
+            id: 'geojson-track-template-' + index,
+            trackId: 'geojson-track-template-' + index,
+            revisionId: 'geojson-track-template-revision-' + index,
+            name: batchTransform.partName(
+              source.metadata.name,
+              index,
+              transformed.parts.length
+            ),
+            description: source.metadata.description,
+            color: source.metadata.color,
+            sourceType: 'geojson',
+            sourceName: source.sourceName,
+            segments: segments,
+            visible: source.metadata.visible,
+            lineStyle: source.metadata.lineStyle,
+            lineWidth: source.metadata.lineWidth,
+            orderIndex: 0
+          });
+        });
+        const generator = idGenerator(config);
+        const drafts = templates.map(function(template) {
+          return draftFromParsed(template, generator);
+        });
+        const stats = {
+          sourcePointCount: source.sourcePointCount,
+          pointCount: drafts.reduce(function(total, draft) {
+            return total + draft.summary.pointCount;
+          }, 0),
+          duplicatePointCount: source.duplicatePointCount,
+          interruptionCount: transformed.interruptionCount,
+          timeCompressedPointCount: transformed.timeCompressedPointCount,
+          shapeCompressedPointCount: transformed.overflowCompressedPointCount,
+          compressedPointCount: transformed.compressedPointCount,
+          generatedTrackCount: drafts.length,
+          compressionIntervals: transformed.compressionIntervals.slice()
+        };
+        return {
+          drafts: drafts,
+          baseName: source.metadata.name,
+          summary: batchTransform.aggregateSummaries(drafts),
+          stats: stats,
+          warnings: []
+        };
+      }
+
       function updateDraft(draft, patch) {
         const source = trackGeometry.toPersistableTrack(draft);
         const changes = isObject(patch) ? patch : {};
@@ -14672,6 +15241,44 @@ AUDIO_VENDOR_BUNDLE_END
           if (hasOwn(changes, key)) source[key] = changes[key];
         });
         return normalizeDraft(source);
+      }
+
+      function updateDraftBatch(batch, patch) {
+        if (!isObject(batch) || !Array.isArray(batch.drafts) || !batch.drafts.length) {
+          fail('GEOJSON_TRACK_METADATA_INVALID', 'トラックの情報を確認してください。');
+        }
+        const changes = isObject(patch) ? patch : {};
+        const rawBaseName = hasOwn(changes, 'name') ? changes.name : batch.baseName;
+        if (typeof rawBaseName !== 'string' || !rawBaseName.trim()) {
+          fail('GEOJSON_TRACK_METADATA_INVALID', 'トラックの情報を確認してください。');
+        }
+        const baseName = rawBaseName.trim();
+        const drafts = batch.drafts.map(function(draft, index) {
+          const draftPatch = {
+            name: batchTransform.partName(baseName, index, batch.drafts.length)
+          };
+          ['description', 'color', 'visible', 'lineStyle'].forEach(function(key) {
+            if (hasOwn(changes, key)) draftPatch[key] = changes[key];
+          });
+          return updateDraft(draft, draftPatch);
+        });
+        return {
+          drafts: drafts,
+          baseName: baseName,
+          summary: batchTransform.aggregateSummaries(drafts),
+          stats: {
+            sourcePointCount: batch.stats.sourcePointCount,
+            pointCount: batch.stats.pointCount,
+            duplicatePointCount: batch.stats.duplicatePointCount,
+            interruptionCount: batch.stats.interruptionCount,
+            timeCompressedPointCount: batch.stats.timeCompressedPointCount,
+            shapeCompressedPointCount: batch.stats.shapeCompressedPointCount,
+            compressedPointCount: batch.stats.compressedPointCount,
+            generatedTrackCount: batch.stats.generatedTrackCount,
+            compressionIntervals: batch.stats.compressionIntervals.slice()
+          },
+          warnings: []
+        };
       }
 
       function toSavePayload(draft) {
@@ -14691,20 +15298,36 @@ AUDIO_VENDOR_BUNDLE_END
         };
       }
 
+      function toSavePayloads(batch) {
+        if (!isObject(batch) || !Array.isArray(batch.drafts) || !batch.drafts.length) {
+          fail('GEOJSON_TRACK_METADATA_INVALID', 'トラックの情報を確認してください。');
+        }
+        return batch.drafts.map(toSavePayload);
+      }
+
       return {
         parse: parse,
         buildDraft: buildDraft,
+        buildDraftBatch: buildDraftBatch,
         updateDraft: updateDraft,
-        toSavePayload: toSavePayload
+        updateDraftBatch: updateDraftBatch,
+        toSavePayload: toSavePayload,
+        toSavePayloads: toSavePayloads
       };
     })(
       typeof GeoJsonPinInterchangeCore !== 'undefined' ? GeoJsonPinInterchangeCore : null,
       TrackGeometryCore,
+      TrackBatchTransformCore,
+      TrackShapeSimplificationCore,
       typeof PIN_COLORS !== 'undefined' ? PIN_COLORS : [{ hex: '#e53935' }]
     );
 
-    const GpxTrackInterchangeCore = (function(trackGeometry, colors) {
+    const GpxTrackInterchangeCore = (function(trackGeometry, batchTransform, colors) {
       const MAX_GPX_TEXT_LENGTH = 5 * 1024 * 1024;
+      const MAX_SOURCE_POINTS = 100000;
+      const MAX_GENERATED_TRACKS = 20;
+      const INTERRUPTION_MS = 4 * 60 * 60 * 1000;
+      const COMPRESSION_INTERVAL_SECONDS = [1, 2, 3, 4, 5];
       const GPX_ERROR_BRAND = Symbol('GpxTrackInterchangeCoreError');
       const GPX_NAMESPACES = [
         '',
@@ -14899,14 +15522,40 @@ AUDIO_VENDOR_BUNDLE_END
         return { lat: lat, lng: lng, elevation: elevation, time: time };
       }
 
-      function appendSegment(segments, pointElements, stats) {
+      function duplicatePointKey(point) {
+        if (!point.time) return '';
+        return [
+          point.time,
+          point.lat,
+          point.lng,
+          point.elevation === null ? 'null' : point.elevation
+        ].join('|');
+      }
+
+      function appendSegment(segments, pointElements, stats, options) {
+        const config = options || {};
+        const maxPoints = Number.isInteger(config.maxPoints)
+          ? config.maxPoints : trackGeometry.MAX_POINTS;
         if (segments.length >= trackGeometry.MAX_SEGMENTS) {
           fail('TRACK_SEGMENT_LIMIT_EXCEEDED', 'トラックのsegment数が上限を超えています。');
         }
-        if (stats.pointCount + pointElements.length > trackGeometry.MAX_POINTS) {
-          fail('TRACK_POINT_LIMIT_EXCEEDED', 'トラックのpoint数が上限を超えています。');
+        if (stats.sourcePointCount + pointElements.length > maxPoints) {
+          fail(
+            config.limitCode || 'TRACK_POINT_LIMIT_EXCEEDED',
+            'トラックのpoint数が上限を超えています。'
+          );
         }
-        const points = pointElements.map(pointFromElement);
+        stats.sourcePointCount += pointElements.length;
+        const seen = new Set();
+        const points = pointElements.map(pointFromElement).filter(function(point) {
+          const key = config.deduplicate === true ? duplicatePointKey(point) : '';
+          if (!key || !seen.has(key)) {
+            if (key) seen.add(key);
+            return true;
+          }
+          stats.duplicatePointCount += 1;
+          return false;
+        });
         points.forEach(function(point) {
           if (point.time) stats.timedPointCount += 1;
           if (point.elevation !== null) stats.elevatedPointCount += 1;
@@ -14915,13 +15564,15 @@ AUDIO_VENDOR_BUNDLE_END
         segments.push({ index: segments.length, points: points });
       }
 
-      function collectSegments(root) {
+      function collectSegments(root, options) {
         const segments = [];
         const stats = {
           trackElementCount: 0,
           routeElementCount: 0,
           segmentCount: 0,
           pointCount: 0,
+          sourcePointCount: 0,
+          duplicatePointCount: 0,
           timedPointCount: 0,
           elevatedPointCount: 0,
           ignoredWaypointCount: 0,
@@ -14948,7 +15599,7 @@ AUDIO_VENDOR_BUNDLE_END
                 stats.ignoredEmptySegmentCount += 1;
                 return;
               }
-              appendSegment(segments, points, stats);
+              appendSegment(segments, points, stats, options);
               adopted = true;
             });
             if (adopted && !firstAdoptedSource) firstAdoptedSource = child;
@@ -14961,7 +15612,7 @@ AUDIO_VENDOR_BUNDLE_END
               stats.ignoredEmptySegmentCount += 1;
               return;
             }
-            appendSegment(segments, points, stats);
+            appendSegment(segments, points, stats, options);
             if (!firstAdoptedSource) firstAdoptedSource = child;
           }
         });
@@ -15075,7 +15726,7 @@ AUDIO_VENDOR_BUNDLE_END
         return track;
       }
 
-      function parse(text, options) {
+      function readSource(text, options, collectionOptions) {
         const config = options || {};
         preflight(text);
         const root = parseDocument(text, config);
@@ -15084,24 +15735,32 @@ AUDIO_VENDOR_BUNDLE_END
         let metadata;
         try {
           sourceName = sourceNameFromOptions(config);
-          collected = collectSegments(root);
+          collected = collectSegments(root, collectionOptions);
           metadata = readMetadata(root, collected.firstAdoptedSource, sourceName);
         } catch (error) {
           if (error && error[GPX_ERROR_BRAND] === true) throw error;
           fail('GPX_INVALID_XML', 'GPXファイルを解析できませんでした。');
         }
+        return {
+          sourceName: sourceName,
+          collected: collected,
+          metadata: metadata
+        };
+      }
+
+      function parsedFromSource(source) {
         let normalized;
         try {
           normalized = trackGeometry.normalizeTrack({
             id: 'gpx-track-parse',
             trackId: 'gpx-track-parse',
             revisionId: 'gpx-track-parse-revision',
-            name: metadata.name,
-            description: metadata.description,
+            name: source.metadata.name,
+            description: source.metadata.description,
             color: colors[0] && colors[0].hex,
             sourceType: 'gpx',
-            sourceName: sourceName,
-            segments: collected.segments,
+            sourceName: source.sourceName,
+            segments: source.collected.segments,
             visible: true,
             lineStyle: 'solid',
             lineWidth: 4,
@@ -15120,9 +15779,74 @@ AUDIO_VENDOR_BUNDLE_END
           visible: normalized.visible,
           lineStyle: normalized.lineStyle,
           lineWidth: normalized.lineWidth,
-          stats: cloneStats(collected.stats),
-          warnings: cloneWarnings(buildWarnings(collected.stats))
+          stats: cloneStats(source.collected.stats),
+          warnings: cloneWarnings(buildWarnings(source.collected.stats))
         };
+      }
+
+      function statsForSegments(sourceStats, segments) {
+        let timedPointCount = 0;
+        let elevatedPointCount = 0;
+        segments.forEach(function(segment) {
+          segment.points.forEach(function(point) {
+            if (point.time) timedPointCount += 1;
+            if (point.elevation !== null) elevatedPointCount += 1;
+          });
+        });
+        return {
+          trackElementCount: sourceStats.trackElementCount,
+          routeElementCount: sourceStats.routeElementCount,
+          segmentCount: segments.length,
+          pointCount: batchTransform.countPoints(segments),
+          timedPointCount: timedPointCount,
+          elevatedPointCount: elevatedPointCount,
+          ignoredWaypointCount: sourceStats.ignoredWaypointCount,
+          ignoredEmptySegmentCount: sourceStats.ignoredEmptySegmentCount
+        };
+      }
+
+      function selectEvenly(values, count) {
+        if (count >= values.length) return values.slice();
+        if (count <= 0) return [];
+        return Array.from({ length: count }, function(_unused, slot) {
+          return values[Math.floor(slot * values.length / count)];
+        });
+      }
+
+      function reduceUntimedPoints(segments) {
+        const mandatory = new Set();
+        const optional = [];
+        segments.forEach(function(segment) {
+          segment.points.forEach(function(point, index) {
+            if (point.time || index === 0 || index === segment.points.length - 1) {
+              mandatory.add(point);
+            } else {
+              optional.push(point);
+            }
+          });
+        });
+        if (mandatory.size > trackGeometry.MAX_POINTS) {
+          return batchTransform.cloneSegments(segments);
+        }
+        const optionalCount = Math.min(
+          optional.length,
+          trackGeometry.MAX_POINTS - mandatory.size
+        );
+        const retained = new Set(selectEvenly(optional, optionalCount));
+        mandatory.forEach(function(point) { retained.add(point); });
+        return segments.map(function(segment, index) {
+          return {
+            index: index,
+            points: segment.points.filter(function(point) { return retained.has(point); })
+          };
+        }).filter(function(segment) { return segment.points.length > 0; });
+      }
+
+      function parse(text, options) {
+        return parsedFromSource(readSource(text, options, {
+          maxPoints: trackGeometry.MAX_POINTS,
+          deduplicate: false
+        }));
       }
 
       function fallbackId(prefix) {
@@ -15137,15 +15861,16 @@ AUDIO_VENDOR_BUNDLE_END
         return value || fallbackId(prefix);
       }
 
-      function buildDraft(text, options) {
-        const config = options || {};
-        const parsed = parse(text, config);
-        const generator = typeof config.generateId === 'function'
+      function idGenerator(config) {
+        return typeof config.generateId === 'function'
           ? config.generateId
           : function() {
             return typeof crypto !== 'undefined' && crypto
               && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : '';
           };
+      }
+
+      function draftFromParsed(parsed, generator) {
         const trackId = createId(generator, 'track');
         let revisionId = createId(generator, 'revision');
         if (revisionId === trackId) revisionId = fallbackId('revision');
@@ -15164,6 +15889,120 @@ AUDIO_VENDOR_BUNDLE_END
           lineWidth: parsed.lineWidth,
           orderIndex: 0
         }, parsed.stats, parsed.warnings);
+      }
+
+      function buildDraft(text, options) {
+        const config = options || {};
+        const parsed = parse(text, config);
+        return draftFromParsed(parsed, idGenerator(config));
+      }
+
+      function buildDraftBatch(text, options) {
+        const config = options || {};
+        const source = readSource(text, config, {
+          maxPoints: MAX_SOURCE_POINTS,
+          deduplicate: true,
+          limitCode: 'GPX_SOURCE_POINT_LIMIT_EXCEEDED'
+        });
+        const transformStats = {
+          sourcePointCount: source.collected.stats.sourcePointCount,
+          pointCount: 0,
+          duplicatePointCount: source.collected.stats.duplicatePointCount,
+          interruptionCount: 0,
+          compressedPointCount: 0,
+          generatedTrackCount: 0,
+          compressionIntervals: []
+        };
+        const transformed = batchTransform.transform(source.collected.segments, {
+          maxPoints: trackGeometry.MAX_POINTS,
+          interruptionMs: INTERRUPTION_MS,
+          compressionIntervals: COMPRESSION_INTERVAL_SECONDS,
+          reduceOverflow: function(segments) {
+            return reduceUntimedPoints(segments);
+          }
+        });
+        const parts = transformed.parts;
+        transformStats.interruptionCount = transformed.interruptionCount;
+        transformStats.compressedPointCount = transformed.compressedPointCount;
+        transformStats.compressionIntervals = transformed.compressionIntervals.slice();
+        if (!parts.length) fail('GPX_TRACK_REQUIRED', 'GPXにトラックまたはルートがありません。');
+        if (parts.length > MAX_GENERATED_TRACKS) {
+          fail('GPX_GENERATED_TRACK_LIMIT_EXCEEDED', 'GPXの生成トラック数が上限を超えています。');
+        }
+        const generator = idGenerator(config);
+        const drafts = parts.map(function(segments, index) {
+          const partStats = statsForSegments(source.collected.stats, segments);
+          return draftFromParsed({
+            name: batchTransform.partName(source.metadata.name, index, parts.length),
+            description: source.metadata.description,
+            color: colors[0] && colors[0].hex,
+            sourceType: 'gpx',
+            sourceName: source.sourceName,
+            segments: segments,
+            visible: true,
+            lineStyle: 'solid',
+            lineWidth: 4,
+            stats: partStats,
+            warnings: buildWarnings(partStats)
+          }, generator);
+        });
+        transformStats.pointCount = drafts.reduce(function(total, draft) {
+          return total + draft.summary.pointCount;
+        }, 0);
+        transformStats.generatedTrackCount = drafts.length;
+        const aggregateStats = statsForSegments(
+          source.collected.stats,
+          parts.reduce(function(all, segments) { return all.concat(segments); }, [])
+        );
+        return {
+          drafts: drafts,
+          baseName: source.metadata.name,
+          summary: batchTransform.aggregateSummaries(drafts),
+          stats: transformStats,
+          warnings: cloneWarnings(buildWarnings(aggregateStats))
+        };
+      }
+
+      function updateDraftBatch(batch, patch) {
+        if (!isObject(batch) || !Array.isArray(batch.drafts) || !batch.drafts.length) {
+          fail('GPX_METADATA_INVALID', 'GPXの解析結果を確認してください。');
+        }
+        const changes = isObject(patch) ? patch : {};
+        const rawBaseName = hasOwn(changes, 'name') ? changes.name : batch.baseName;
+        if (typeof rawBaseName !== 'string' || !rawBaseName.trim()) {
+          fail('GPX_METADATA_INVALID', 'GPXのトラック情報を確認してください。');
+        }
+        const baseName = rawBaseName.trim();
+        const drafts = batch.drafts.map(function(draft, index) {
+          const partPatch = {};
+          ['description', 'color', 'visible', 'lineStyle'].forEach(function(key) {
+            if (hasOwn(changes, key)) partPatch[key] = changes[key];
+          });
+          partPatch.name = batchTransform.partName(baseName, index, batch.drafts.length);
+          return updateDraft(draft, partPatch);
+        });
+        return {
+          drafts: drafts,
+          baseName: baseName,
+          summary: batchTransform.aggregateSummaries(drafts),
+          stats: {
+            sourcePointCount: batch.stats.sourcePointCount,
+            pointCount: batch.stats.pointCount,
+            duplicatePointCount: batch.stats.duplicatePointCount,
+            interruptionCount: batch.stats.interruptionCount,
+            compressedPointCount: batch.stats.compressedPointCount,
+            generatedTrackCount: batch.stats.generatedTrackCount,
+            compressionIntervals: batch.stats.compressionIntervals.slice()
+          },
+          warnings: cloneWarnings(batch.warnings)
+        };
+      }
+
+      function toSavePayloads(batch) {
+        if (!isObject(batch) || !Array.isArray(batch.drafts) || !batch.drafts.length) {
+          fail('GPX_METADATA_INVALID', 'GPXの解析結果を確認してください。');
+        }
+        return batch.drafts.map(toSavePayload);
       }
 
       function updateDraft(draft, patch) {
@@ -15210,11 +16049,15 @@ AUDIO_VENDOR_BUNDLE_END
         MAX_GPX_TEXT_LENGTH: MAX_GPX_TEXT_LENGTH,
         parse: parse,
         buildDraft: buildDraft,
+        buildDraftBatch: buildDraftBatch,
         updateDraft: updateDraft,
-        toSavePayload: toSavePayload
+        updateDraftBatch: updateDraftBatch,
+        toSavePayload: toSavePayload,
+        toSavePayloads: toSavePayloads
       };
     })(
       TrackGeometryCore,
+      TrackBatchTransformCore,
       typeof PIN_COLORS !== 'undefined' ? PIN_COLORS : [{ hex: '#e53935' }]
     );
 
@@ -15266,6 +16109,38 @@ AUDIO_VENDOR_BUNDLE_END
         buildDraft: function(contents, options) {
           return adapterConfig.core.buildDraft(contents, options);
         },
+        buildBatch: function(contents, options) {
+          if (typeof adapterConfig.core.buildDraftBatch === 'function') {
+            return adapterConfig.core.buildDraftBatch(contents, options);
+          }
+          const draft = adapterConfig.core.buildDraft(contents, options);
+          return {
+            drafts: [draft],
+            baseName: draft.name,
+            summary: draft.summary,
+            stats: draft.stats || null,
+            warnings: Array.isArray(draft.warnings) ? draft.warnings.slice() : []
+          };
+        },
+        updateBatch: function(batch, patch) {
+          if (typeof adapterConfig.core.updateDraftBatch === 'function') {
+            return adapterConfig.core.updateDraftBatch(batch, patch);
+          }
+          const draft = adapterConfig.core.updateDraft(batch.drafts[0], patch);
+          return {
+            drafts: [draft],
+            baseName: draft.name,
+            summary: draft.summary,
+            stats: draft.stats || null,
+            warnings: Array.isArray(draft.warnings) ? draft.warnings.slice() : []
+          };
+        },
+        toSavePayloads: function(batch) {
+          if (typeof adapterConfig.core.toSavePayloads === 'function') {
+            return adapterConfig.core.toSavePayloads(batch);
+          }
+          return [adapterConfig.core.toSavePayload(batch.drafts[0])];
+        },
         safeImportMessage: adapterConfig.safeImportMessage,
         previewTitle: adapterConfig.previewTitle,
         operationStatusId: adapterConfig.operationStatusId,
@@ -15286,7 +16161,7 @@ AUDIO_VENDOR_BUNDLE_END
     function safeGeoJsonTrackImportMessage(error) {
       const code = String(error && error.code || '');
       if (code === 'GEOJSON_FILE_TYPE_INVALID') return 'GeoJSONまたはJSONファイルを選択してください。';
-      if (code === 'GEOJSON_FILE_TOO_LARGE') return 'GeoJSONファイルは2MB以内にしてください。';
+      if (code === 'GEOJSON_FILE_TOO_LARGE') return 'GeoJSONファイルは5MB以内にしてください。';
       if (code === 'GEOJSON_FILE_READ_FAILED') return 'GeoJSONファイルを読み込めませんでした。';
       if (code === 'IMPORT_ITEM_LIMIT_EXCEEDED') return 'GeoJSONのFeatureは20件以内にしてください。';
       if (code === 'GEOJSON_FEATURES_REQUIRED') return 'GeoJSONに1件以上のFeatureを含めてください。';
@@ -15298,6 +16173,12 @@ AUDIO_VENDOR_BUNDLE_END
       if (code === 'GEOJSON_TRACK_GEOMETRY_UNSUPPORTED') return 'このGeoJSONのgeometryはルートとして取り込めません。';
       if (code === 'TRACK_SEGMENT_LIMIT_EXCEEDED') return 'ルートのsegment数が上限を超えています。';
       if (code === 'TRACK_POINT_LIMIT_EXCEEDED') return 'ルートのpoint数が上限を超えています。';
+      if (code === 'GEOJSON_SOURCE_POINT_LIMIT_EXCEEDED') {
+        return 'GeoJSONの元point数は100,000件以内にしてください。';
+      }
+      if (code === 'GEOJSON_GENERATED_TRACK_LIMIT_EXCEEDED') {
+        return 'GeoJSONから生成されるルート数が20件を超えています。';
+      }
       if (code === 'GEOJSON_TRACK_TIME_CONFLICT') return 'coordTimesとtimesの内容が一致しません。';
       if (code === 'GEOJSON_TRACK_TIME_SHAPE_INVALID') return '時刻配列と座標配列の形を一致させてください。';
       if (code === 'GEOJSON_TRACK_TIME_INVALID') return 'ルートの時刻を確認してください。timezone指定が必要です。';
@@ -15323,6 +16204,8 @@ AUDIO_VENDOR_BUNDLE_END
         GPX_POINT_TIME_INVALID: 'GPX内の時刻を確認してください。timezone付きの時刻が必要です。',
         GPX_TRACK_REQUIRED: 'このGPXには取り込める軌跡またはルートがありません。',
         GPX_METADATA_INVALID: 'GPXのルート情報を確認してください。',
+        GPX_SOURCE_POINT_LIMIT_EXCEEDED: 'GPXの元point数は100,000件以内にしてください。',
+        GPX_GENERATED_TRACK_LIMIT_EXCEEDED: 'GPXから生成されるルート数が20件を超えています。',
         TRACK_SEGMENT_LIMIT_EXCEEDED: 'ルートのsegment数が上限を超えています。',
         TRACK_POINT_LIMIT_EXCEEDED: 'ルートのpoint数が上限を超えています。'
       };
@@ -15331,7 +16214,7 @@ AUDIO_VENDOR_BUNDLE_END
 
     const GeoJsonTrackImportAdapter = createTrackFileImportAdapter({
       kind: 'geojson', label: 'GeoJSON', core: GeoJsonTrackInterchangeCore,
-      maxFileBytes: 2 * 1024 * 1024,
+      maxFileBytes: 5 * 1024 * 1024,
       extensionPattern: /\.(?:geojson|json)$/i,
       acceptedMimeTypes: ['application/geo+json', 'application/json'],
       fileTypeErrorCode: 'GEOJSON_FILE_TYPE_INVALID',
@@ -15346,7 +16229,23 @@ AUDIO_VENDOR_BUNDLE_END
       loadedMessage: 'GeoJSONルートを読み込みました。',
       unavailableMessage: '編集モードでのみGeoJSONルートを取り込めます。',
       activeMessage: 'GeoJSONルート取込を閉じてから次のファイルを選択してください。',
-      renderStats: function() { return ''; }, renderWarnings: function() { return []; }
+      renderStats: function(subject) {
+        const stats = subject && subject.stats || {};
+        let rendered = '元point ' + Number(stats.sourcePointCount || 0)
+          + ' / 保存point ' + Number(stats.pointCount || 0)
+          + ' / 完全重複除去 ' + Number(stats.duplicatePointCount || 0)
+          + ' / 記録中断 ' + Number(stats.interruptionCount || 0) + '件'
+          + ' / 時刻圧縮除去 ' + Number(stats.timeCompressedPointCount || 0)
+          + ' / 形状圧縮除去 ' + Number(stats.shapeCompressedPointCount || 0)
+          + ' / 生成ルート ' + Number(stats.generatedTrackCount || 0) + '件';
+        const intervals = Array.isArray(stats.compressionIntervals)
+          ? stats.compressionIntervals.filter(function(value, index, values) {
+            return values.indexOf(value) === index;
+          }) : [];
+        if (intervals.length) rendered += ' / 圧縮間隔 ' + intervals.join('秒・') + '秒';
+        return rendered;
+      },
+      renderWarnings: function() { return []; }
     });
 
     const GpxTrackImportAdapter = createTrackFileImportAdapter({
@@ -15363,23 +16262,48 @@ AUDIO_VENDOR_BUNDLE_END
       idleLabel: 'GPXルート取込', loadedMessage: 'GPXルートを読み込みました。',
       unavailableMessage: '編集モードでのみGPXルートを取り込めます。',
       activeMessage: 'GPXルート取込を閉じてから次のファイルを選択してください。',
-      renderStats: function(draft) {
-        const stats = draft && draft.stats || {};
-        return 'trk要素 ' + Number(stats.trackElementCount || 0)
+      renderStats: function(subject) {
+        const batch = subject && Array.isArray(subject.drafts) ? subject : null;
+        const sourceStats = batch && batch.drafts.length ? batch.drafts[0].stats : subject && subject.stats;
+        const stats = Object.assign({}, sourceStats || {});
+        if (batch) {
+          stats.timedPointCount = batch.drafts.reduce(function(total, draft) {
+            return total + Number(draft && draft.stats && draft.stats.timedPointCount || 0);
+          }, 0);
+          stats.elevatedPointCount = batch.drafts.reduce(function(total, draft) {
+            return total + Number(draft && draft.stats && draft.stats.elevatedPointCount || 0);
+          }, 0);
+        }
+        let rendered = 'trk要素 ' + Number(stats.trackElementCount || 0)
           + ' / rte要素 ' + Number(stats.routeElementCount || 0)
           + ' / 時刻付きpoint ' + Number(stats.timedPointCount || 0)
           + ' / 標高付きpoint ' + Number(stats.elevatedPointCount || 0)
           + ' / 無視したwaypoint ' + Number(stats.ignoredWaypointCount || 0)
           + ' / 無視した空segment ' + Number(stats.ignoredEmptySegmentCount || 0);
+        if (batch) {
+          const transformed = batch.stats || {};
+          rendered += '\n元point ' + Number(transformed.sourcePointCount || 0)
+            + ' / 保存point ' + Number(transformed.pointCount || 0)
+            + ' / 完全重複除去 ' + Number(transformed.duplicatePointCount || 0)
+            + ' / 記録中断 ' + Number(transformed.interruptionCount || 0) + '件'
+            + ' / 圧縮除去 ' + Number(transformed.compressedPointCount || 0)
+            + ' / 生成ルート ' + Number(transformed.generatedTrackCount || 0) + '件';
+          const intervals = Array.isArray(transformed.compressionIntervals)
+            ? transformed.compressionIntervals.filter(function(value, index, values) {
+              return values.indexOf(value) === index;
+            }) : [];
+          if (intervals.length) rendered += ' / 圧縮間隔 ' + intervals.join('秒・') + '秒';
+        }
+        return rendered;
       },
-      renderWarnings: function(draft) {
+      renderWarnings: function(subject) {
         const messages = {
           GPX_WAYPOINTS_IGNORED: function(count) { return 'ウェイポイント' + count + '件は今回は取り込みません。'; },
           GPX_EMPTY_SEGMENTS_IGNORED: function(count) { return '空の軌跡区間' + count + '件を無視しました。'; },
           GPX_POINTS_WITHOUT_TIME: function(count) { return '時刻のない地点が' + count + '件あります。'; },
           GPX_POINTS_WITHOUT_ELEVATION: function(count) { return '標高のない地点が' + count + '件あります。'; }
         };
-        return (Array.isArray(draft && draft.warnings) ? draft.warnings : []).map(function(warning) {
+        return (Array.isArray(subject && subject.warnings) ? subject.warnings : []).map(function(warning) {
           const render = warning && messages[warning.code];
           const count = Number(warning && warning.count);
           return render && Number.isFinite(count) && count > 0 ? render(count) : '';
@@ -15389,6 +16313,7 @@ AUDIO_VENDOR_BUNDLE_END
 
     const TrackFileImportUI = (function(colors) {
       const MAX_FILE_BYTES = 2 * 1024 * 1024;
+      const MAX_SAVED_TRACKS = 100;
       const EDIT_IDS = [
         'track-import-preview-name', 'track-import-preview-description',
         'track-import-preview-color', 'track-import-preview-line-style',
@@ -15449,6 +16374,8 @@ AUDIO_VENDOR_BUNDLE_END
         const withEditToken = typeof config.withEditToken === 'function'
           ? config.withEditToken : function(payload) { return payload; };
         const onSaved = typeof config.onSaved === 'function' ? config.onSaved : function() {};
+        const getTrackCount = typeof config.getTrackCount === 'function'
+          ? config.getTrackCount : function() { return 0; };
         const normalizeSavedTrack = typeof config.normalizeSavedTrack === 'function'
           ? config.normalizeSavedTrack : function(track) { return track; };
         const onBusy = typeof config.onBusy === 'function' ? config.onBusy : function() {};
@@ -15519,7 +16446,7 @@ AUDIO_VENDOR_BUNDLE_END
         }
 
         function isBusy() {
-          return !!(importState.loading || importState.draft || importState.submittedPayload
+          return !!(importState.loading || importState.batch || importState.draft || importState.submittedPayload
             || importState.saving || importState.saved);
         }
 
@@ -15536,9 +16463,14 @@ AUDIO_VENDOR_BUNDLE_END
           element('track-import-preview-discard').style.display = importState.saved ? 'none' : '';
           element('track-import-preview-close').style.display = importState.saved ? '' : 'none';
           const adapter = activeAdapter();
-          const stateLabel = importState.saving ? (adapter ? adapter.savingLabel : '保存中...')
-            : importState.saved ? '完了'
-            : importState.submittedPayload && importState.errorCode ? '失敗'
+          const payloadCount = Array.isArray(importState.submittedPayloads)
+            ? importState.submittedPayloads.length : 0;
+          const progress = payloadCount > 1
+            ? '（' + Math.min(importState.saveIndex + (importState.saved ? 0 : 1), payloadCount)
+              + '/' + payloadCount + '）' : '';
+          const stateLabel = importState.saving ? (adapter ? adapter.savingLabel : '保存中...') + progress
+            : importState.saved ? '完了' + progress
+            : importState.submittedPayload && importState.errorCode ? '失敗' + progress
             : '';
           setOptionalText('track-import-preview-state', stateLabel);
           try { onBusy(isBusy()); } catch (_observerError) {}
@@ -15557,21 +16489,42 @@ AUDIO_VENDOR_BUNDLE_END
           return Number.isFinite(date.getTime()) ? date.toLocaleString('ja-JP') : '—';
         }
 
-        function renderPreview(draft) {
+        function renderParts(batch) {
+          const drafts = batch && Array.isArray(batch.drafts) ? batch.drafts : [];
+          const partsElement = element('track-import-preview-parts');
+          if (drafts.length <= 1) {
+            partsElement.textContent = '';
+            partsElement.style.display = 'none';
+            return;
+          }
+          partsElement.textContent = drafts.map(function(draft, index) {
+            const summary = draft.summary || {};
+            return (index + 1) + '. ' + draft.name + ' / '
+              + formatTime(summary.startTime) + ' 〜 ' + formatTime(summary.endTime)
+              + ' / ' + Number(summary.segmentCount || 0) + ' segment'
+              + ' / ' + Number(summary.pointCount || 0) + ' point';
+          }).join('\n');
+          partsElement.style.display = '';
+        }
+
+        function renderPreview(batch) {
           const adapter = activeAdapter();
           if (!adapter) throw codedError('TRACK_PAYLOAD_INVALID');
+          const drafts = batch && Array.isArray(batch.drafts) ? batch.drafts : [];
+          const draft = drafts[0];
+          if (!draft) throw codedError('TRACK_PAYLOAD_INVALID');
           if (typeof clearDialogValidation === 'function') clearDialogValidation('track-import-preview-overlay');
           renderTrackImportColorPalette(draft.color, false);
           setPreviewActionLabel('track-import-preview-save', '取込');
           setPreviewActionLabel('track-import-preview-discard', '取込を破棄');
           setText('track-import-preview-title', adapter.previewTitle);
           setText('track-import-preview-format', adapter.label);
-          element('track-import-preview-name').value = draft.name;
+          element('track-import-preview-name').value = batch.baseName || draft.name;
           element('track-import-preview-description').value = draft.description;
           element('track-import-preview-line-style').value = draft.lineStyle;
           element('track-import-preview-visible').checked = draft.visible;
           setText('track-import-preview-source', draft.sourceName);
-          const summary = draft.summary || {};
+          const summary = batch.summary || draft.summary || {};
           const elevation = summary.minElevation == null || summary.maxElevation == null
             ? '標高 —' : '標高 ' + Math.round(summary.minElevation) + '〜' + Math.round(summary.maxElevation) + ' m';
           setOptionalText('track-import-preview-segments', summary.segmentCount == null ? '—' : summary.segmentCount);
@@ -15584,11 +16537,12 @@ AUDIO_VENDOR_BUNDLE_END
             + formatDistance(summary.distanceMeters) + ' / '
             + formatTime(summary.startTime) + ' 〜 ' + formatTime(summary.endTime) + ' / ' + elevation
           );
-          const statsText = text(adapter.renderStats(draft));
+          renderParts(batch);
+          const statsText = text(adapter.renderStats(batch));
           const statsElement = element('track-import-preview-stats');
           statsElement.textContent = statsText;
           statsElement.style.display = statsText ? '' : 'none';
-          const warningText = adapter.renderWarnings(draft).join('\n');
+          const warningText = adapter.renderWarnings(batch).join('\n');
           const warningsElement = element('track-import-preview-warnings');
           warningsElement.textContent = warningText;
           warningsElement.style.display = warningText ? '' : 'none';
@@ -15603,8 +16557,11 @@ AUDIO_VENDOR_BUNDLE_END
           importState.requestToken = Number(importState.requestToken || 0) + 1;
           importState.owner = '';
           importState.loading = false;
+          importState.batch = null;
           importState.draft = null;
           importState.submittedPayload = null;
+          importState.submittedPayloads = null;
+          importState.saveIndex = 0;
           importState.saving = false;
           importState.saved = false;
           importState.errorCode = '';
@@ -15648,8 +16605,11 @@ AUDIO_VENDOR_BUNDLE_END
           importState.sourceKind = kind;
           importState.sourceName = '';
           importState.loading = true;
+          importState.batch = null;
           importState.draft = null;
           importState.submittedPayload = null;
+          importState.submittedPayloads = null;
+          importState.saveIndex = 0;
           importState.saving = false;
           importState.saved = false;
           importState.errorCode = '';
@@ -15666,19 +16626,22 @@ AUDIO_VENDOR_BUNDLE_END
             throw codedError(adapter.fileReadErrorCode);
           }).then(function(contents) {
             if (contents == null || inactive(token, kind)) return null;
-            const draft = adapter.buildDraft(contents, { sourceName: sourceName });
+            const batch = adapter.buildBatch(contents, { sourceName: sourceName });
             if (inactive(token, kind)) return null;
             importState.loading = false;
-            importState.draft = draft;
+            importState.batch = batch;
+            importState.draft = batch.drafts[0];
             importState.submittedPayload = null;
+            importState.submittedPayloads = null;
+            importState.saveIndex = 0;
             importState.saving = false;
             importState.saved = false;
             importState.errorCode = '';
             importState.retryable = null;
-            renderPreview(draft);
+            renderPreview(batch);
             closeSettings({ preserveTrackImport: true, restoreFocus: false });
             setText(adapter.operationStatusId, adapter.loadedMessage);
-            return draft;
+            return batch.drafts.length === 1 ? batch.drafts[0] : batch;
           }).catch(function(error) {
             if (token !== importState.requestToken) return null;
             clearState(true, kind);
@@ -15700,9 +16663,12 @@ AUDIO_VENDOR_BUNDLE_END
         }
 
         function syncDraftFromForm(kind) {
-          if (!owns(kind) || !importState.draft || importState.submittedPayload) return importState.draft;
+          if (!owns(kind) || !importState.batch || !importState.draft || importState.submittedPayload) {
+            return importState.batch && importState.batch.drafts.length > 1
+              ? importState.batch : importState.draft;
+          }
           const adapter = adapterFor(kind);
-          const next = adapter.core.updateDraft(importState.draft, {
+          const nextBatch = adapter.updateBatch(importState.batch, {
             name: element('track-import-preview-name').value,
             description: element('track-import-preview-description').value,
             color: element('track-import-preview-color').value,
@@ -15710,12 +16676,64 @@ AUDIO_VENDOR_BUNDLE_END
             lineWidth: 4,
             visible: !!element('track-import-preview-visible').checked
           });
-          importState.draft = next;
-          return next;
+          importState.batch = nextBatch;
+          importState.draft = nextBatch.drafts[0];
+          renderParts(nextBatch);
+          return nextBatch.drafts.length === 1 ? nextBatch.drafts[0] : nextBatch;
+        }
+
+        function payloadsForSave() {
+          return Array.isArray(importState.submittedPayloads)
+            ? importState.submittedPayloads : (importState.submittedPayload ? [importState.submittedPayload] : []);
+        }
+
+        function saveFailureMessage(errorCode) {
+          const payloads = payloadsForSave();
+          const base = safeSaveMessage(errorCode);
+          if (payloads.length <= 1) return base;
+          return (importState.saveIndex + 1) + '/' + payloads.length + '件目で停止しました。'
+            + importState.saveIndex + '件は保存済みです。' + base;
+        }
+
+        function setSaveFailure(errorCode, retryable) {
+          importState.errorCode = errorCode;
+          importState.retryable = retryable;
+          setPreviewError(saveFailureMessage(errorCode));
+          return false;
+        }
+
+        function normalizeSaveResponse(result, payload) {
+          if (!result || typeof result !== 'object' || Array.isArray(result)
+              || !hasOwn(result, 'track') || !result.track
+              || typeof result.track !== 'object' || Array.isArray(result.track)
+              || ['trackId', 'revisionId', 'name', 'description', 'color', 'sourceType',
+                'sourceName', 'segments', 'orderIndex', 'visible', 'lineStyle', 'lineWidth'
+                ].some(function(key) { return !hasOwn(result.track, key); })
+              || typeof result.track.trackId !== 'string' || !result.track.trackId.trim()
+              || result.track.lineWidth !== 4
+              || !Number.isInteger(result.track.orderIndex) || result.track.orderIndex < 0) {
+            throw new Error('Track response is invalid.');
+          }
+          const savedTrack = normalizeSavedTrack(result.track);
+          const expectedTrack = normalizeSavedTrack(Object.assign(
+            {}, clonePayload(payload), { orderIndex: savedTrack.orderIndex }
+          ));
+          if (!savedTrack || typeof savedTrack !== 'object' || Array.isArray(savedTrack)
+              || savedTrack.trackId !== payload.trackId || savedTrack.revisionId !== payload.revisionId
+              || savedTrack.sourceType !== payload.sourceType
+              || ['name', 'description', 'color', 'sourceName', 'visible', 'lineStyle', 'lineWidth', 'segments']
+                .some(function(key) {
+                  return JSON.stringify(savedTrack[key]) !== JSON.stringify(expectedTrack[key]);
+                })) {
+            throw new Error('Track response does not match the submitted payload.');
+          }
+          return savedTrack;
         }
 
         function submit(kind) {
-          if (!owns(kind) || !importState.submittedPayload || importState.saving || importState.saved) {
+          const payloads = payloadsForSave();
+          if (!owns(kind) || !payloads.length || importState.saveIndex >= payloads.length
+              || importState.saving || importState.saved) {
             return Promise.resolve(false);
           }
           const adapter = adapterFor(kind);
@@ -15724,74 +16742,56 @@ AUDIO_VENDOR_BUNDLE_END
           importState.retryable = null;
           setPreviewError('');
           renderControls();
-          const payload = clonePayload(importState.submittedPayload);
-          return Promise.resolve().then(function() {
-            return callGAS('saveTrackBundle', withEditToken(payload));
-          }).then(function(result) {
-            if (!result || result.ok !== true) {
-              const errorCode = text(result && result.errorCode) || 'TRACK_STORAGE_FAILED';
-              importState.errorCode = errorCode;
-              const nonRetryable = [
-                'INVALID_TRACK_PAYLOAD', 'TRACK_STORAGE_CORRUPTED', 'TRACK_SHEETS_MISSING',
-                'TRACK_REVISION_PAYLOAD_CONFLICT', 'TRACK_LIMIT_EXCEEDED',
-                'TRACK_PAYLOAD_INVALID', 'TRACK_SEGMENT_LIMIT_EXCEEDED', 'TRACK_POINT_LIMIT_EXCEEDED'
-              ];
-              importState.retryable = nonRetryable.indexOf(errorCode) !== -1 ? false
-                : (result && typeof result.retryable === 'boolean'
-                  ? result.retryable : errorCode === 'TRACK_STORAGE_BUSY' || errorCode === 'TRACK_STORAGE_FAILED');
-              setPreviewError(safeSaveMessage(errorCode));
-              return false;
+
+          function submitCurrent() {
+            const payload = clonePayload(payloads[importState.saveIndex]);
+            importState.submittedPayload = payloads[importState.saveIndex];
+            if (payloads.length > 1) {
+              setText(adapter.operationStatusId,
+                'ルートを保存中です（' + (importState.saveIndex + 1) + '/' + payloads.length + '）');
             }
-            let savedTrack;
-            try {
-              if (!result || typeof result !== 'object' || Array.isArray(result)
-                  || !hasOwn(result, 'track') || !result.track
-                  || typeof result.track !== 'object' || Array.isArray(result.track)
-                  || ['trackId', 'revisionId', 'name', 'description', 'color', 'sourceType',
-                    'sourceName', 'segments', 'orderIndex', 'visible', 'lineStyle', 'lineWidth'
-                    ].some(function(key) { return !hasOwn(result.track, key); })
-                  || typeof result.track.trackId !== 'string' || !result.track.trackId.trim()
-                  || result.track.lineWidth !== 4
-                  || !Number.isInteger(result.track.orderIndex) || result.track.orderIndex < 0) {
-                throw new Error('Track response is invalid.');
+            return Promise.resolve().then(function() {
+              return callGAS('saveTrackBundle', withEditToken(payload));
+            }).then(function(result) {
+              if (!result || result.ok !== true) {
+                const errorCode = text(result && result.errorCode) || 'TRACK_STORAGE_FAILED';
+                const nonRetryable = [
+                  'INVALID_TRACK_PAYLOAD', 'TRACK_STORAGE_CORRUPTED', 'TRACK_SHEETS_MISSING',
+                  'TRACK_REVISION_PAYLOAD_CONFLICT', 'TRACK_LIMIT_EXCEEDED',
+                  'TRACK_PAYLOAD_INVALID', 'TRACK_SEGMENT_LIMIT_EXCEEDED', 'TRACK_POINT_LIMIT_EXCEEDED'
+                ];
+                const retryable = nonRetryable.indexOf(errorCode) !== -1 ? false
+                  : (result && typeof result.retryable === 'boolean'
+                    ? result.retryable : errorCode === 'TRACK_STORAGE_BUSY' || errorCode === 'TRACK_STORAGE_FAILED');
+                return setSaveFailure(errorCode, retryable);
               }
-              savedTrack = normalizeSavedTrack(result.track);
-              const expectedTrack = normalizeSavedTrack(Object.assign(
-                {}, clonePayload(payload), { orderIndex: savedTrack.orderIndex }
-              ));
-              if (!savedTrack || typeof savedTrack !== 'object' || Array.isArray(savedTrack)
-                  || savedTrack.trackId !== payload.trackId || savedTrack.revisionId !== payload.revisionId
-                  || savedTrack.sourceType !== payload.sourceType
-                  || ['name', 'description', 'color', 'sourceName', 'visible', 'lineStyle', 'lineWidth', 'segments']
-                    .some(function(key) {
-                      return JSON.stringify(savedTrack[key]) !== JSON.stringify(expectedTrack[key]);
-                    })) {
-                throw new Error('Track response does not match the submitted payload.');
+              let savedTrack;
+              try {
+                savedTrack = normalizeSaveResponse(result, payload);
+              } catch (_responseError) {
+                return setSaveFailure('TRACK_STORAGE_FAILED', true);
               }
-            } catch (_responseError) {
-              importState.errorCode = 'TRACK_STORAGE_FAILED';
-              importState.retryable = true;
-              setPreviewError(safeSaveMessage('TRACK_STORAGE_FAILED'));
-              return false;
-            }
-            importState.saved = true;
-            importState.errorCode = '';
-            importState.retryable = null;
-            try {
-              const callbackResult = onSaved(savedTrack);
-              if (callbackResult && typeof callbackResult.then === 'function') {
-                Promise.resolve(callbackResult).catch(function() {});
-              }
-            } catch (_callbackError) {}
-            setText(adapter.operationStatusId, result.deduplicated
-              ? '保存済みのトラックを確認しました。' : 'トラックを保存しました。');
-            return true;
-          }).catch(function() {
-            importState.errorCode = 'TRACK_STORAGE_FAILED';
-            importState.retryable = true;
-            setPreviewError(safeSaveMessage('TRACK_STORAGE_FAILED'));
-            return false;
-          }).then(function(success) {
+              try {
+                const callbackResult = onSaved(savedTrack);
+                if (callbackResult && typeof callbackResult.then === 'function') {
+                  Promise.resolve(callbackResult).catch(function() {});
+                }
+              } catch (_callbackError) {}
+              importState.saveIndex += 1;
+              importState.errorCode = '';
+              importState.retryable = null;
+              if (importState.saveIndex < payloads.length) return submitCurrent();
+              importState.saved = true;
+              setText(adapter.operationStatusId, payloads.length === 1
+                ? (result.deduplicated ? '保存済みのトラックを確認しました。' : 'トラックを保存しました。')
+                : payloads.length + '件のルートを保存しました。');
+              return true;
+            }).catch(function() {
+              return setSaveFailure('TRACK_STORAGE_FAILED', true);
+            });
+          }
+
+          return submitCurrent().then(function(success) {
             importState.saving = false;
             renderControls();
             return success;
@@ -15808,10 +16808,26 @@ AUDIO_VENDOR_BUNDLE_END
             renderControls();
             return Promise.resolve(false);
           }
+          let trackCount = 0;
+          try {
+            trackCount = Number(getTrackCount());
+          } catch (_countError) {
+            trackCount = 0;
+          }
+          if (Number.isInteger(trackCount) && trackCount >= 0
+              && trackCount + importState.batch.drafts.length > MAX_SAVED_TRACKS) {
+            importState.errorCode = 'TRACK_LIMIT_EXCEEDED';
+            importState.retryable = false;
+            setPreviewError(safeSaveMessage('TRACK_LIMIT_EXCEEDED'));
+            renderControls();
+            return Promise.resolve(false);
+          }
           try {
             const adapter = adapterFor(kind);
-            const draft = syncDraftFromForm(kind);
-            importState.submittedPayload = clonePayload(adapter.core.toSavePayload(draft));
+            syncDraftFromForm(kind);
+            importState.submittedPayloads = clonePayload(adapter.toSavePayloads(importState.batch));
+            importState.saveIndex = 0;
+            importState.submittedPayload = importState.submittedPayloads[0];
           } catch (_error) {
             importState.errorCode = 'TRACK_PAYLOAD_INVALID';
             importState.retryable = false;
@@ -15956,7 +16972,8 @@ AUDIO_VENDOR_BUNDLE_END
         loading: false, requestToken: 0, job: null, controller: null, registering: false
       },
       trackImport: {
-        owner: '', loading: false, requestToken: 0, draft: null, submittedPayload: null,
+        owner: '', loading: false, requestToken: 0, batch: null, draft: null,
+        submittedPayload: null, submittedPayloads: null, saveIndex: 0,
         saving: false, saved: false, errorCode: '', retryable: null,
         sourceKind: '', sourceName: ''
       },
@@ -16304,6 +17321,7 @@ AUDIO_VENDOR_BUNDLE_END
       callGAS: withGAS,
       withEditToken: withEditToken,
       normalizeSavedTrack: normalizeTrackForState,
+      getTrackCount: function() { return Array.isArray(state.tracks) ? state.tracks.length : 0; },
       onSaved: upsertTrack,
       onBusy: function() {
         renderCsvInterchangeBusy(false);
@@ -23272,7 +24290,7 @@ AUDIO_VENDOR_BUNDLE_END
         + formatTrackDistance(track.distanceMeters) + ' / '
         + formatTrackTime(track.startTime) + ' 〜 ' + formatTrackTime(track.endTime) + ' / '
         + formatTrackElevation(track);
-      ['track-import-preview-stats', 'track-import-preview-warnings'].forEach(function(elementId) {
+      ['track-import-preview-parts', 'track-import-preview-stats', 'track-import-preview-warnings'].forEach(function(elementId) {
         const target = document.getElementById(elementId);
         target.textContent = '';
         target.style.display = 'none';
@@ -29215,6 +30233,7 @@ AUDIO_VENDOR_BUNDLE_END
       bootstrapMediaDriveStructure();
       refreshPinAddButtonState();
       renderAccessMode();
+      renderTrackImportBusy();
       renderPins();
       renderSidePanel();
       renderMobileSheetState();

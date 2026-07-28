@@ -70,6 +70,44 @@ function createReadinessHarness(overrides = {}) {
   return { api: context.api, button, state };
 }
 
+function createTrackImportReadinessHarness() {
+  const elements = Object.fromEntries([
+    'geojson-track-import-button', 'geojson-track-file-input',
+    'gpx-track-import-button', 'gpx-track-file-input',
+    'route-track-import-gpx', 'route-track-import-geojson'
+  ].map((id) => [id, { id, disabled: false, textContent: '' }]));
+  const state = {
+    initializing: true,
+    editMode: true,
+    previewMode: false,
+    narrowView: false,
+    shareMode: false,
+    trackImport: { owner: '', loading: false, saving: false },
+    trackDeleteConfirming: '',
+    trackDeletePending: '',
+    trackOrderSaving: false
+  };
+  const context = {
+    state,
+    hasEditToken: true,
+    document: { getElementById: (id) => elements[id] || null },
+    isTrackImportBusy: () => false,
+    isTrackDisplaySettingsEditBusy: () => false,
+    isCsvImportBusy: () => false,
+    isGeoJsonImportBusy: () => false,
+    isMultiPhotoImportBusyState: () => false,
+    setActionButtonLabel(id, label) { elements[id].textContent = label; },
+    refreshPinAddButtonState() {},
+    refreshMultiPhotoButtonState() {}
+  };
+  vm.runInNewContext(`
+    ${functionSource('canEdit')}
+    ${functionSource('renderTrackImportBusy')}
+    this.api = { renderTrackImportBusy };
+  `, context);
+  return { api: context.api, elements, state };
+}
+
 test('startup busy release refreshes pin add without opening Data', () => {
   const initialize = functionBody('initializeApp');
   assert.match(initialize, /state\.initializing = false;[\s\S]*?refreshPinAddButtonState\(\)/);
@@ -84,6 +122,22 @@ test('startup busy release refreshes pin add without opening Data', () => {
   harness.state.initializing = false;
   assert.equal(harness.api.refreshPinAddButtonState(), true);
   assert.equal(harness.button.disabled, false);
+});
+
+test('startup completion enables sidebar GPX and GeoJSON imports without opening Data', () => {
+  const initialize = functionBody('initializeApp');
+  const readyIndex = initialize.indexOf('state.initializing = false;');
+  const refreshIndex = initialize.indexOf('renderTrackImportBusy()', readyIndex);
+  assert.notEqual(readyIndex, -1);
+  assert.ok(refreshIndex > readyIndex, 'track import controls must refresh after startup becomes editable');
+
+  const harness = createTrackImportReadinessHarness();
+  harness.api.renderTrackImportBusy();
+  for (const element of Object.values(harness.elements)) assert.equal(element.disabled, true);
+
+  harness.state.initializing = false;
+  harness.api.renderTrackImportBusy();
+  for (const element of Object.values(harness.elements)) assert.equal(element.disabled, false);
 });
 
 test('pin add disabled state has one shared writer backed by add-action policy', () => {

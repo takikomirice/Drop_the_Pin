@@ -55,8 +55,16 @@ function createHarness(overrides = {}) {
         builderSession = {
           cancelCalls: 0,
           start(files, defaults) {
-            audit.starts.push({ files: Array.from(files), defaults });
-            return Promise.resolve({ id: 'job-1', status: 'idle', items: [{ id: 'item-1' }] });
+            const fileList = Array.from(files);
+            audit.starts.push({ files: fileList, defaults });
+            return Promise.resolve({
+              id: 'job-1',
+              status: 'idle',
+              items: fileList.map((file, index) => ({
+                id: 'item-' + (index + 1),
+                runtime: { uploadFile: file }
+              }))
+            });
           },
           cancel() { this.cancelCalls += 1; },
           release() {}
@@ -89,12 +97,15 @@ function createHarness(overrides = {}) {
   return { workflow: workflowApi.create(config), audit, state, resourceUrlApi, getBuilder: () => builderSession };
 }
 
-test('workflow snapshots defaults and folder before wiring Builder Processor Flow and Preview', async () => {
+test('workflow keeps two-way registration for a lightweight prepared photo batch', async () => {
   const { workflow, audit, state, resourceUrlApi } = createHarness();
   const snapshot = {
     tags: ['観察'], color: '#e53935', icon: 'photo', status: '', targetFolderId: 'folder-old'
   };
-  const startPromise = workflow.start([{ name: 'one.jpg' }, { name: 'two.jpg' }], snapshot);
+  const startPromise = workflow.start([
+    { name: 'one.jpg', size: 2 * 1024 * 1024 },
+    { name: 'two.jpg', size: 3 * 1024 * 1024 }
+  ], snapshot);
   snapshot.tags.push('late');
   snapshot.targetFolderId = 'folder-new';
   const job = await startPromise;
@@ -111,7 +122,7 @@ test('workflow snapshots defaults and folder before wiring Builder Processor Flo
   assert.equal(audit.opens[0].resourceUrlApi, resourceUrlApi);
   assert.equal(audit.opens[0].closePolicy, 'discard-only');
   assert.equal(audit.opens[0].title, '複数写真を確認');
-  assert.equal(audit.opens[0].sourceLabel, '写真 1件');
+  assert.equal(audit.opens[0].sourceLabel, '写真 2件');
   assert.equal(state.targetFolderId, 'folder-old');
 
   const nextJob = { id: 'job-1', status: 'running', items: job.items, counts: { processing: 1 } };
@@ -126,6 +137,24 @@ test('workflow snapshots defaults and folder before wiring Builder Processor Flo
   assert.equal(state.job, null);
   assert.equal(state.targetFolderId, '');
   assert.equal(workflow.isBusy(), false);
+});
+
+test('workflow serializes registration for one large photo or a large prepared batch', async () => {
+  const snapshot = {
+    tags: [], color: '#e53935', icon: 'photo', status: '', targetFolderId: 'folder'
+  };
+  const largePhoto = createHarness();
+  await largePhoto.workflow.start([
+    { name: 'large.jpg', size: 12 * 1024 * 1024 }
+  ], snapshot);
+  assert.equal(largePhoto.audit.flowConfigs[0].concurrency, 1);
+
+  const largeBatch = createHarness();
+  await largeBatch.workflow.start(Array.from({ length: 9 }, (_, index) => ({
+    name: 'photo-' + index + '.jpg',
+    size: 8 * 1024 * 1024
+  })), snapshot);
+  assert.equal(largeBatch.audit.flowConfigs[0].concurrency, 1);
 });
 
 test('preparation cancellation is idempotent, waits for Builder settlement, and ignores late progress', async () => {

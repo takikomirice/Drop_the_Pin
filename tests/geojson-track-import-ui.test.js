@@ -217,6 +217,27 @@ function geoJson() {
   });
 }
 
+function interruptedGeoJson() {
+  return JSON.stringify({
+    type: 'FeatureCollection',
+    name: 'Morning walk',
+    features: [{
+      type: 'Feature',
+      geometry: {
+        type: 'LineString',
+        coordinates: [[139, 35, 10], [139.1, 35.1, 20], [140, 36, 30]]
+      },
+      properties: {
+        coordTimes: [
+          '2026-07-11T23:59:59Z',
+          '2026-07-12T00:00:01Z',
+          '2026-07-12T04:00:01Z'
+        ]
+      }
+    }]
+  });
+}
+
 function file(overrides = {}) {
   return {
     name: 'walk.geojson',
@@ -308,14 +329,14 @@ test('track preview color swatches are rebuilt from PIN_COLORS without duplicate
 
 test('file selection resets immediately and rejects oversized files before File.text', async () => {
   const exact = createController();
-  assert.ok(await exact.controller.importFile(file({ size: 2 * 1024 * 1024 })));
+  assert.ok(await exact.controller.importFile(file({ size: 5 * 1024 * 1024 })));
   assert.equal(exact.controller.discard(), true);
 
   const { controller, state, documentApi } = createController();
   let reads = 0;
   const input = documentApi.getElementById('geojson-track-file-input');
   input.value = 'C:\\fakepath\\large.geojson';
-  input.files = [file({ size: 2 * 1024 * 1024 + 1, text: async () => { reads += 1; return geoJson(); } })];
+  input.files = [file({ size: 5 * 1024 * 1024 + 1, text: async () => { reads += 1; return geoJson(); } })];
   const result = await controller.handleFileSelected({ target: input });
   assert.equal(input.value, '');
   assert.equal(result, null);
@@ -323,7 +344,7 @@ test('file selection resets immediately and rejects oversized files before File.
   assert.equal(state.loading, false);
   assert.equal(state.draft, null);
   assert.equal(state.errorCode, 'GEOJSON_FILE_TOO_LARGE');
-  assert.equal(documentApi.getElementById('geojson-track-operation-error').textContent, 'GeoJSONファイルは2MB以内にしてください。');
+  assert.equal(documentApi.getElementById('geojson-track-operation-error').textContent, 'GeoJSONファイルは5MB以内にしてください。');
 });
 
 test('one active read blocks another and settings close invalidates delayed results without retaining File or text', async () => {
@@ -359,6 +380,63 @@ test('successful parsing opens preview through the sole preserve path and displa
   assert.match(setup.documentApi.getElementById('track-import-preview-summary').textContent, /2 point/);
   assert.doesNotMatch(setup.documentApi.getElementById('track-import-preview-summary').textContent, /139|140/);
   assert.equal(setup.state.submittedPayload, null);
+});
+
+test('GeoJSON generated routes use the common preview and resume a fixed failed payload in order', async () => {
+  const requests = [];
+  let failedSecond = false;
+  const setup = createController({
+    async callGAS(method, payload) {
+      assert.equal(method, 'saveTrackBundle');
+      const submitted = plain(payload);
+      delete submitted.__editToken;
+      requests.push(submitted);
+      if (submitted.name.endsWith('(2/2)') && !failedSecond) {
+        failedSecond = true;
+        throw new Error('response lost');
+      }
+      return {
+        ok: true,
+        track: {
+          ...submitted,
+          orderIndex: submitted.name.endsWith('(1/2)') ? 0 : 1
+        }
+      };
+    }
+  });
+  const imported = await setup.controller.importFile(file({
+    text: async () => interruptedGeoJson()
+  }));
+  assert.equal(imported.drafts.length, 2);
+  assert.deepEqual(plain(imported.drafts.map((value) => value.name)), [
+    'Morning walk(1/2)', 'Morning walk(2/2)'
+  ]);
+  const stats = setup.documentApi.getElementById('track-import-preview-stats').textContent;
+  assert.match(stats, /元point 3/);
+  assert.match(stats, /保存point 3/);
+  assert.match(stats, /記録中断 1件/);
+  assert.match(stats, /生成ルート 2件/);
+  assert.match(
+    setup.documentApi.getElementById('track-import-preview-parts').textContent,
+    /1\..*\n2\./
+  );
+  setup.documentApi.getElementById('track-import-preview-name').value = 'Edited route';
+
+  assert.equal(await setup.controller.save(), false);
+  assert.deepEqual(requests.map((value) => value.name), [
+    'Edited route(1/2)', 'Edited route(2/2)'
+  ]);
+  assert.equal(setup.state.saveIndex, 1);
+  assert.equal(setup.state.retryable, true);
+  const failedPayload = plain(requests[1]);
+
+  assert.equal(await setup.controller.retry(), true);
+  assert.deepEqual(requests[2], failedPayload);
+  assert.deepEqual(setup.savedTracks.map((value) => value.name), [
+    'Edited route(1/2)', 'Edited route(2/2)'
+  ]);
+  assert.equal(setup.state.saveIndex, 2);
+  assert.equal(setup.state.saved, true);
 });
 
 test('metadata remains editable until first save then the submitted payload and controls are fixed', async () => {

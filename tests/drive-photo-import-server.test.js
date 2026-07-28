@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const { createHarness } = require('./drive-photo-import-server-harness');
+const { loadDriveClientModules } = require('./drive-photo-import-client-harness');
 
 const codeJs = fs.readFileSync(path.join(__dirname, '..', 'Code.js'), 'utf8');
 
@@ -49,6 +50,22 @@ test('legacy photo listing delegates to a root-only inbox without exposing folde
   assert.deepEqual(plain(result.counts), { folders: 0, photos: 5 });
   assert.equal(JSON.stringify(result).includes(harness.rootId), false);
   assert.deepEqual(harness.audit.writes, []);
+});
+
+test('root-only server response remains consumable after redacting the root Drive ID', () => {
+  const harness = createHarness();
+  seedStructure(harness);
+  harness.addFile('root_jpeg_AAAAAAA', 'photo.jpg', 'image/jpeg', [1], [harness.rootId]);
+  const response = harness.api.listDrivePhotoImportFolder(
+    harness.tokenPayload({ folderId: '' })
+  );
+  const { sourceCore } = loadDriveClientModules();
+
+  const validated = sourceCore.validateFolderResponse(response);
+
+  assert.equal(validated.folder.id, '');
+  assert.equal(validated.folder.isRoot, true);
+  assert.deepEqual(plain(validated.photos).map((item) => item.id), ['root_jpeg_AAAAAAA']);
 });
 
 test('legacy photo listing rejects every non-root folder ID with one stable boundary code', () => {

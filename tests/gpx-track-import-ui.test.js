@@ -36,6 +36,8 @@ test('GPX adapter owns validation Core mapping and safe operation targets but ne
   assert.match(safeMessageSource, /GPX_NAMESPACE_UNSUPPORTED/);
   assert.match(safeMessageSource, /GPX_TRACK_REQUIRED/);
   assert.match(safeMessageSource, /GPX_POINT_TIME_INVALID/);
+  assert.match(safeMessageSource, /GPX_SOURCE_POINT_LIMIT_EXCEEDED/);
+  assert.match(safeMessageSource, /GPX_GENERATED_TRACK_LIMIT_EXCEEDED/);
   assert.doesNotMatch(source, /saveTrackBundle|callGAS|withEditToken/);
 });
 
@@ -51,7 +53,8 @@ test('GPX stats and warnings are rendered as fixed labels and counts only', () =
 });
 
 test('README summarizes GPX support, limits, phase history, and manual verification', () => {
-  assert.match(readme, /GPXトラック[^\n]*GPX 1\.0 \/ 1\.1[^\n]*trk／rte[^\n]*5MB[^\n]*200 segment[^\n]*20,000 point/);
+  assert.match(readme,
+    /GPXトラック[^\n]*GPX 1\.0 \/ 1\.1[^\n]*trk／rte[^\n]*5MB[^\n]*100,000 source point[^\n]*完全重複[^\n]*最大5秒[^\n]*4時間[^\n]*20,000 point[^\n]*20ルート/);
   assert.match(readme, /写真時刻照合をPhase 8で追加/);
   assert.match(readme, /YAMAP[^\n]*Garmin[^\n]*実GPX/);
   assert.match(readme, /スマートフォン[^\n]*タブレット[^\n]*PC/);
