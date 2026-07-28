@@ -14370,6 +14370,254 @@ AUDIO_VENDOR_BUNDLE_END
       };
     })();
 
+    const TrackBatchTransformCore = (function() {
+      function cloneSegments(segments) {
+        return segments.map(function(segment, index) {
+          return { index: index, points: segment.points.slice() };
+        });
+      }
+
+      function countPoints(segments) {
+        return segments.reduce(function(total, segment) {
+          return total + segment.points.length;
+        }, 0);
+      }
+
+      function validSegments(segments) {
+        return Array.isArray(segments) && segments.every(function(segment) {
+          return segment && typeof segment === 'object' && !Array.isArray(segment)
+            && Array.isArray(segment.points) && segment.points.length > 0;
+        });
+      }
+
+      function splitAtInterruptions(segments, interruptionMs, stats) {
+        const stages = [];
+        let stage = [];
+
+        function flushStage() {
+          if (stage.length) stages.push(stage);
+          stage = [];
+        }
+
+        segments.forEach(function(segment) {
+          let points = [];
+          let previousTimedMs = null;
+          segment.points.forEach(function(point) {
+            const currentMs = point.time ? Date.parse(point.time) : NaN;
+            if (points.length && previousTimedMs !== null && Number.isFinite(currentMs)
+                && currentMs - previousTimedMs >= interruptionMs) {
+              stage.push({ index: stage.length, points: points });
+              flushStage();
+              points = [];
+              stats.interruptionCount += 1;
+            }
+            points.push(point);
+            previousTimedMs = Number.isFinite(currentMs) ? currentMs : null;
+          });
+          if (points.length) stage.push({ index: stage.length, points: points });
+        });
+        flushStage();
+        return stages;
+      }
+
+      function sampleSegmentBySeconds(segment, intervalSeconds) {
+        if (segment.points.length <= 2) {
+          return { index: segment.index, points: segment.points.slice() };
+        }
+        const points = [segment.points[0]];
+        let lastTimedMs = segment.points[0].time ? Date.parse(segment.points[0].time) : null;
+        segment.points.slice(1, -1).forEach(function(point) {
+          const currentMs = point.time ? Date.parse(point.time) : NaN;
+          if (!Number.isFinite(currentMs) || lastTimedMs === null
+              || currentMs - lastTimedMs >= intervalSeconds * 1000) {
+            points.push(point);
+            lastTimedMs = Number.isFinite(currentMs) ? currentMs : null;
+          }
+        });
+        const last = segment.points[segment.points.length - 1];
+        if (points[points.length - 1] !== last) points.push(last);
+        return { index: segment.index, points: points };
+      }
+
+      function partitionStage(stageSegments, maxPoints) {
+        const parts = [];
+        let current = [];
+        let currentCount = 0;
+
+        function flush() {
+          if (current.length) parts.push(current);
+          current = [];
+          currentCount = 0;
+        }
+
+        stageSegments.forEach(function(segment) {
+          if (segment.points.length <= maxPoints) {
+            if (currentCount && currentCount + segment.points.length > maxPoints) flush();
+            current.push({ index: current.length, points: segment.points.slice() });
+            currentCount += segment.points.length;
+            return;
+          }
+          let offset = 0;
+          while (offset < segment.points.length) {
+            if (currentCount === maxPoints) flush();
+            const take = Math.min(maxPoints - currentCount, segment.points.length - offset);
+            current.push({
+              index: current.length,
+              points: segment.points.slice(offset, offset + take)
+            });
+            currentCount += take;
+            offset += take;
+          }
+        });
+        flush();
+        return parts;
+      }
+
+      function transform(segments, options) {
+        const config = options || {};
+        const maxPoints = config.maxPoints;
+        const interruptionMs = config.interruptionMs;
+        const intervals = config.compressionIntervals;
+        if (!validSegments(segments) || !Number.isInteger(maxPoints) || maxPoints <= 0
+            || typeof interruptionMs !== 'number' || !Number.isFinite(interruptionMs)
+            || interruptionMs < 0 || !Array.isArray(intervals)
+            || intervals.some(function(value, index) {
+              return !Number.isInteger(value) || value <= 0
+                || (index > 0 && value <= intervals[index - 1]);
+            })) {
+          throw new TypeError('Track batch transform options are invalid.');
+        }
+
+        const stats = {
+          interruptionCount: 0,
+          timeCompressedPointCount: 0,
+          overflowCompressedPointCount: 0,
+          compressedPointCount: 0,
+          compressionIntervals: []
+        };
+        const parts = [];
+        splitAtInterruptions(cloneSegments(segments), interruptionMs, stats)
+          .forEach(function(stage) {
+            const original = cloneSegments(stage);
+            const originalCount = countPoints(original);
+            let candidate = original;
+            let selectedInterval = 0;
+
+            if (originalCount > maxPoints) {
+              intervals.some(function(intervalSeconds) {
+                candidate = original.map(function(segment) {
+                  return sampleSegmentBySeconds(segment, intervalSeconds);
+                });
+                if (countPoints(candidate) <= maxPoints) {
+                  selectedInterval = intervalSeconds;
+                  return true;
+                }
+                return false;
+              });
+              if (!selectedInterval && intervals.length
+                  && countPoints(candidate) < originalCount
+                  && original.some(function(segment) {
+                    return segment.points.some(function(point) { return !!point.time; });
+                  })) {
+                selectedInterval = intervals[intervals.length - 1];
+              }
+
+              let afterTimeCount = countPoints(candidate);
+              let overflowCandidate = candidate;
+              if (afterTimeCount > maxPoints && typeof config.reduceOverflow === 'function') {
+                const reduced = config.reduceOverflow(cloneSegments(candidate), maxPoints);
+                if (validSegments(reduced)) {
+                  overflowCandidate = cloneSegments(reduced);
+                } else {
+                  candidate = original;
+                  afterTimeCount = originalCount;
+                  overflowCandidate = original;
+                  selectedInterval = 0;
+                }
+              }
+              const finalCount = countPoints(overflowCandidate);
+              stats.timeCompressedPointCount += Math.max(0, originalCount - afterTimeCount);
+              stats.overflowCompressedPointCount += Math.max(0, afterTimeCount - finalCount);
+              if (selectedInterval) stats.compressionIntervals.push(selectedInterval);
+              candidate = overflowCandidate;
+            }
+
+            partitionStage(candidate, maxPoints).forEach(function(part) {
+              parts.push(part);
+            });
+          });
+        stats.compressedPointCount = stats.timeCompressedPointCount
+          + stats.overflowCompressedPointCount;
+        return {
+          parts: parts,
+          interruptionCount: stats.interruptionCount,
+          timeCompressedPointCount: stats.timeCompressedPointCount,
+          overflowCompressedPointCount: stats.overflowCompressedPointCount,
+          compressedPointCount: stats.compressedPointCount,
+          compressionIntervals: stats.compressionIntervals
+        };
+      }
+
+      function partName(baseName, index, total) {
+        if (total === 1) return baseName;
+        const suffix = '(' + (index + 1) + '/' + total + ')';
+        return baseName.slice(0, Math.max(0, 100 - suffix.length)) + suffix;
+      }
+
+      function aggregateSummaries(drafts) {
+        const result = {
+          segmentCount: 0,
+          pointCount: 0,
+          distanceMeters: 0,
+          minElevation: null,
+          maxElevation: null,
+          startTime: '',
+          endTime: '',
+          bounds: null
+        };
+        drafts.forEach(function(draft) {
+          const summary = draft.summary;
+          result.segmentCount += summary.segmentCount;
+          result.pointCount += summary.pointCount;
+          result.distanceMeters += summary.distanceMeters;
+          if (summary.minElevation !== null
+              && (result.minElevation === null || summary.minElevation < result.minElevation)) {
+            result.minElevation = summary.minElevation;
+          }
+          if (summary.maxElevation !== null
+              && (result.maxElevation === null || summary.maxElevation > result.maxElevation)) {
+            result.maxElevation = summary.maxElevation;
+          }
+          if (!result.startTime && summary.startTime) result.startTime = summary.startTime;
+          if (summary.endTime) result.endTime = summary.endTime;
+          if (summary.bounds) {
+            if (!result.bounds) {
+              result.bounds = {
+                south: summary.bounds.south,
+                west: summary.bounds.west,
+                north: summary.bounds.north,
+                east: summary.bounds.east
+              };
+            } else {
+              result.bounds.south = Math.min(result.bounds.south, summary.bounds.south);
+              result.bounds.west = Math.min(result.bounds.west, summary.bounds.west);
+              result.bounds.north = Math.max(result.bounds.north, summary.bounds.north);
+              result.bounds.east = Math.max(result.bounds.east, summary.bounds.east);
+            }
+          }
+        });
+        return result;
+      }
+
+      return Object.freeze({
+        transform: transform,
+        partName: partName,
+        aggregateSummaries: aggregateSummaries,
+        cloneSegments: cloneSegments,
+        countPoints: countPoints
+      });
+    })();
+
     const GeoJsonTrackInterchangeCore = (function(geoJsonPinCore, trackGeometry, colors) {
       function text(value) {
         return value == null ? '' : String(value);
@@ -14728,7 +14976,7 @@ AUDIO_VENDOR_BUNDLE_END
       typeof PIN_COLORS !== 'undefined' ? PIN_COLORS : [{ hex: '#e53935' }]
     );
 
-    const GpxTrackInterchangeCore = (function(trackGeometry, colors) {
+    const GpxTrackInterchangeCore = (function(trackGeometry, batchTransform, colors) {
       const MAX_GPX_TEXT_LENGTH = 5 * 1024 * 1024;
       const MAX_SOURCE_POINTS = 100000;
       const MAX_GENERATED_TRACKS = 20;
@@ -15190,18 +15438,6 @@ AUDIO_VENDOR_BUNDLE_END
         };
       }
 
-      function segmentPointCount(segments) {
-        return segments.reduce(function(total, segment) {
-          return total + segment.points.length;
-        }, 0);
-      }
-
-      function cloneSegments(segments) {
-        return segments.map(function(segment, index) {
-          return { index: index, points: segment.points.slice() };
-        });
-      }
-
       function statsForSegments(sourceStats, segments) {
         let timedPointCount = 0;
         let elevatedPointCount = 0;
@@ -15215,59 +15451,12 @@ AUDIO_VENDOR_BUNDLE_END
           trackElementCount: sourceStats.trackElementCount,
           routeElementCount: sourceStats.routeElementCount,
           segmentCount: segments.length,
-          pointCount: segmentPointCount(segments),
+          pointCount: batchTransform.countPoints(segments),
           timedPointCount: timedPointCount,
           elevatedPointCount: elevatedPointCount,
           ignoredWaypointCount: sourceStats.ignoredWaypointCount,
           ignoredEmptySegmentCount: sourceStats.ignoredEmptySegmentCount
         };
-      }
-
-      function splitSegmentsAtInterruptions(segments, stats) {
-        const stages = [];
-        let stage = [];
-        function flushStage() {
-          if (stage.length) stages.push(stage);
-          stage = [];
-        }
-        segments.forEach(function(segment) {
-          let points = [];
-          let previousTimedMs = null;
-          segment.points.forEach(function(point) {
-            const currentMs = point.time ? Date.parse(point.time) : NaN;
-            if (points.length && previousTimedMs !== null && Number.isFinite(currentMs)
-                && currentMs - previousTimedMs >= INTERRUPTION_MS) {
-              stage.push({ index: stage.length, points: points });
-              flushStage();
-              points = [];
-              stats.interruptionCount += 1;
-            }
-            points.push(point);
-            previousTimedMs = Number.isFinite(currentMs) ? currentMs : null;
-          });
-          if (points.length) stage.push({ index: stage.length, points: points });
-        });
-        flushStage();
-        return stages;
-      }
-
-      function sampleSegmentBySeconds(segment, intervalSeconds) {
-        if (segment.points.length <= 2) {
-          return { index: segment.index, points: segment.points.slice() };
-        }
-        const points = [segment.points[0]];
-        let lastTimedMs = segment.points[0].time ? Date.parse(segment.points[0].time) : null;
-        segment.points.slice(1, -1).forEach(function(point) {
-          const currentMs = point.time ? Date.parse(point.time) : NaN;
-          if (!Number.isFinite(currentMs) || lastTimedMs === null
-              || currentMs - lastTimedMs >= intervalSeconds * 1000) {
-            points.push(point);
-            lastTimedMs = Number.isFinite(currentMs) ? currentMs : null;
-          }
-        });
-        const last = segment.points[segment.points.length - 1];
-        if (points[points.length - 1] !== last) points.push(last);
-        return { index: segment.index, points: points };
       }
 
       function selectEvenly(values, count) {
@@ -15290,7 +15479,9 @@ AUDIO_VENDOR_BUNDLE_END
             }
           });
         });
-        if (mandatory.size > trackGeometry.MAX_POINTS) return cloneSegments(segments);
+        if (mandatory.size > trackGeometry.MAX_POINTS) {
+          return batchTransform.cloneSegments(segments);
+        }
         const optionalCount = Math.min(
           optional.length,
           trackGeometry.MAX_POINTS - mandatory.size
@@ -15303,124 +15494,6 @@ AUDIO_VENDOR_BUNDLE_END
             points: segment.points.filter(function(point) { return retained.has(point); })
           };
         }).filter(function(segment) { return segment.points.length > 0; });
-      }
-
-      function compressStage(stageSegments, stats) {
-        const original = cloneSegments(stageSegments);
-        const originalCount = segmentPointCount(original);
-        if (originalCount <= trackGeometry.MAX_POINTS) return original;
-        let candidate = original;
-        let selectedInterval = 0;
-        COMPRESSION_INTERVAL_SECONDS.some(function(intervalSeconds) {
-          candidate = original.map(function(segment) {
-            return sampleSegmentBySeconds(segment, intervalSeconds);
-          });
-          if (segmentPointCount(candidate) <= trackGeometry.MAX_POINTS) {
-            selectedInterval = intervalSeconds;
-            return true;
-          }
-          return false;
-        });
-        if (!selectedInterval) {
-          const fiveSecondSamplingReduced = segmentPointCount(candidate) < originalCount
-            && original.some(function(segment) {
-              return segment.points.some(function(point) { return !!point.time; });
-            });
-          candidate = reduceUntimedPoints(candidate);
-          if (fiveSecondSamplingReduced) selectedInterval = 5;
-        }
-        const retainedCount = segmentPointCount(candidate);
-        stats.compressedPointCount += originalCount - retainedCount;
-        if (selectedInterval) stats.compressionIntervals.push(selectedInterval);
-        return candidate;
-      }
-
-      function partitionStage(stageSegments) {
-        const parts = [];
-        let current = [];
-        let currentCount = 0;
-        function flush() {
-          if (current.length) parts.push(current);
-          current = [];
-          currentCount = 0;
-        }
-        stageSegments.forEach(function(segment) {
-          if (segment.points.length <= trackGeometry.MAX_POINTS) {
-            if (currentCount && currentCount + segment.points.length > trackGeometry.MAX_POINTS) {
-              flush();
-            }
-            current.push({ index: current.length, points: segment.points.slice() });
-            currentCount += segment.points.length;
-            return;
-          }
-          let offset = 0;
-          while (offset < segment.points.length) {
-            if (currentCount === trackGeometry.MAX_POINTS) flush();
-            const take = Math.min(
-              trackGeometry.MAX_POINTS - currentCount,
-              segment.points.length - offset
-            );
-            current.push({
-              index: current.length,
-              points: segment.points.slice(offset, offset + take)
-            });
-            currentCount += take;
-            offset += take;
-          }
-        });
-        flush();
-        return parts;
-      }
-
-      function partName(baseName, index, total) {
-        if (total === 1) return baseName;
-        const suffix = '(' + (index + 1) + '/' + total + ')';
-        return baseName.slice(0, Math.max(0, 100 - suffix.length)) + suffix;
-      }
-
-      function aggregateSummaries(drafts) {
-        const result = {
-          segmentCount: 0,
-          pointCount: 0,
-          distanceMeters: 0,
-          minElevation: null,
-          maxElevation: null,
-          startTime: '',
-          endTime: '',
-          bounds: null
-        };
-        drafts.forEach(function(draft) {
-          const summary = draft.summary;
-          result.segmentCount += summary.segmentCount;
-          result.pointCount += summary.pointCount;
-          result.distanceMeters += summary.distanceMeters;
-          if (summary.minElevation !== null
-              && (result.minElevation === null || summary.minElevation < result.minElevation)) {
-            result.minElevation = summary.minElevation;
-          }
-          if (summary.maxElevation !== null
-              && (result.maxElevation === null || summary.maxElevation > result.maxElevation)) {
-            result.maxElevation = summary.maxElevation;
-          }
-          if (!result.startTime && summary.startTime) result.startTime = summary.startTime;
-          if (summary.endTime) result.endTime = summary.endTime;
-          if (summary.bounds) {
-            if (!result.bounds) {
-              result.bounds = {
-                south: summary.bounds.south,
-                west: summary.bounds.west,
-                north: summary.bounds.north,
-                east: summary.bounds.east
-              };
-            } else {
-              result.bounds.south = Math.min(result.bounds.south, summary.bounds.south);
-              result.bounds.west = Math.min(result.bounds.west, summary.bounds.west);
-              result.bounds.north = Math.max(result.bounds.north, summary.bounds.north);
-              result.bounds.east = Math.max(result.bounds.east, summary.bounds.east);
-            }
-          }
-        });
-        return result;
       }
 
       function parse(text, options) {
@@ -15494,13 +15567,18 @@ AUDIO_VENDOR_BUNDLE_END
           generatedTrackCount: 0,
           compressionIntervals: []
         };
-        const parts = [];
-        splitSegmentsAtInterruptions(source.collected.segments, transformStats)
-          .forEach(function(stage) {
-            partitionStage(compressStage(stage, transformStats)).forEach(function(part) {
-              parts.push(part);
-            });
-          });
+        const transformed = batchTransform.transform(source.collected.segments, {
+          maxPoints: trackGeometry.MAX_POINTS,
+          interruptionMs: INTERRUPTION_MS,
+          compressionIntervals: COMPRESSION_INTERVAL_SECONDS,
+          reduceOverflow: function(segments) {
+            return reduceUntimedPoints(segments);
+          }
+        });
+        const parts = transformed.parts;
+        transformStats.interruptionCount = transformed.interruptionCount;
+        transformStats.compressedPointCount = transformed.compressedPointCount;
+        transformStats.compressionIntervals = transformed.compressionIntervals.slice();
         if (!parts.length) fail('GPX_TRACK_REQUIRED', 'GPXにトラックまたはルートがありません。');
         if (parts.length > MAX_GENERATED_TRACKS) {
           fail('GPX_GENERATED_TRACK_LIMIT_EXCEEDED', 'GPXの生成トラック数が上限を超えています。');
@@ -15509,7 +15587,7 @@ AUDIO_VENDOR_BUNDLE_END
         const drafts = parts.map(function(segments, index) {
           const partStats = statsForSegments(source.collected.stats, segments);
           return draftFromParsed({
-            name: partName(source.metadata.name, index, parts.length),
+            name: batchTransform.partName(source.metadata.name, index, parts.length),
             description: source.metadata.description,
             color: colors[0] && colors[0].hex,
             sourceType: 'gpx',
@@ -15533,7 +15611,7 @@ AUDIO_VENDOR_BUNDLE_END
         return {
           drafts: drafts,
           baseName: source.metadata.name,
-          summary: aggregateSummaries(drafts),
+          summary: batchTransform.aggregateSummaries(drafts),
           stats: transformStats,
           warnings: cloneWarnings(buildWarnings(aggregateStats))
         };
@@ -15554,13 +15632,13 @@ AUDIO_VENDOR_BUNDLE_END
           ['description', 'color', 'visible', 'lineStyle'].forEach(function(key) {
             if (hasOwn(changes, key)) partPatch[key] = changes[key];
           });
-          partPatch.name = partName(baseName, index, batch.drafts.length);
+          partPatch.name = batchTransform.partName(baseName, index, batch.drafts.length);
           return updateDraft(draft, partPatch);
         });
         return {
           drafts: drafts,
           baseName: baseName,
-          summary: aggregateSummaries(drafts),
+          summary: batchTransform.aggregateSummaries(drafts),
           stats: {
             sourcePointCount: batch.stats.sourcePointCount,
             pointCount: batch.stats.pointCount,
@@ -15633,6 +15711,7 @@ AUDIO_VENDOR_BUNDLE_END
       };
     })(
       TrackGeometryCore,
+      TrackBatchTransformCore,
       typeof PIN_COLORS !== 'undefined' ? PIN_COLORS : [{ hex: '#e53935' }]
     );
 
