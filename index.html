@@ -9909,7 +9909,9 @@ AUDIO_VENDOR_BUNDLE_END
         const folderSnapshot = snapshotOwnFields(
           snapshot.folder, ['id', 'name', 'isRoot'], code, 'Drive folder response is invalid.'
         );
-        if (!isValidId(folderSnapshot.id) || typeof folderSnapshot.isRoot !== 'boolean') {
+        if (typeof folderSnapshot.isRoot !== 'boolean'
+            || (folderSnapshot.id !== '' && !isValidId(folderSnapshot.id))
+            || (folderSnapshot.id === '' && !folderSnapshot.isRoot)) {
           throw errorWithCode(code, 'Drive folder response is invalid.');
         }
         const folder = Object.freeze({

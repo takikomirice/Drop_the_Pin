@@ -2279,7 +2279,9 @@ function listDrivePhotoImportFolder(payload) {
             ? 'DRIVE_IMPORT_FOLDER_TOO_LARGE' : 'DRIVE_IMPORT_FOLDER_READ_FAILED'));
       throw drivePhotoImportError_(mappedCode);
     }
-    const photos = Array.isArray(inbox.items) ? inbox.items : [];
+    const photos = Array.isArray(inbox.items) ? inbox.items.map(function(item) {
+      return Object.assign({}, item, { imported: false });
+    }) : [];
     return {
       ok: true,
       folder: { id: '', name: '取込Inbox', isRoot: true },
