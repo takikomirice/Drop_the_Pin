@@ -12094,6 +12094,9 @@ AUDIO_VENDOR_BUNDLE_END
     })();
 
     const MultiPhotoImportWorkflow = (function() {
+      const PARALLEL_REGISTRATION_MAX_FILE_BYTES = 8 * 1024 * 1024;
+      const PARALLEL_REGISTRATION_MAX_BATCH_BYTES = 64 * 1024 * 1024;
+
       function codedError(code, message) {
         const error = new Error(message);
         error.code = code;
@@ -12108,6 +12111,25 @@ AUDIO_VENDOR_BUNDLE_END
         } catch (_error) {
           // Workflow observers never own Builder, Queue, or saved server results.
         }
+      }
+
+      function registrationConcurrency(job) {
+        const items = job && Array.isArray(job.items) ? job.items : [];
+        let readyItems = 0;
+        let totalBytes = 0;
+        for (let index = 0; index < items.length; index += 1) {
+          const runtime = items[index] && items[index].runtime;
+          const uploadFile = runtime && runtime.uploadFile;
+          if (!uploadFile) continue;
+          const size = Number(uploadFile.size);
+          if (!Number.isSafeInteger(size) || size <= 0
+              || size > PARALLEL_REGISTRATION_MAX_FILE_BYTES) return 1;
+          readyItems += 1;
+          totalBytes += size;
+          if (!Number.isSafeInteger(totalBytes)
+              || totalBytes > PARALLEL_REGISTRATION_MAX_BATCH_BYTES) return 1;
+        }
+        return readyItems > 1 ? 2 : 1;
       }
 
       function create(options) {
@@ -12261,7 +12283,7 @@ AUDIO_VENDOR_BUNDLE_END
             let controller;
             controller = flowApi.create({
               processItem: processor.processItem,
-              concurrency: 2,
+              concurrency: registrationConcurrency(job),
               validateJob: config.validator && config.validator.validateJob,
               onJobChange: function(nextJob, event) {
                 if (workflowState.requestToken !== token) return;
