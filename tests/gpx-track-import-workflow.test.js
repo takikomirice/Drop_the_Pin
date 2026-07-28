@@ -577,8 +577,11 @@ test('GPX preview shows safe summary stats warnings and editable metadata withou
   assert.ok(await setup.geojson.importFile({
     name: 'next.geojson', type: 'application/geo+json', size: 200, text: async () => geoJson
   }));
-  assert.equal(setup.documentApi.getElementById('track-import-preview-stats').textContent, '');
-  assert.equal(setup.documentApi.getElementById('track-import-preview-stats').style.display, 'none');
+  assert.match(
+    setup.documentApi.getElementById('track-import-preview-stats').textContent,
+    /元point 2.*保存point 2.*生成ルート 1件/
+  );
+  assert.equal(setup.documentApi.getElementById('track-import-preview-stats').style.display, '');
   assert.equal(setup.documentApi.getElementById('track-import-preview-warnings').textContent, '');
   assert.equal(setup.documentApi.getElementById('track-import-preview-warnings').style.display, 'none');
 });
