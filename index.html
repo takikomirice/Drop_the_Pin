@@ -15818,7 +15818,15 @@ AUDIO_VENDOR_BUNDLE_END
       renderStats: function(subject) {
         const batch = subject && Array.isArray(subject.drafts) ? subject : null;
         const sourceStats = batch && batch.drafts.length ? batch.drafts[0].stats : subject && subject.stats;
-        const stats = sourceStats || {};
+        const stats = Object.assign({}, sourceStats || {});
+        if (batch) {
+          stats.timedPointCount = batch.drafts.reduce(function(total, draft) {
+            return total + Number(draft && draft.stats && draft.stats.timedPointCount || 0);
+          }, 0);
+          stats.elevatedPointCount = batch.drafts.reduce(function(total, draft) {
+            return total + Number(draft && draft.stats && draft.stats.elevatedPointCount || 0);
+          }, 0);
+        }
         let rendered = 'trk要素 ' + Number(stats.trackElementCount || 0)
           + ' / rte要素 ' + Number(stats.routeElementCount || 0)
           + ' / 時刻付きpoint ' + Number(stats.timedPointCount || 0)

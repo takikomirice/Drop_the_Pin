@@ -596,6 +596,8 @@ test('GPX preview lists every route created by an interruption and shows aggrega
   assert.match(parts.textContent, /縦走\(2\/2\)/);
   assert.match(setup.documentApi.getElementById('track-import-preview-stats').textContent,
     /記録中断 1件.*生成ルート 2件/s);
+  assert.match(setup.documentApi.getElementById('track-import-preview-stats').textContent,
+    /時刻付きpoint 4/);
   assert.equal(setup.documentApi.getElementById('track-import-preview-points').textContent, '4');
 });
 

@@ -36,7 +36,7 @@
   - `toSavePayloads(batch)`
 - Preserves: single-output `parse`, `buildDraft`, `updateDraft`, `toSavePayload`
 
-- [ ] **Step 1: Read the test-quality rules before changing tests**
+- [x] **Step 1: Read the test-quality rules before changing tests**
 
 Run:
 
@@ -46,7 +46,7 @@ Get-Content -Raw 'C:\Users\takik\.codex\plugins\cache\openai-curated-remote\supe
 
 Expected: testが本番動作を直接検証し、実装詳細やmockだけを検証しないルールを確認できる。
 
-- [ ] **Step 2: Add failing duplicate-removal tests**
+- [x] **Step 2: Add failing duplicate-removal tests**
 
 Add helpers and tests to `tests/gpx-track-interchange-core.test.js`:
 
@@ -82,7 +82,7 @@ test('GPX duplicate removal is exact timed and scoped to its source segment', ()
 
 Name the production change that makes these tests pass: `buildDraftBatch()` must validate every source point, then deduplicate exact timed points before `MAX_POINTS` is enforced.
 
-- [ ] **Step 3: Run duplicate tests and verify RED**
+- [x] **Step 3: Run duplicate tests and verify RED**
 
 Run:
 
@@ -92,7 +92,7 @@ node --test --test-name-pattern "batch removes exact|duplicate removal is exact"
 
 Expected: FAIL because `buildDraftBatch` does not exist.
 
-- [ ] **Step 4: Implement validated source collection and exact deduplication**
+- [x] **Step 4: Implement validated source collection and exact deduplication**
 
 In `GpxTrackInterchangeCore`:
 
@@ -131,7 +131,7 @@ function normalizeSourcePoints(pointElements, sourceStats) {
 
 Refactor `collectSegments()` so source parsing does not apply `trackGeometry.MAX_POINTS` before deduplication. Keep the existing 200 source segment limit and safe metadata traversal.
 
-- [ ] **Step 5: Run duplicate tests and verify GREEN**
+- [x] **Step 5: Run duplicate tests and verify GREEN**
 
 Run:
 
@@ -141,7 +141,7 @@ node --test --test-name-pattern "batch removes exact|duplicate removal is exact"
 
 Expected: PASS.
 
-- [ ] **Step 6: Add failing interruption, compression, and overflow-splitting tests**
+- [x] **Step 6: Add failing interruption, compression, and overflow-splitting tests**
 
 Add:
 
@@ -210,7 +210,7 @@ test('GPX batch partitions a stage that still exceeds 20000 points without losin
 
 The last case uses two-second source points over more than 27 hours. Five-second sampling still leaves 20,001 points, so it proves that the sampled points are partitioned in order without another deletion pass.
 
-- [ ] **Step 7: Run new transformation tests and verify RED**
+- [x] **Step 7: Run new transformation tests and verify RED**
 
 Run:
 
@@ -220,7 +220,7 @@ node --test --test-name-pattern "four-hour interruption|smallest whole-second|pa
 
 Expected: FAIL because interruption splitting, interval selection, partitioning, and suffix naming are missing.
 
-- [ ] **Step 8: Implement stage splitting, compression, partitioning, and batch draft APIs**
+- [x] **Step 8: Implement stage splitting, compression, partitioning, and batch draft APIs**
 
 Add these pure helpers:
 
@@ -329,7 +329,7 @@ Implementation rules:
 - `updateDraftBatch()` validates a common patch through the existing `updateDraft()`, applies the common description/color/visibility/style to every draft, and regenerates all names through `partName()`.
 - `toSavePayloads()` maps the batch drafts through the existing `toSavePayload()` whitelist and returns a deep-independent array.
 
-- [ ] **Step 9: Run the complete GPX core test file**
+- [x] **Step 9: Run the complete GPX core test file**
 
 Run:
 
@@ -339,7 +339,7 @@ node --test tests/gpx-track-interchange-core.test.js
 
 Expected: PASS, including existing GPX 1.0／1.1, XML safety, metadata, and single-draft tests.
 
-- [ ] **Step 10: Commit the core**
+- [x] **Step 10: Commit the core**
 
 Run:
 
@@ -363,7 +363,7 @@ Expected: one commit containing only core behavior and core tests.
 - Produces: `importState.batch`, preview list `#track-import-preview-parts`, common form editing across all drafts
 - Preserves: GeoJSON as a one-draft batch and the existing single-track preview
 
-- [ ] **Step 1: Add failing preview tests**
+- [x] **Step 1: Add failing preview tests**
 
 Extend the test document and workflow state to include `batch`, `submittedPayloads`, and `savedTrackIds`, then add:
 
@@ -395,7 +395,7 @@ test('editing a GPX batch applies common metadata and regenerates every suffix',
 });
 ```
 
-- [ ] **Step 2: Run preview tests and verify RED**
+- [x] **Step 2: Run preview tests and verify RED**
 
 Run:
 
@@ -405,7 +405,7 @@ node --test --test-name-pattern "preview renders generated|editing a GPX batch" 
 
 Expected: FAIL because the workflow stores one `draft` and has no parts preview.
 
-- [ ] **Step 3: Implement adapter batch normalization**
+- [x] **Step 3: Implement adapter batch normalization**
 
 Extend `createTrackFileImportAdapter()`:
 
@@ -434,7 +434,7 @@ toSavePayloads: function(batch) {
 
 Keep the existing adapter methods as compatibility aliases.
 
-- [ ] **Step 4: Implement batch state and preview list**
+- [x] **Step 4: Implement batch state and preview list**
 
 Add `#track-import-preview-parts` after the legacy summary using the existing `section-card` class. In `TrackFileImportUI`:
 
@@ -448,7 +448,7 @@ Add `#track-import-preview-parts` after the legacy summary using the existing `s
 
 When the saved-track edit overlay reuses this DOM, clear and hide `track-import-preview-parts`.
 
-- [ ] **Step 5: Run focused preview tests**
+- [x] **Step 5: Run focused preview tests**
 
 Run:
 
@@ -458,7 +458,7 @@ node --test --test-name-pattern "preview renders generated|editing a GPX batch|p
 
 Expected: PASS.
 
-- [ ] **Step 6: Run all GPX UI workflow tests**
+- [x] **Step 6: Run all GPX UI workflow tests**
 
 Run:
 
@@ -468,7 +468,7 @@ node --test tests/gpx-track-import-workflow.test.js
 
 Expected: PASS; GeoJSON continues to behave as a one-draft batch.
 
-- [ ] **Step 7: Commit preview support**
+- [x] **Step 7: Commit preview support**
 
 Run:
 
@@ -492,7 +492,7 @@ Expected: one commit containing preview/state changes and their tests.
 - Produces: stable `submittedPayloads`, `savedTrackIds`, sequential `saveTrackBundle` calls, retry progress
 - Preserves: single GeoJSON/GPX save response validation and `onSaved(track)`
 
-- [ ] **Step 1: Add failing sequential-save and retry tests**
+- [x] **Step 1: Add failing sequential-save and retry tests**
 
 Add:
 
@@ -540,7 +540,7 @@ test('split GPX retry reuses every payload and does not duplicate applied tracks
 });
 ```
 
-- [ ] **Step 2: Run save tests and verify RED**
+- [x] **Step 2: Run save tests and verify RED**
 
 Run:
 
@@ -550,7 +550,7 @@ node --test --test-name-pattern "payloads save sequentially|retry reuses every p
 
 Expected: FAIL because only one submitted payload is supported.
 
-- [ ] **Step 3: Implement stable sequential submission**
+- [x] **Step 3: Implement stable sequential submission**
 
 Refactor save state:
 
@@ -578,7 +578,7 @@ On retry, start from the same payload array. Already-saved revisions may be sent
 
 Render `保存中 X/N` while saving and `X/N件を保存しました。再試行してください。` on partial failure.
 
-- [ ] **Step 4: Add and implement the client track-capacity preflight**
+- [x] **Step 4: Add and implement the client track-capacity preflight**
 
 Pass:
 
@@ -594,7 +594,7 @@ getTrackCount() + importState.batch.drafts.length > 100
 
 with `TRACK_LIMIT_EXCEEDED`. The server remains authoritative and still checks each payload under lock.
 
-- [ ] **Step 5: Run focused save tests**
+- [x] **Step 5: Run focused save tests**
 
 Run:
 
@@ -604,7 +604,7 @@ node --test --test-name-pattern "payloads save sequentially|retry reuses every p
 
 Expected: PASS.
 
-- [ ] **Step 6: Run core, workflow, and server storage regression tests**
+- [x] **Step 6: Run core, workflow, and server storage regression tests**
 
 Run:
 
@@ -614,7 +614,7 @@ node --test tests/gpx-track-interchange-core.test.js tests/gpx-track-import-work
 
 Expected: PASS. `Code.js` continues rejecting any individual payload above 20,000 points.
 
-- [ ] **Step 7: Commit sequential saving**
+- [x] **Step 7: Commit sequential saving**
 
 Run:
 
@@ -636,7 +636,7 @@ Expected: one commit containing save/retry/capacity behavior and tests.
 - Documents: 5MB、100,000 source point、完全重複除去、最大5秒圧縮、4時間中断分割、各20,000 point／最大20生成トラック
 - Verifies: `yamap_2025-11-23_09_07.gpx` becomes one 17,724-point draft without modifying the file
 
-- [ ] **Step 1: Add a failing README contract test**
+- [x] **Step 1: Add a failing README contract test**
 
 Update `tests/gpx-track-import-ui.test.js`:
 
@@ -647,7 +647,7 @@ test('README documents adaptive GPX normalization limits', () => {
 });
 ```
 
-- [ ] **Step 2: Run the documentation test and verify RED**
+- [x] **Step 2: Run the documentation test and verify RED**
 
 Run:
 
@@ -657,7 +657,7 @@ node --test --test-name-pattern "adaptive GPX normalization" tests/gpx-track-imp
 
 Expected: FAIL because README still says only 20,000 points.
 
-- [ ] **Step 3: Update README**
+- [x] **Step 3: Update README**
 
 Replace the GPX capability row with concise wording that includes:
 
@@ -667,7 +667,7 @@ GPX 1.0 / 1.1、trk／rte、5MB・100,000 source pointまで。完全重複を�
 
 Do not change unrelated setup or Drive-account documentation.
 
-- [ ] **Step 4: Run the documentation test and verify GREEN**
+- [x] **Step 4: Run the documentation test and verify GREEN**
 
 Run:
 
@@ -677,7 +677,7 @@ node --test tests/gpx-track-import-ui.test.js
 
 Expected: PASS.
 
-- [ ] **Step 5: Run the actual YAMAP file through the production core**
+- [x] **Step 5: Run the actual YAMAP file through the production core**
 
 Run a read-only Node/PowerShell harness against:
 
@@ -694,7 +694,7 @@ Expected:
 - compression interval: none
 - original file hash and byte length unchanged
 
-- [ ] **Step 6: Run required full verification**
+- [x] **Step 6: Run required full verification**
 
 Run:
 
@@ -709,7 +709,7 @@ git diff HEAD~3
 
 Expected: all tests pass; no XML contents, personal coordinates, unrelated Drive/photo changes, server schema changes, or generated artifacts are committed.
 
-- [ ] **Step 7: Review safety and compatibility**
+- [x] **Step 7: Review safety and compatibility**
 
 Confirm:
 
@@ -722,7 +722,7 @@ Confirm:
 - shared.html and storage schemas are unchanged;
 - source GPX is never written.
 
-- [ ] **Step 8: Commit documentation and push**
+- [x] **Step 8: Commit documentation and push**
 
 Run:
 
