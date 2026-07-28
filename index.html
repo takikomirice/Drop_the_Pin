@@ -16161,7 +16161,7 @@ AUDIO_VENDOR_BUNDLE_END
     function safeGeoJsonTrackImportMessage(error) {
       const code = String(error && error.code || '');
       if (code === 'GEOJSON_FILE_TYPE_INVALID') return 'GeoJSONまたはJSONファイルを選択してください。';
-      if (code === 'GEOJSON_FILE_TOO_LARGE') return 'GeoJSONファイルは2MB以内にしてください。';
+      if (code === 'GEOJSON_FILE_TOO_LARGE') return 'GeoJSONファイルは5MB以内にしてください。';
       if (code === 'GEOJSON_FILE_READ_FAILED') return 'GeoJSONファイルを読み込めませんでした。';
       if (code === 'IMPORT_ITEM_LIMIT_EXCEEDED') return 'GeoJSONのFeatureは20件以内にしてください。';
       if (code === 'GEOJSON_FEATURES_REQUIRED') return 'GeoJSONに1件以上のFeatureを含めてください。';
@@ -16173,6 +16173,12 @@ AUDIO_VENDOR_BUNDLE_END
       if (code === 'GEOJSON_TRACK_GEOMETRY_UNSUPPORTED') return 'このGeoJSONのgeometryはルートとして取り込めません。';
       if (code === 'TRACK_SEGMENT_LIMIT_EXCEEDED') return 'ルートのsegment数が上限を超えています。';
       if (code === 'TRACK_POINT_LIMIT_EXCEEDED') return 'ルートのpoint数が上限を超えています。';
+      if (code === 'GEOJSON_SOURCE_POINT_LIMIT_EXCEEDED') {
+        return 'GeoJSONの元point数は100,000件以内にしてください。';
+      }
+      if (code === 'GEOJSON_GENERATED_TRACK_LIMIT_EXCEEDED') {
+        return 'GeoJSONから生成されるルート数が20件を超えています。';
+      }
       if (code === 'GEOJSON_TRACK_TIME_CONFLICT') return 'coordTimesとtimesの内容が一致しません。';
       if (code === 'GEOJSON_TRACK_TIME_SHAPE_INVALID') return '時刻配列と座標配列の形を一致させてください。';
       if (code === 'GEOJSON_TRACK_TIME_INVALID') return 'ルートの時刻を確認してください。timezone指定が必要です。';
@@ -16208,7 +16214,7 @@ AUDIO_VENDOR_BUNDLE_END
 
     const GeoJsonTrackImportAdapter = createTrackFileImportAdapter({
       kind: 'geojson', label: 'GeoJSON', core: GeoJsonTrackInterchangeCore,
-      maxFileBytes: 2 * 1024 * 1024,
+      maxFileBytes: 5 * 1024 * 1024,
       extensionPattern: /\.(?:geojson|json)$/i,
       acceptedMimeTypes: ['application/geo+json', 'application/json'],
       fileTypeErrorCode: 'GEOJSON_FILE_TYPE_INVALID',
@@ -16223,7 +16229,23 @@ AUDIO_VENDOR_BUNDLE_END
       loadedMessage: 'GeoJSONルートを読み込みました。',
       unavailableMessage: '編集モードでのみGeoJSONルートを取り込めます。',
       activeMessage: 'GeoJSONルート取込を閉じてから次のファイルを選択してください。',
-      renderStats: function() { return ''; }, renderWarnings: function() { return []; }
+      renderStats: function(subject) {
+        const stats = subject && subject.stats || {};
+        let rendered = '元point ' + Number(stats.sourcePointCount || 0)
+          + ' / 保存point ' + Number(stats.pointCount || 0)
+          + ' / 完全重複除去 ' + Number(stats.duplicatePointCount || 0)
+          + ' / 記録中断 ' + Number(stats.interruptionCount || 0) + '件'
+          + ' / 時刻圧縮除去 ' + Number(stats.timeCompressedPointCount || 0)
+          + ' / 形状圧縮除去 ' + Number(stats.shapeCompressedPointCount || 0)
+          + ' / 生成ルート ' + Number(stats.generatedTrackCount || 0) + '件';
+        const intervals = Array.isArray(stats.compressionIntervals)
+          ? stats.compressionIntervals.filter(function(value, index, values) {
+            return values.indexOf(value) === index;
+          }) : [];
+        if (intervals.length) rendered += ' / 圧縮間隔 ' + intervals.join('秒・') + '秒';
+        return rendered;
+      },
+      renderWarnings: function() { return []; }
     });
 
     const GpxTrackImportAdapter = createTrackFileImportAdapter({

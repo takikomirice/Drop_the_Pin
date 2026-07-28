@@ -329,14 +329,14 @@ test('track preview color swatches are rebuilt from PIN_COLORS without duplicate
 
 test('file selection resets immediately and rejects oversized files before File.text', async () => {
   const exact = createController();
-  assert.ok(await exact.controller.importFile(file({ size: 2 * 1024 * 1024 })));
+  assert.ok(await exact.controller.importFile(file({ size: 5 * 1024 * 1024 })));
   assert.equal(exact.controller.discard(), true);
 
   const { controller, state, documentApi } = createController();
   let reads = 0;
   const input = documentApi.getElementById('geojson-track-file-input');
   input.value = 'C:\\fakepath\\large.geojson';
-  input.files = [file({ size: 2 * 1024 * 1024 + 1, text: async () => { reads += 1; return geoJson(); } })];
+  input.files = [file({ size: 5 * 1024 * 1024 + 1, text: async () => { reads += 1; return geoJson(); } })];
   const result = await controller.handleFileSelected({ target: input });
   assert.equal(input.value, '');
   assert.equal(result, null);
@@ -344,7 +344,7 @@ test('file selection resets immediately and rejects oversized files before File.
   assert.equal(state.loading, false);
   assert.equal(state.draft, null);
   assert.equal(state.errorCode, 'GEOJSON_FILE_TOO_LARGE');
-  assert.equal(documentApi.getElementById('geojson-track-operation-error').textContent, 'GeoJSONファイルは2MB以内にしてください。');
+  assert.equal(documentApi.getElementById('geojson-track-operation-error').textContent, 'GeoJSONファイルは5MB以内にしてください。');
 });
 
 test('one active read blocks another and settings close invalidates delayed results without retaining File or text', async () => {
@@ -411,6 +411,15 @@ test('GeoJSON generated routes use the common preview and resume a fixed failed 
   assert.deepEqual(plain(imported.drafts.map((value) => value.name)), [
     'Morning walk(1/2)', 'Morning walk(2/2)'
   ]);
+  const stats = setup.documentApi.getElementById('track-import-preview-stats').textContent;
+  assert.match(stats, /元point 3/);
+  assert.match(stats, /保存point 3/);
+  assert.match(stats, /記録中断 1件/);
+  assert.match(stats, /生成ルート 2件/);
+  assert.match(
+    setup.documentApi.getElementById('track-import-preview-parts').textContent,
+    /1\..*\n2\./
+  );
   setup.documentApi.getElementById('track-import-preview-name').value = 'Edited route';
 
   assert.equal(await setup.controller.save(), false);
