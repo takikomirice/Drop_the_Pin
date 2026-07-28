@@ -189,7 +189,8 @@ function loadModules(documentApi) {
 
 function createState() {
   return {
-    owner: '', loading: false, requestToken: 0, draft: null, submittedPayload: null,
+    owner: '', loading: false, requestToken: 0, batch: null, draft: null,
+    submittedPayload: null, submittedPayloads: null, saveIndex: 0,
     saving: false, saved: false, errorCode: '', retryable: null, sourceKind: '', sourceName: ''
   };
 }
@@ -209,6 +210,7 @@ function createWorkflow(options = {}) {
       return { ok: true, track: { ...plain(payload), orderIndex: 0 } };
     }),
     withEditToken: (payload) => ({ ...plain(payload), __editToken: 'token' }),
+    getTrackCount: options.getTrackCount || (() => 0),
     normalizeSavedTrack: modules.geometry.normalizeTrack,
     onSaved: (track) => {
       savedTracks.push(plain(track));
@@ -228,6 +230,34 @@ function gpxFile(overrides = {}) {
     name: 'walk.gpx', type: 'application/gpx+xml', size: 512,
     text: async () => fixture('gpx-mixed.gpx'), ...overrides
   };
+}
+
+function interruptedGpx() {
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<gpx version="1.1" creator="test" xmlns="http://www.topografix.com/GPX/1/1">',
+    '<metadata><name>縦走</name></metadata><trk><trkseg>',
+    '<trkpt lat="35.0000" lon="139.0000"><time>2026-07-20T00:00:00Z</time></trkpt>',
+    '<trkpt lat="35.0001" lon="139.0001"><time>2026-07-20T00:00:05Z</time></trkpt>',
+    '<trkpt lat="35.1000" lon="139.1000"><time>2026-07-20T04:00:05Z</time></trkpt>',
+    '<trkpt lat="35.1001" lon="139.1001"><time>2026-07-20T04:00:10Z</time></trkpt>',
+    '</trkseg></trk></gpx>'
+  ].join('');
+}
+
+function threeStageGpx() {
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<gpx version="1.1" creator="test" xmlns="http://www.topografix.com/GPX/1/1">',
+    '<metadata><name>三日行程</name></metadata><trk><trkseg>',
+    '<trkpt lat="35.0000" lon="139.0000"><time>2026-07-20T00:00:00Z</time></trkpt>',
+    '<trkpt lat="35.0001" lon="139.0001"><time>2026-07-20T00:00:05Z</time></trkpt>',
+    '<trkpt lat="35.1000" lon="139.1000"><time>2026-07-20T04:00:05Z</time></trkpt>',
+    '<trkpt lat="35.1001" lon="139.1001"><time>2026-07-20T04:00:10Z</time></trkpt>',
+    '<trkpt lat="35.2000" lon="139.2000"><time>2026-07-20T08:00:10Z</time></trkpt>',
+    '<trkpt lat="35.2001" lon="139.2001"><time>2026-07-20T08:00:15Z</time></trkpt>',
+    '</trkseg></trk></gpx>'
+  ].join('');
 }
 
 function createTrackServer() {
@@ -322,7 +352,7 @@ test('production wires GeoJSON and GPX adapters into one track workflow and save
   assert.notEqual(end, -1, 'Expected compatibility alias boundary');
   const source = indexHtml.slice(start, end);
   assert.equal((source.match(/saveTrackBundle/g) || []).length, 1);
-  assert.match(source, /adapter\.core\.toSavePayload\(draft\)/);
+  assert.match(source, /adapter\.toSavePayloads\(importState\.batch\)/);
   assert.match(source, /owner !== kind|owner === kind/);
   assert.match(source, /sourceKind/);
   assert.match(source, /sourceName/);
@@ -551,6 +581,120 @@ test('GPX preview shows safe summary stats warnings and editable metadata withou
   assert.equal(setup.documentApi.getElementById('track-import-preview-stats').style.display, 'none');
   assert.equal(setup.documentApi.getElementById('track-import-preview-warnings').textContent, '');
   assert.equal(setup.documentApi.getElementById('track-import-preview-warnings').style.display, 'none');
+});
+
+test('GPX preview lists every route created by an interruption and shows aggregate transform stats', async () => {
+  const setup = createWorkflow();
+  const batch = await setup.gpx.importFile(gpxFile({ text: async () => interruptedGpx() }));
+
+  assert.equal(batch.drafts.length, 2);
+  assert.equal(setup.state.batch.drafts.length, 2);
+  assert.equal(setup.state.draft.name, '縦走(1/2)');
+  const parts = setup.documentApi.getElementById('track-import-preview-parts');
+  assert.equal(parts.style.display, '');
+  assert.match(parts.textContent, /縦走\(1\/2\)/);
+  assert.match(parts.textContent, /縦走\(2\/2\)/);
+  assert.match(setup.documentApi.getElementById('track-import-preview-stats').textContent,
+    /記録中断 1件.*生成ルート 2件/s);
+  assert.equal(setup.documentApi.getElementById('track-import-preview-points').textContent, '4');
+});
+
+test('GPX common preview edits are applied to every generated route and refresh part names', async () => {
+  const setup = createWorkflow();
+  await setup.gpx.importFile(gpxFile({ text: async () => interruptedGpx() }));
+  setup.documentApi.getElementById('track-import-preview-name').value = '編集後';
+  setup.documentApi.getElementById('track-import-preview-description').value = '共通説明';
+  setup.documentApi.getElementById('track-import-preview-line-style').value = 'dashed';
+  setup.documentApi.getElementById('track-import-preview-visible').checked = false;
+
+  const batch = setup.gpx.syncDraftFromForm();
+
+  assert.deepEqual(plain(batch.drafts.map((draft) => draft.name)), ['編集後(1/2)', '編集後(2/2)']);
+  assert.deepEqual(plain(batch.drafts.map((draft) => draft.description)), ['共通説明', '共通説明']);
+  assert.deepEqual(plain(batch.drafts.map((draft) => draft.lineStyle)), ['dashed', 'dashed']);
+  assert.deepEqual(plain(batch.drafts.map((draft) => draft.visible)), [false, false]);
+  assert.match(setup.documentApi.getElementById('track-import-preview-parts').textContent, /編集後\(1\/2\)/);
+  assert.match(setup.documentApi.getElementById('track-import-preview-parts').textContent, /編集後\(2\/2\)/);
+});
+
+test('GPX generated routes are saved sequentially in displayed order', async () => {
+  const requests = [];
+  let activeRequests = 0;
+  let maxActiveRequests = 0;
+  const setup = createWorkflow({
+    async callGAS(method, payload) {
+      assert.equal(method, 'saveTrackBundle');
+      activeRequests += 1;
+      maxActiveRequests = Math.max(maxActiveRequests, activeRequests);
+      await Promise.resolve();
+      const submitted = plain(payload);
+      delete submitted.__editToken;
+      requests.push(submitted);
+      activeRequests -= 1;
+      return { ok: true, track: { ...submitted, orderIndex: requests.length - 1 } };
+    }
+  });
+  await setup.gpx.importFile(gpxFile({ text: async () => interruptedGpx() }));
+
+  assert.equal(await setup.root.save(), true);
+  assert.equal(maxActiveRequests, 1);
+  assert.deepEqual(requests.map((payload) => payload.name), ['縦走(1/2)', '縦走(2/2)']);
+  assert.deepEqual(setup.savedTracks.map((track) => track.name), ['縦走(1/2)', '縦走(2/2)']);
+  assert.equal(setup.state.saved, true);
+  assert.equal(setup.state.saveIndex, 2);
+});
+
+test('GPX retry resumes at the failed generated route without resending completed routes', async () => {
+  const requests = [];
+  let secondAttempt = 0;
+  const setup = createWorkflow({
+    async callGAS(method, payload) {
+      assert.equal(method, 'saveTrackBundle');
+      const submitted = plain(payload);
+      delete submitted.__editToken;
+      requests.push(submitted);
+      if (submitted.name === '三日行程(2/3)' && secondAttempt++ === 0) {
+        throw new Error('response lost');
+      }
+      return { ok: true, track: { ...submitted, orderIndex: requests.length - 1 } };
+    }
+  });
+  await setup.gpx.importFile(gpxFile({ text: async () => threeStageGpx() }));
+
+  assert.equal(await setup.root.save(), false);
+  assert.deepEqual(requests.map((payload) => payload.name), ['三日行程(1/3)', '三日行程(2/3)']);
+  assert.deepEqual(setup.savedTracks.map((track) => track.name), ['三日行程(1/3)']);
+  assert.equal(setup.state.saveIndex, 1);
+  assert.equal(setup.state.retryable, true);
+  assert.match(setup.documentApi.getElementById('track-import-preview-error').textContent,
+    /2\/3件目で停止.*1件は保存済み/);
+  const firstFailedPayload = requests[1];
+
+  assert.equal(await setup.root.retry(), true);
+  assert.deepEqual(requests.map((payload) => payload.name), [
+    '三日行程(1/3)', '三日行程(2/3)', '三日行程(2/3)', '三日行程(3/3)'
+  ]);
+  assert.deepEqual(requests[2], firstFailedPayload);
+  assert.deepEqual(setup.savedTracks.map((track) => track.name),
+    ['三日行程(1/3)', '三日行程(2/3)', '三日行程(3/3)']);
+  assert.equal(setup.state.saveIndex, 3);
+  assert.equal(setup.state.saved, true);
+  assert.equal(setup.state.submittedPayloads.some((payload) => '__editToken' in payload), false);
+});
+
+test('GPX batch capacity is checked before any generated route is saved', async () => {
+  const rejected = createWorkflow({ getTrackCount: () => 99 });
+  await rejected.gpx.importFile(gpxFile({ text: async () => interruptedGpx() }));
+  assert.equal(await rejected.root.save(), false);
+  assert.equal(rejected.calls.length, 0);
+  assert.equal(rejected.state.errorCode, 'TRACK_LIMIT_EXCEEDED');
+  assert.equal(rejected.state.retryable, false);
+  assert.equal(rejected.state.submittedPayloads, null);
+
+  const accepted = createWorkflow({ getTrackCount: () => 98 });
+  await accepted.gpx.importFile(gpxFile({ text: async () => interruptedGpx() }));
+  assert.equal(await accepted.root.save(), true);
+  assert.equal(accepted.calls.length, 2);
 });
 
 test('owner invalidation prevents an old GPX promise from changing a newer GeoJSON import', async () => {

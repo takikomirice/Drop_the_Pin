@@ -3540,6 +3540,7 @@ AUDIO_VENDOR_BUNDLE_END
           <dt>標高範囲</dt><dd id="track-import-preview-elevation">—</dd>
         </dl>
         <div id="track-import-preview-summary" class="track-import-preview-legacy-summary"></div>
+        <div id="track-import-preview-parts" class="section-card" style="display:none;white-space:pre-line;"></div>
         <div id="track-import-preview-stats" class="section-card" style="display:none;"></div>
         <div id="track-import-preview-warnings" class="section-card" style="display:none;white-space:pre-line;"></div>
         <div id="track-import-preview-state" class="route-preview-state" role="status" aria-live="polite"></div>
@@ -15683,6 +15684,38 @@ AUDIO_VENDOR_BUNDLE_END
         buildDraft: function(contents, options) {
           return adapterConfig.core.buildDraft(contents, options);
         },
+        buildBatch: function(contents, options) {
+          if (typeof adapterConfig.core.buildDraftBatch === 'function') {
+            return adapterConfig.core.buildDraftBatch(contents, options);
+          }
+          const draft = adapterConfig.core.buildDraft(contents, options);
+          return {
+            drafts: [draft],
+            baseName: draft.name,
+            summary: draft.summary,
+            stats: draft.stats || null,
+            warnings: Array.isArray(draft.warnings) ? draft.warnings.slice() : []
+          };
+        },
+        updateBatch: function(batch, patch) {
+          if (typeof adapterConfig.core.updateDraftBatch === 'function') {
+            return adapterConfig.core.updateDraftBatch(batch, patch);
+          }
+          const draft = adapterConfig.core.updateDraft(batch.drafts[0], patch);
+          return {
+            drafts: [draft],
+            baseName: draft.name,
+            summary: draft.summary,
+            stats: draft.stats || null,
+            warnings: Array.isArray(draft.warnings) ? draft.warnings.slice() : []
+          };
+        },
+        toSavePayloads: function(batch) {
+          if (typeof adapterConfig.core.toSavePayloads === 'function') {
+            return adapterConfig.core.toSavePayloads(batch);
+          }
+          return [adapterConfig.core.toSavePayload(batch.drafts[0])];
+        },
         safeImportMessage: adapterConfig.safeImportMessage,
         previewTitle: adapterConfig.previewTitle,
         operationStatusId: adapterConfig.operationStatusId,
@@ -15740,6 +15773,8 @@ AUDIO_VENDOR_BUNDLE_END
         GPX_POINT_TIME_INVALID: 'GPX内の時刻を確認してください。timezone付きの時刻が必要です。',
         GPX_TRACK_REQUIRED: 'このGPXには取り込める軌跡またはルートがありません。',
         GPX_METADATA_INVALID: 'GPXのルート情報を確認してください。',
+        GPX_SOURCE_POINT_LIMIT_EXCEEDED: 'GPXの元point数は100,000件以内にしてください。',
+        GPX_GENERATED_TRACK_LIMIT_EXCEEDED: 'GPXから生成されるルート数が20件を超えています。',
         TRACK_SEGMENT_LIMIT_EXCEEDED: 'ルートのsegment数が上限を超えています。',
         TRACK_POINT_LIMIT_EXCEEDED: 'ルートのpoint数が上限を超えています。'
       };
@@ -15780,23 +15815,40 @@ AUDIO_VENDOR_BUNDLE_END
       idleLabel: 'GPXルート取込', loadedMessage: 'GPXルートを読み込みました。',
       unavailableMessage: '編集モードでのみGPXルートを取り込めます。',
       activeMessage: 'GPXルート取込を閉じてから次のファイルを選択してください。',
-      renderStats: function(draft) {
-        const stats = draft && draft.stats || {};
-        return 'trk要素 ' + Number(stats.trackElementCount || 0)
+      renderStats: function(subject) {
+        const batch = subject && Array.isArray(subject.drafts) ? subject : null;
+        const sourceStats = batch && batch.drafts.length ? batch.drafts[0].stats : subject && subject.stats;
+        const stats = sourceStats || {};
+        let rendered = 'trk要素 ' + Number(stats.trackElementCount || 0)
           + ' / rte要素 ' + Number(stats.routeElementCount || 0)
           + ' / 時刻付きpoint ' + Number(stats.timedPointCount || 0)
           + ' / 標高付きpoint ' + Number(stats.elevatedPointCount || 0)
           + ' / 無視したwaypoint ' + Number(stats.ignoredWaypointCount || 0)
           + ' / 無視した空segment ' + Number(stats.ignoredEmptySegmentCount || 0);
+        if (batch) {
+          const transformed = batch.stats || {};
+          rendered += '\n元point ' + Number(transformed.sourcePointCount || 0)
+            + ' / 保存point ' + Number(transformed.pointCount || 0)
+            + ' / 完全重複除去 ' + Number(transformed.duplicatePointCount || 0)
+            + ' / 記録中断 ' + Number(transformed.interruptionCount || 0) + '件'
+            + ' / 圧縮除去 ' + Number(transformed.compressedPointCount || 0)
+            + ' / 生成ルート ' + Number(transformed.generatedTrackCount || 0) + '件';
+          const intervals = Array.isArray(transformed.compressionIntervals)
+            ? transformed.compressionIntervals.filter(function(value, index, values) {
+              return values.indexOf(value) === index;
+            }) : [];
+          if (intervals.length) rendered += ' / 圧縮間隔 ' + intervals.join('秒・') + '秒';
+        }
+        return rendered;
       },
-      renderWarnings: function(draft) {
+      renderWarnings: function(subject) {
         const messages = {
           GPX_WAYPOINTS_IGNORED: function(count) { return 'ウェイポイント' + count + '件は今回は取り込みません。'; },
           GPX_EMPTY_SEGMENTS_IGNORED: function(count) { return '空の軌跡区間' + count + '件を無視しました。'; },
           GPX_POINTS_WITHOUT_TIME: function(count) { return '時刻のない地点が' + count + '件あります。'; },
           GPX_POINTS_WITHOUT_ELEVATION: function(count) { return '標高のない地点が' + count + '件あります。'; }
         };
-        return (Array.isArray(draft && draft.warnings) ? draft.warnings : []).map(function(warning) {
+        return (Array.isArray(subject && subject.warnings) ? subject.warnings : []).map(function(warning) {
           const render = warning && messages[warning.code];
           const count = Number(warning && warning.count);
           return render && Number.isFinite(count) && count > 0 ? render(count) : '';
@@ -15806,6 +15858,7 @@ AUDIO_VENDOR_BUNDLE_END
 
     const TrackFileImportUI = (function(colors) {
       const MAX_FILE_BYTES = 2 * 1024 * 1024;
+      const MAX_SAVED_TRACKS = 100;
       const EDIT_IDS = [
         'track-import-preview-name', 'track-import-preview-description',
         'track-import-preview-color', 'track-import-preview-line-style',
@@ -15866,6 +15919,8 @@ AUDIO_VENDOR_BUNDLE_END
         const withEditToken = typeof config.withEditToken === 'function'
           ? config.withEditToken : function(payload) { return payload; };
         const onSaved = typeof config.onSaved === 'function' ? config.onSaved : function() {};
+        const getTrackCount = typeof config.getTrackCount === 'function'
+          ? config.getTrackCount : function() { return 0; };
         const normalizeSavedTrack = typeof config.normalizeSavedTrack === 'function'
           ? config.normalizeSavedTrack : function(track) { return track; };
         const onBusy = typeof config.onBusy === 'function' ? config.onBusy : function() {};
@@ -15936,7 +15991,7 @@ AUDIO_VENDOR_BUNDLE_END
         }
 
         function isBusy() {
-          return !!(importState.loading || importState.draft || importState.submittedPayload
+          return !!(importState.loading || importState.batch || importState.draft || importState.submittedPayload
             || importState.saving || importState.saved);
         }
 
@@ -15953,9 +16008,14 @@ AUDIO_VENDOR_BUNDLE_END
           element('track-import-preview-discard').style.display = importState.saved ? 'none' : '';
           element('track-import-preview-close').style.display = importState.saved ? '' : 'none';
           const adapter = activeAdapter();
-          const stateLabel = importState.saving ? (adapter ? adapter.savingLabel : '保存中...')
-            : importState.saved ? '完了'
-            : importState.submittedPayload && importState.errorCode ? '失敗'
+          const payloadCount = Array.isArray(importState.submittedPayloads)
+            ? importState.submittedPayloads.length : 0;
+          const progress = payloadCount > 1
+            ? '（' + Math.min(importState.saveIndex + (importState.saved ? 0 : 1), payloadCount)
+              + '/' + payloadCount + '）' : '';
+          const stateLabel = importState.saving ? (adapter ? adapter.savingLabel : '保存中...') + progress
+            : importState.saved ? '完了' + progress
+            : importState.submittedPayload && importState.errorCode ? '失敗' + progress
             : '';
           setOptionalText('track-import-preview-state', stateLabel);
           try { onBusy(isBusy()); } catch (_observerError) {}
@@ -15974,21 +16034,42 @@ AUDIO_VENDOR_BUNDLE_END
           return Number.isFinite(date.getTime()) ? date.toLocaleString('ja-JP') : '—';
         }
 
-        function renderPreview(draft) {
+        function renderParts(batch) {
+          const drafts = batch && Array.isArray(batch.drafts) ? batch.drafts : [];
+          const partsElement = element('track-import-preview-parts');
+          if (drafts.length <= 1) {
+            partsElement.textContent = '';
+            partsElement.style.display = 'none';
+            return;
+          }
+          partsElement.textContent = drafts.map(function(draft, index) {
+            const summary = draft.summary || {};
+            return (index + 1) + '. ' + draft.name + ' / '
+              + formatTime(summary.startTime) + ' 〜 ' + formatTime(summary.endTime)
+              + ' / ' + Number(summary.segmentCount || 0) + ' segment'
+              + ' / ' + Number(summary.pointCount || 0) + ' point';
+          }).join('\n');
+          partsElement.style.display = '';
+        }
+
+        function renderPreview(batch) {
           const adapter = activeAdapter();
           if (!adapter) throw codedError('TRACK_PAYLOAD_INVALID');
+          const drafts = batch && Array.isArray(batch.drafts) ? batch.drafts : [];
+          const draft = drafts[0];
+          if (!draft) throw codedError('TRACK_PAYLOAD_INVALID');
           if (typeof clearDialogValidation === 'function') clearDialogValidation('track-import-preview-overlay');
           renderTrackImportColorPalette(draft.color, false);
           setPreviewActionLabel('track-import-preview-save', '取込');
           setPreviewActionLabel('track-import-preview-discard', '取込を破棄');
           setText('track-import-preview-title', adapter.previewTitle);
           setText('track-import-preview-format', adapter.label);
-          element('track-import-preview-name').value = draft.name;
+          element('track-import-preview-name').value = batch.baseName || draft.name;
           element('track-import-preview-description').value = draft.description;
           element('track-import-preview-line-style').value = draft.lineStyle;
           element('track-import-preview-visible').checked = draft.visible;
           setText('track-import-preview-source', draft.sourceName);
-          const summary = draft.summary || {};
+          const summary = batch.summary || draft.summary || {};
           const elevation = summary.minElevation == null || summary.maxElevation == null
             ? '標高 —' : '標高 ' + Math.round(summary.minElevation) + '〜' + Math.round(summary.maxElevation) + ' m';
           setOptionalText('track-import-preview-segments', summary.segmentCount == null ? '—' : summary.segmentCount);
@@ -16001,11 +16082,12 @@ AUDIO_VENDOR_BUNDLE_END
             + formatDistance(summary.distanceMeters) + ' / '
             + formatTime(summary.startTime) + ' 〜 ' + formatTime(summary.endTime) + ' / ' + elevation
           );
-          const statsText = text(adapter.renderStats(draft));
+          renderParts(batch);
+          const statsText = text(adapter.renderStats(batch));
           const statsElement = element('track-import-preview-stats');
           statsElement.textContent = statsText;
           statsElement.style.display = statsText ? '' : 'none';
-          const warningText = adapter.renderWarnings(draft).join('\n');
+          const warningText = adapter.renderWarnings(batch).join('\n');
           const warningsElement = element('track-import-preview-warnings');
           warningsElement.textContent = warningText;
           warningsElement.style.display = warningText ? '' : 'none';
@@ -16020,8 +16102,11 @@ AUDIO_VENDOR_BUNDLE_END
           importState.requestToken = Number(importState.requestToken || 0) + 1;
           importState.owner = '';
           importState.loading = false;
+          importState.batch = null;
           importState.draft = null;
           importState.submittedPayload = null;
+          importState.submittedPayloads = null;
+          importState.saveIndex = 0;
           importState.saving = false;
           importState.saved = false;
           importState.errorCode = '';
@@ -16065,8 +16150,11 @@ AUDIO_VENDOR_BUNDLE_END
           importState.sourceKind = kind;
           importState.sourceName = '';
           importState.loading = true;
+          importState.batch = null;
           importState.draft = null;
           importState.submittedPayload = null;
+          importState.submittedPayloads = null;
+          importState.saveIndex = 0;
           importState.saving = false;
           importState.saved = false;
           importState.errorCode = '';
@@ -16083,19 +16171,22 @@ AUDIO_VENDOR_BUNDLE_END
             throw codedError(adapter.fileReadErrorCode);
           }).then(function(contents) {
             if (contents == null || inactive(token, kind)) return null;
-            const draft = adapter.buildDraft(contents, { sourceName: sourceName });
+            const batch = adapter.buildBatch(contents, { sourceName: sourceName });
             if (inactive(token, kind)) return null;
             importState.loading = false;
-            importState.draft = draft;
+            importState.batch = batch;
+            importState.draft = batch.drafts[0];
             importState.submittedPayload = null;
+            importState.submittedPayloads = null;
+            importState.saveIndex = 0;
             importState.saving = false;
             importState.saved = false;
             importState.errorCode = '';
             importState.retryable = null;
-            renderPreview(draft);
+            renderPreview(batch);
             closeSettings({ preserveTrackImport: true, restoreFocus: false });
             setText(adapter.operationStatusId, adapter.loadedMessage);
-            return draft;
+            return batch.drafts.length === 1 ? batch.drafts[0] : batch;
           }).catch(function(error) {
             if (token !== importState.requestToken) return null;
             clearState(true, kind);
@@ -16117,9 +16208,12 @@ AUDIO_VENDOR_BUNDLE_END
         }
 
         function syncDraftFromForm(kind) {
-          if (!owns(kind) || !importState.draft || importState.submittedPayload) return importState.draft;
+          if (!owns(kind) || !importState.batch || !importState.draft || importState.submittedPayload) {
+            return importState.batch && importState.batch.drafts.length > 1
+              ? importState.batch : importState.draft;
+          }
           const adapter = adapterFor(kind);
-          const next = adapter.core.updateDraft(importState.draft, {
+          const nextBatch = adapter.updateBatch(importState.batch, {
             name: element('track-import-preview-name').value,
             description: element('track-import-preview-description').value,
             color: element('track-import-preview-color').value,
@@ -16127,12 +16221,64 @@ AUDIO_VENDOR_BUNDLE_END
             lineWidth: 4,
             visible: !!element('track-import-preview-visible').checked
           });
-          importState.draft = next;
-          return next;
+          importState.batch = nextBatch;
+          importState.draft = nextBatch.drafts[0];
+          renderParts(nextBatch);
+          return nextBatch.drafts.length === 1 ? nextBatch.drafts[0] : nextBatch;
+        }
+
+        function payloadsForSave() {
+          return Array.isArray(importState.submittedPayloads)
+            ? importState.submittedPayloads : (importState.submittedPayload ? [importState.submittedPayload] : []);
+        }
+
+        function saveFailureMessage(errorCode) {
+          const payloads = payloadsForSave();
+          const base = safeSaveMessage(errorCode);
+          if (payloads.length <= 1) return base;
+          return (importState.saveIndex + 1) + '/' + payloads.length + '件目で停止しました。'
+            + importState.saveIndex + '件は保存済みです。' + base;
+        }
+
+        function setSaveFailure(errorCode, retryable) {
+          importState.errorCode = errorCode;
+          importState.retryable = retryable;
+          setPreviewError(saveFailureMessage(errorCode));
+          return false;
+        }
+
+        function normalizeSaveResponse(result, payload) {
+          if (!result || typeof result !== 'object' || Array.isArray(result)
+              || !hasOwn(result, 'track') || !result.track
+              || typeof result.track !== 'object' || Array.isArray(result.track)
+              || ['trackId', 'revisionId', 'name', 'description', 'color', 'sourceType',
+                'sourceName', 'segments', 'orderIndex', 'visible', 'lineStyle', 'lineWidth'
+                ].some(function(key) { return !hasOwn(result.track, key); })
+              || typeof result.track.trackId !== 'string' || !result.track.trackId.trim()
+              || result.track.lineWidth !== 4
+              || !Number.isInteger(result.track.orderIndex) || result.track.orderIndex < 0) {
+            throw new Error('Track response is invalid.');
+          }
+          const savedTrack = normalizeSavedTrack(result.track);
+          const expectedTrack = normalizeSavedTrack(Object.assign(
+            {}, clonePayload(payload), { orderIndex: savedTrack.orderIndex }
+          ));
+          if (!savedTrack || typeof savedTrack !== 'object' || Array.isArray(savedTrack)
+              || savedTrack.trackId !== payload.trackId || savedTrack.revisionId !== payload.revisionId
+              || savedTrack.sourceType !== payload.sourceType
+              || ['name', 'description', 'color', 'sourceName', 'visible', 'lineStyle', 'lineWidth', 'segments']
+                .some(function(key) {
+                  return JSON.stringify(savedTrack[key]) !== JSON.stringify(expectedTrack[key]);
+                })) {
+            throw new Error('Track response does not match the submitted payload.');
+          }
+          return savedTrack;
         }
 
         function submit(kind) {
-          if (!owns(kind) || !importState.submittedPayload || importState.saving || importState.saved) {
+          const payloads = payloadsForSave();
+          if (!owns(kind) || !payloads.length || importState.saveIndex >= payloads.length
+              || importState.saving || importState.saved) {
             return Promise.resolve(false);
           }
           const adapter = adapterFor(kind);
@@ -16141,74 +16287,56 @@ AUDIO_VENDOR_BUNDLE_END
           importState.retryable = null;
           setPreviewError('');
           renderControls();
-          const payload = clonePayload(importState.submittedPayload);
-          return Promise.resolve().then(function() {
-            return callGAS('saveTrackBundle', withEditToken(payload));
-          }).then(function(result) {
-            if (!result || result.ok !== true) {
-              const errorCode = text(result && result.errorCode) || 'TRACK_STORAGE_FAILED';
-              importState.errorCode = errorCode;
-              const nonRetryable = [
-                'INVALID_TRACK_PAYLOAD', 'TRACK_STORAGE_CORRUPTED', 'TRACK_SHEETS_MISSING',
-                'TRACK_REVISION_PAYLOAD_CONFLICT', 'TRACK_LIMIT_EXCEEDED',
-                'TRACK_PAYLOAD_INVALID', 'TRACK_SEGMENT_LIMIT_EXCEEDED', 'TRACK_POINT_LIMIT_EXCEEDED'
-              ];
-              importState.retryable = nonRetryable.indexOf(errorCode) !== -1 ? false
-                : (result && typeof result.retryable === 'boolean'
-                  ? result.retryable : errorCode === 'TRACK_STORAGE_BUSY' || errorCode === 'TRACK_STORAGE_FAILED');
-              setPreviewError(safeSaveMessage(errorCode));
-              return false;
+
+          function submitCurrent() {
+            const payload = clonePayload(payloads[importState.saveIndex]);
+            importState.submittedPayload = payloads[importState.saveIndex];
+            if (payloads.length > 1) {
+              setText(adapter.operationStatusId,
+                'ルートを保存中です（' + (importState.saveIndex + 1) + '/' + payloads.length + '）');
             }
-            let savedTrack;
-            try {
-              if (!result || typeof result !== 'object' || Array.isArray(result)
-                  || !hasOwn(result, 'track') || !result.track
-                  || typeof result.track !== 'object' || Array.isArray(result.track)
-                  || ['trackId', 'revisionId', 'name', 'description', 'color', 'sourceType',
-                    'sourceName', 'segments', 'orderIndex', 'visible', 'lineStyle', 'lineWidth'
-                    ].some(function(key) { return !hasOwn(result.track, key); })
-                  || typeof result.track.trackId !== 'string' || !result.track.trackId.trim()
-                  || result.track.lineWidth !== 4
-                  || !Number.isInteger(result.track.orderIndex) || result.track.orderIndex < 0) {
-                throw new Error('Track response is invalid.');
+            return Promise.resolve().then(function() {
+              return callGAS('saveTrackBundle', withEditToken(payload));
+            }).then(function(result) {
+              if (!result || result.ok !== true) {
+                const errorCode = text(result && result.errorCode) || 'TRACK_STORAGE_FAILED';
+                const nonRetryable = [
+                  'INVALID_TRACK_PAYLOAD', 'TRACK_STORAGE_CORRUPTED', 'TRACK_SHEETS_MISSING',
+                  'TRACK_REVISION_PAYLOAD_CONFLICT', 'TRACK_LIMIT_EXCEEDED',
+                  'TRACK_PAYLOAD_INVALID', 'TRACK_SEGMENT_LIMIT_EXCEEDED', 'TRACK_POINT_LIMIT_EXCEEDED'
+                ];
+                const retryable = nonRetryable.indexOf(errorCode) !== -1 ? false
+                  : (result && typeof result.retryable === 'boolean'
+                    ? result.retryable : errorCode === 'TRACK_STORAGE_BUSY' || errorCode === 'TRACK_STORAGE_FAILED');
+                return setSaveFailure(errorCode, retryable);
               }
-              savedTrack = normalizeSavedTrack(result.track);
-              const expectedTrack = normalizeSavedTrack(Object.assign(
-                {}, clonePayload(payload), { orderIndex: savedTrack.orderIndex }
-              ));
-              if (!savedTrack || typeof savedTrack !== 'object' || Array.isArray(savedTrack)
-                  || savedTrack.trackId !== payload.trackId || savedTrack.revisionId !== payload.revisionId
-                  || savedTrack.sourceType !== payload.sourceType
-                  || ['name', 'description', 'color', 'sourceName', 'visible', 'lineStyle', 'lineWidth', 'segments']
-                    .some(function(key) {
-                      return JSON.stringify(savedTrack[key]) !== JSON.stringify(expectedTrack[key]);
-                    })) {
-                throw new Error('Track response does not match the submitted payload.');
+              let savedTrack;
+              try {
+                savedTrack = normalizeSaveResponse(result, payload);
+              } catch (_responseError) {
+                return setSaveFailure('TRACK_STORAGE_FAILED', true);
               }
-            } catch (_responseError) {
-              importState.errorCode = 'TRACK_STORAGE_FAILED';
-              importState.retryable = true;
-              setPreviewError(safeSaveMessage('TRACK_STORAGE_FAILED'));
-              return false;
-            }
-            importState.saved = true;
-            importState.errorCode = '';
-            importState.retryable = null;
-            try {
-              const callbackResult = onSaved(savedTrack);
-              if (callbackResult && typeof callbackResult.then === 'function') {
-                Promise.resolve(callbackResult).catch(function() {});
-              }
-            } catch (_callbackError) {}
-            setText(adapter.operationStatusId, result.deduplicated
-              ? '保存済みのトラックを確認しました。' : 'トラックを保存しました。');
-            return true;
-          }).catch(function() {
-            importState.errorCode = 'TRACK_STORAGE_FAILED';
-            importState.retryable = true;
-            setPreviewError(safeSaveMessage('TRACK_STORAGE_FAILED'));
-            return false;
-          }).then(function(success) {
+              try {
+                const callbackResult = onSaved(savedTrack);
+                if (callbackResult && typeof callbackResult.then === 'function') {
+                  Promise.resolve(callbackResult).catch(function() {});
+                }
+              } catch (_callbackError) {}
+              importState.saveIndex += 1;
+              importState.errorCode = '';
+              importState.retryable = null;
+              if (importState.saveIndex < payloads.length) return submitCurrent();
+              importState.saved = true;
+              setText(adapter.operationStatusId, payloads.length === 1
+                ? (result.deduplicated ? '保存済みのトラックを確認しました。' : 'トラックを保存しました。')
+                : payloads.length + '件のルートを保存しました。');
+              return true;
+            }).catch(function() {
+              return setSaveFailure('TRACK_STORAGE_FAILED', true);
+            });
+          }
+
+          return submitCurrent().then(function(success) {
             importState.saving = false;
             renderControls();
             return success;
@@ -16225,10 +16353,26 @@ AUDIO_VENDOR_BUNDLE_END
             renderControls();
             return Promise.resolve(false);
           }
+          let trackCount = 0;
+          try {
+            trackCount = Number(getTrackCount());
+          } catch (_countError) {
+            trackCount = 0;
+          }
+          if (Number.isInteger(trackCount) && trackCount >= 0
+              && trackCount + importState.batch.drafts.length > MAX_SAVED_TRACKS) {
+            importState.errorCode = 'TRACK_LIMIT_EXCEEDED';
+            importState.retryable = false;
+            setPreviewError(safeSaveMessage('TRACK_LIMIT_EXCEEDED'));
+            renderControls();
+            return Promise.resolve(false);
+          }
           try {
             const adapter = adapterFor(kind);
-            const draft = syncDraftFromForm(kind);
-            importState.submittedPayload = clonePayload(adapter.core.toSavePayload(draft));
+            syncDraftFromForm(kind);
+            importState.submittedPayloads = clonePayload(adapter.toSavePayloads(importState.batch));
+            importState.saveIndex = 0;
+            importState.submittedPayload = importState.submittedPayloads[0];
           } catch (_error) {
             importState.errorCode = 'TRACK_PAYLOAD_INVALID';
             importState.retryable = false;
@@ -16373,7 +16517,8 @@ AUDIO_VENDOR_BUNDLE_END
         loading: false, requestToken: 0, job: null, controller: null, registering: false
       },
       trackImport: {
-        owner: '', loading: false, requestToken: 0, draft: null, submittedPayload: null,
+        owner: '', loading: false, requestToken: 0, batch: null, draft: null,
+        submittedPayload: null, submittedPayloads: null, saveIndex: 0,
         saving: false, saved: false, errorCode: '', retryable: null,
         sourceKind: '', sourceName: ''
       },
@@ -16721,6 +16866,7 @@ AUDIO_VENDOR_BUNDLE_END
       callGAS: withGAS,
       withEditToken: withEditToken,
       normalizeSavedTrack: normalizeTrackForState,
+      getTrackCount: function() { return Array.isArray(state.tracks) ? state.tracks.length : 0; },
       onSaved: upsertTrack,
       onBusy: function() {
         renderCsvInterchangeBusy(false);
@@ -23689,7 +23835,7 @@ AUDIO_VENDOR_BUNDLE_END
         + formatTrackDistance(track.distanceMeters) + ' / '
         + formatTrackTime(track.startTime) + ' 〜 ' + formatTrackTime(track.endTime) + ' / '
         + formatTrackElevation(track);
-      ['track-import-preview-stats', 'track-import-preview-warnings'].forEach(function(elementId) {
+      ['track-import-preview-parts', 'track-import-preview-stats', 'track-import-preview-warnings'].forEach(function(elementId) {
         const target = document.getElementById(elementId);
         target.textContent = '';
         target.style.display = 'none';
