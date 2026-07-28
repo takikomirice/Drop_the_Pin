@@ -14782,7 +14782,18 @@ AUDIO_VENDOR_BUNDLE_END
       return Object.freeze({ reduce: reduce });
     })();
 
-    const GeoJsonTrackInterchangeCore = (function(geoJsonPinCore, trackGeometry, colors) {
+    const GeoJsonTrackInterchangeCore = (function(
+      geoJsonPinCore,
+      trackGeometry,
+      batchTransform,
+      shapeSimplifier,
+      colors
+    ) {
+      const MAX_SOURCE_POINTS = 100000;
+      const MAX_GENERATED_TRACKS = 20;
+      const INTERRUPTION_MS = 4 * 60 * 60 * 1000;
+      const COMPRESSION_INTERVAL_SECONDS = [1, 2, 3, 4, 5];
+
       function text(value) {
         return value == null ? '' : String(value);
       }
@@ -14924,7 +14935,17 @@ AUDIO_VENDOR_BUNDLE_END
         }
       }
 
-      function addSegment(result, coordinates, times) {
+      function duplicatePointKey(point) {
+        if (!point.time) return '';
+        return JSON.stringify([
+          point.time,
+          point.lat,
+          point.lng,
+          point.elevation
+        ]);
+      }
+
+      function addSegment(result, coordinates, times, collectionState) {
         if (!Array.isArray(coordinates)) {
           fail('GEOJSON_TRACK_COORDINATES_INVALID', 'トラックの座標を確認してください。');
         }
@@ -14937,15 +14958,28 @@ AUDIO_VENDOR_BUNDLE_END
         if (result.length >= trackGeometry.MAX_SEGMENTS) {
           fail('TRACK_SEGMENT_LIMIT_EXCEEDED', 'トラックのsegment数が上限を超えています。');
         }
-        const points = coordinates.map(function(coordinate, index) {
+        if (collectionState.sourcePointCount + coordinates.length > collectionState.maxPoints) {
+          fail(collectionState.limitCode, 'GeoJSONのpoint数が上限を超えています。');
+        }
+        collectionState.sourcePointCount += coordinates.length;
+        const duplicateKeys = new Set();
+        const points = [];
+        coordinates.forEach(function(coordinate, index) {
           const point = normalizeCoordinate(coordinate);
           point.time = times === null ? '' : normalizeTime(times[index]);
-          return point;
+          const key = collectionState.deduplicate ? duplicatePointKey(point) : '';
+          if (key && duplicateKeys.has(key)) {
+            collectionState.duplicatePointCount += 1;
+            return;
+          }
+          if (key) duplicateKeys.add(key);
+          points.push(point);
         });
         result.push({ index: result.length, points: points });
+        collectionState.pointCount += points.length;
       }
 
-      function appendFeatureSegments(result, feature, pointCount) {
+      function appendFeatureSegments(result, feature, collectionState) {
         if (!isObject(feature) || !hasOwn(feature, 'type') || feature.type !== 'Feature'
             || !hasOwn(feature, 'geometry') || !hasOwn(feature, 'properties')
             || (feature.properties !== null && !isObject(feature.properties))) {
@@ -14982,16 +15016,16 @@ AUDIO_VENDOR_BUNDLE_END
         }
         const times = timeExtension(properties, geometry);
         if (geometry.type === 'LineString') {
-          addSegment(result, geometry.coordinates, times);
-          pointCount.value += result[result.length - 1].points.length;
+          addSegment(result, geometry.coordinates, times, collectionState);
         } else {
           geometry.coordinates.forEach(function(coordinates, index) {
-            addSegment(result, coordinates, times === null ? null : times[index]);
-            pointCount.value += result[result.length - 1].points.length;
+            addSegment(
+              result,
+              coordinates,
+              times === null ? null : times[index],
+              collectionState
+            );
           });
-        }
-        if (pointCount.value > trackGeometry.MAX_POINTS) {
-          fail('TRACK_POINT_LIMIT_EXCEEDED', 'トラックのpoint数が上限を超えています。');
         }
       }
 
@@ -15023,28 +15057,51 @@ AUDIO_VENDOR_BUNDLE_END
         }
       }
 
-      function parse(input, options) {
+      function readSource(input, options, collectionOptions) {
         const collection = geoJsonPinCore.parse(input);
         const segments = [];
-        const pointCount = { value: 0 };
+        const collectionState = {
+          maxPoints: collectionOptions.maxPoints,
+          limitCode: collectionOptions.limitCode,
+          deduplicate: collectionOptions.deduplicate === true,
+          sourcePointCount: 0,
+          pointCount: 0,
+          duplicatePointCount: 0
+        };
         collection.features.forEach(function(feature) {
-          appendFeatureSegments(segments, feature, pointCount);
+          appendFeatureSegments(segments, feature, collectionState);
         });
         const sourceName = sourceNameFromOptions(options || {});
         const metadata = readMetadata(collection, collection.features[0], sourceName);
+        return {
+          sourceName: sourceName,
+          metadata: metadata,
+          segments: segments,
+          sourcePointCount: collectionState.sourcePointCount,
+          pointCount: collectionState.pointCount,
+          duplicatePointCount: collectionState.duplicatePointCount
+        };
+      }
+
+      function parse(input, options) {
+        const source = readSource(input, options, {
+          maxPoints: trackGeometry.MAX_POINTS,
+          limitCode: 'TRACK_POINT_LIMIT_EXCEEDED',
+          deduplicate: false
+        });
         const normalized = normalizeDraft({
           id: 'geojson-track-parse',
           trackId: 'geojson-track-parse',
           revisionId: 'geojson-track-parse-revision',
-          name: metadata.name,
-          description: metadata.description,
-          color: metadata.color,
+          name: source.metadata.name,
+          description: source.metadata.description,
+          color: source.metadata.color,
           sourceType: 'geojson',
-          sourceName: sourceName,
-          segments: segments,
-          visible: metadata.visible,
-          lineStyle: metadata.lineStyle,
-          lineWidth: metadata.lineWidth,
+          sourceName: source.sourceName,
+          segments: source.segments,
+          visible: source.metadata.visible,
+          lineStyle: source.metadata.lineStyle,
+          lineWidth: source.metadata.lineWidth,
           orderIndex: 0
         });
         return {
@@ -15073,15 +15130,16 @@ AUDIO_VENDOR_BUNDLE_END
         return value || fallbackId(prefix);
       }
 
-      function buildDraft(input, options) {
-        const config = options || {};
-        const parsed = parse(input, config);
-        const generator = typeof config.generateId === 'function'
+      function idGenerator(config) {
+        return typeof config.generateId === 'function'
           ? config.generateId
           : function() {
             return typeof crypto !== 'undefined' && crypto
               && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : '';
           };
+      }
+
+      function draftFromParsed(parsed, generator) {
         const trackId = createId(generator, 'track');
         let revisionId = createId(generator, 'revision');
         if (revisionId === trackId) revisionId = fallbackId('revision');
@@ -15102,6 +15160,80 @@ AUDIO_VENDOR_BUNDLE_END
         });
       }
 
+      function buildDraft(input, options) {
+        const config = options || {};
+        return draftFromParsed(parse(input, config), idGenerator(config));
+      }
+
+      function buildDraftBatch(input, options) {
+        const config = options || {};
+        const source = readSource(input, config, {
+          maxPoints: MAX_SOURCE_POINTS,
+          limitCode: 'GEOJSON_SOURCE_POINT_LIMIT_EXCEEDED',
+          deduplicate: true
+        });
+        const transformed = batchTransform.transform(source.segments, {
+          maxPoints: trackGeometry.MAX_POINTS,
+          interruptionMs: INTERRUPTION_MS,
+          compressionIntervals: COMPRESSION_INTERVAL_SECONDS,
+          reduceOverflow: function(segments, maxPoints) {
+            return shapeSimplifier.reduce(segments, maxPoints);
+          }
+        });
+        if (transformed.parts.length > MAX_GENERATED_TRACKS) {
+          fail(
+            'GEOJSON_GENERATED_TRACK_LIMIT_EXCEEDED',
+            'GeoJSONの生成トラック数が上限を超えています。'
+          );
+        }
+
+        const templates = transformed.parts.map(function(segments, index) {
+          return normalizeDraft({
+            id: 'geojson-track-template-' + index,
+            trackId: 'geojson-track-template-' + index,
+            revisionId: 'geojson-track-template-revision-' + index,
+            name: batchTransform.partName(
+              source.metadata.name,
+              index,
+              transformed.parts.length
+            ),
+            description: source.metadata.description,
+            color: source.metadata.color,
+            sourceType: 'geojson',
+            sourceName: source.sourceName,
+            segments: segments,
+            visible: source.metadata.visible,
+            lineStyle: source.metadata.lineStyle,
+            lineWidth: source.metadata.lineWidth,
+            orderIndex: 0
+          });
+        });
+        const generator = idGenerator(config);
+        const drafts = templates.map(function(template) {
+          return draftFromParsed(template, generator);
+        });
+        const stats = {
+          sourcePointCount: source.sourcePointCount,
+          pointCount: drafts.reduce(function(total, draft) {
+            return total + draft.summary.pointCount;
+          }, 0),
+          duplicatePointCount: source.duplicatePointCount,
+          interruptionCount: transformed.interruptionCount,
+          timeCompressedPointCount: transformed.timeCompressedPointCount,
+          shapeCompressedPointCount: transformed.overflowCompressedPointCount,
+          compressedPointCount: transformed.compressedPointCount,
+          generatedTrackCount: drafts.length,
+          compressionIntervals: transformed.compressionIntervals.slice()
+        };
+        return {
+          drafts: drafts,
+          baseName: source.metadata.name,
+          summary: batchTransform.aggregateSummaries(drafts),
+          stats: stats,
+          warnings: []
+        };
+      }
+
       function updateDraft(draft, patch) {
         const source = trackGeometry.toPersistableTrack(draft);
         const changes = isObject(patch) ? patch : {};
@@ -15109,6 +15241,44 @@ AUDIO_VENDOR_BUNDLE_END
           if (hasOwn(changes, key)) source[key] = changes[key];
         });
         return normalizeDraft(source);
+      }
+
+      function updateDraftBatch(batch, patch) {
+        if (!isObject(batch) || !Array.isArray(batch.drafts) || !batch.drafts.length) {
+          fail('GEOJSON_TRACK_METADATA_INVALID', 'トラックの情報を確認してください。');
+        }
+        const changes = isObject(patch) ? patch : {};
+        const rawBaseName = hasOwn(changes, 'name') ? changes.name : batch.baseName;
+        if (typeof rawBaseName !== 'string' || !rawBaseName.trim()) {
+          fail('GEOJSON_TRACK_METADATA_INVALID', 'トラックの情報を確認してください。');
+        }
+        const baseName = rawBaseName.trim();
+        const drafts = batch.drafts.map(function(draft, index) {
+          const draftPatch = {
+            name: batchTransform.partName(baseName, index, batch.drafts.length)
+          };
+          ['description', 'color', 'visible', 'lineStyle'].forEach(function(key) {
+            if (hasOwn(changes, key)) draftPatch[key] = changes[key];
+          });
+          return updateDraft(draft, draftPatch);
+        });
+        return {
+          drafts: drafts,
+          baseName: baseName,
+          summary: batchTransform.aggregateSummaries(drafts),
+          stats: {
+            sourcePointCount: batch.stats.sourcePointCount,
+            pointCount: batch.stats.pointCount,
+            duplicatePointCount: batch.stats.duplicatePointCount,
+            interruptionCount: batch.stats.interruptionCount,
+            timeCompressedPointCount: batch.stats.timeCompressedPointCount,
+            shapeCompressedPointCount: batch.stats.shapeCompressedPointCount,
+            compressedPointCount: batch.stats.compressedPointCount,
+            generatedTrackCount: batch.stats.generatedTrackCount,
+            compressionIntervals: batch.stats.compressionIntervals.slice()
+          },
+          warnings: []
+        };
       }
 
       function toSavePayload(draft) {
@@ -15128,15 +15298,27 @@ AUDIO_VENDOR_BUNDLE_END
         };
       }
 
+      function toSavePayloads(batch) {
+        if (!isObject(batch) || !Array.isArray(batch.drafts) || !batch.drafts.length) {
+          fail('GEOJSON_TRACK_METADATA_INVALID', 'トラックの情報を確認してください。');
+        }
+        return batch.drafts.map(toSavePayload);
+      }
+
       return {
         parse: parse,
         buildDraft: buildDraft,
+        buildDraftBatch: buildDraftBatch,
         updateDraft: updateDraft,
-        toSavePayload: toSavePayload
+        updateDraftBatch: updateDraftBatch,
+        toSavePayload: toSavePayload,
+        toSavePayloads: toSavePayloads
       };
     })(
       typeof GeoJsonPinInterchangeCore !== 'undefined' ? GeoJsonPinInterchangeCore : null,
       TrackGeometryCore,
+      TrackBatchTransformCore,
+      TrackShapeSimplificationCore,
       typeof PIN_COLORS !== 'undefined' ? PIN_COLORS : [{ hex: '#e53935' }]
     );
 

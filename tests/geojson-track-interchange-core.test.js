@@ -63,6 +63,10 @@ function draft(input, options = {}) {
   return loadCore().geo.buildDraft(input, { sourceName: 'walk.geojson', ...options });
 }
 
+function batch(input, options = {}) {
+  return loadCore().geo.buildDraftBatch(input, { sourceName: 'walk.geojson', ...options });
+}
+
 function errorCode(run) {
   try {
     run();
@@ -411,6 +415,188 @@ test('feature segment and point limits reject atomically without truncation', ()
   assert.equal(errorCode(() => geo.buildDraft(collection([
     feature(line([...pointsAtLimit, [0, 0]]))
   ]), { sourceName: 'overflow.geojson' })), 'TRACK_POINT_LIMIT_EXCEEDED');
+});
+
+test('GeoJSON batch removes only exact timed duplicates within one source segment', () => {
+  const duplicate = [139, 35, 10];
+  const time = '2026-01-01T00:00:00Z';
+  const reduced = batch(collection([
+    feature(line(Array.from({ length: 20001 }, () => duplicate.slice())), {
+      coordTimes: Array.from({ length: 20001 }, () => time)
+    })
+  ]));
+  assert.equal(reduced.stats.sourcePointCount, 20001);
+  assert.equal(reduced.stats.duplicatePointCount, 20000);
+  assert.equal(reduced.stats.pointCount, 1);
+  assert.equal(reduced.drafts.length, 1);
+
+  const exactness = batch(collection([
+    feature(multiLine([
+      [[139, 35, 10], [139, 35, 10], [139, 35, 11], [139.1, 35]],
+      [[139, 35, 10]]
+    ]), {
+      coordTimes: [
+        [time, '', time, time],
+        [time]
+      ]
+    })
+  ]));
+  assert.equal(exactness.stats.sourcePointCount, 5);
+  assert.equal(exactness.stats.duplicatePointCount, 0);
+  assert.equal(exactness.stats.pointCount, 5);
+});
+
+test('GeoJSON batch splits four-hour interruptions but keeps a midnight crossing together', () => {
+  const start = Date.parse('2026-01-01T23:59:59Z');
+  const result = batch(collection([
+    feature(line([[139, 35], [139.1, 35.1], [139.2, 35.2]]), {
+      coordTimes: [
+        new Date(start).toISOString(),
+        new Date(start + 2000).toISOString(),
+        new Date(start + 4 * 60 * 60 * 1000 + 2000).toISOString()
+      ]
+    })
+  ]));
+  assert.equal(result.drafts.length, 2);
+  assert.equal(result.stats.interruptionCount, 1);
+  assert.deepEqual(plain(result.drafts.map((value) => value.name)), [
+    'walk(1/2)', 'walk(2/2)'
+  ]);
+  assert.deepEqual(plain(result.drafts.map((value) => value.summary.pointCount)), [2, 1]);
+});
+
+test('GeoJSON batch uses the smallest time interval and partitions irreducible timed data', () => {
+  const start = Date.parse('2026-01-01T00:00:00Z');
+  const seconds = Array.from({ length: 20001 }, (_, index) => index);
+  const compressed = batch(collection([
+    feature(line(seconds.map((index) => [139 + index / 1000000, 35])), {
+      coordTimes: seconds.map((index) => new Date(start + index * 1000).toISOString())
+    })
+  ]));
+  assert.equal(compressed.drafts.length, 1);
+  assert.equal(compressed.stats.pointCount, 10001);
+  assert.equal(compressed.stats.timeCompressedPointCount, 10000);
+  assert.equal(compressed.stats.shapeCompressedPointCount, 0);
+  assert.deepEqual(plain(compressed.stats.compressionIntervals), [2]);
+  assert.deepEqual(
+    plain(compressed.drafts[0].segments[0].points.slice(0, 3).map((value) => value.time)),
+    [
+      '2026-01-01T00:00:00.000Z',
+      '2026-01-01T00:00:02.000Z',
+      '2026-01-01T00:00:04.000Z'
+    ]
+  );
+  assert.equal(
+    compressed.drafts[0].segments[0].points.at(-1).time,
+    '2026-01-01T05:33:20.000Z'
+  );
+
+  const everyTenSeconds = batch(collection([
+    feature(line(seconds.map((index) => [139 + index / 1000000, 35])), {
+      coordTimes: seconds.map((index) => new Date(start + index * 10000).toISOString())
+    })
+  ]));
+  assert.deepEqual(
+    plain(everyTenSeconds.drafts.map((value) => value.summary.pointCount)),
+    [20000, 1]
+  );
+  assert.equal(everyTenSeconds.stats.compressedPointCount, 0);
+  assert.deepEqual(plain(everyTenSeconds.stats.compressionIntervals), []);
+});
+
+test('GeoJSON batch shape reduction preserves protected untimed geometry and is inactive at the limit', () => {
+  const coordinates = Array.from({ length: 20001 }, (_, index) => (
+    [139 + index / 1000000, 35, index === 5000 ? -10 : (index === 15000 ? 50 : null)]
+  ));
+  const times = coordinates.map(() => '');
+  times[10000] = '2026-01-01T00:00:00Z';
+  const result = batch(collection([
+    feature(line(coordinates), { coordTimes: times })
+  ]));
+  assert.equal(result.drafts.length, 1);
+  assert.equal(result.stats.pointCount, 20000);
+  assert.equal(result.stats.shapeCompressedPointCount, 1);
+  assert.equal(result.stats.timeCompressedPointCount, 0);
+  const retained = result.drafts[0].segments[0].points;
+  assert.ok(retained.some((value) => value.elevation === -10));
+  assert.ok(retained.some((value) => value.elevation === 50));
+  assert.ok(retained.some((value) => value.time === '2026-01-01T00:00:00.000Z'));
+
+  const atLimit = coordinates.slice(0, 20000);
+  const unchanged = batch(collection([feature(line(atLimit))]));
+  assert.deepEqual(
+    plain(unchanged.drafts[0].segments[0].points.map((value) => [
+      value.lng, value.lat, value.elevation, value.time
+    ])),
+    atLimit.map((value) => [value[0], value[1], value[2], ''])
+  );
+  assert.equal(unchanged.stats.compressedPointCount, 0);
+});
+
+test('GeoJSON batch enforces independent source segment and generated-track limits before IDs', () => {
+  let generated = 0;
+  const generateId = () => `generated-${++generated}`;
+  const sourceLimitCoordinates = Array.from({ length: 100001 }, () => [139, 35]);
+  assert.equal(errorCode(() => batch(collection([
+    feature(line(sourceLimitCoordinates))
+  ]), { generateId })), 'GEOJSON_SOURCE_POINT_LIMIT_EXCEEDED');
+  assert.equal(generated, 0);
+
+  const acceptedCoordinates = sourceLimitCoordinates.slice(0, 100000);
+  const accepted = batch(collection([feature(line(acceptedCoordinates))]));
+  assert.equal(accepted.stats.sourcePointCount, 100000);
+  assert.equal(accepted.stats.pointCount, 20000);
+
+  const segments = Array.from({ length: 200 }, (_, index) => [[139, 35 + index / 1000]]);
+  assert.equal(batch(collection([feature(multiLine(segments))])).drafts.length, 1);
+  assert.equal(errorCode(() => batch(collection([
+    feature(multiLine([...segments, [[140, 36]]]))
+  ]))), 'TRACK_SEGMENT_LIMIT_EXCEEDED');
+
+  const start = Date.parse('2026-01-01T00:00:00Z');
+  function interrupted(count) {
+    return collection([feature(
+      line(Array.from({ length: count }, (_, index) => [139, 35 + index / 1000])),
+      { coordTimes: Array.from({ length: count }, (_, index) => (
+        new Date(start + index * 4 * 60 * 60 * 1000).toISOString()
+      )) }
+    )]);
+  }
+  assert.equal(batch(interrupted(20)).drafts.length, 20);
+  assert.equal(
+    errorCode(() => batch(interrupted(21))),
+    'GEOJSON_GENERATED_TRACK_LIMIT_EXCEEDED'
+  );
+});
+
+test('GeoJSON batch edits regenerate bounded suffixes and save independent payloads', () => {
+  const start = Date.parse('2026-01-01T00:00:00Z');
+  const core = loadCore().geo;
+  const created = core.buildDraftBatch(collection([
+    feature(line([[139, 35], [140, 36]]), {
+      coordTimes: [
+        new Date(start).toISOString(),
+        new Date(start + 4 * 60 * 60 * 1000).toISOString()
+      ]
+    })
+  ]), { sourceName: 'walk.geojson' });
+  const updated = core.updateDraftBatch(created, {
+    name: 'x'.repeat(100),
+    description: 'shared',
+    color: '#2196f3',
+    visible: false,
+    lineStyle: 'dashed'
+  });
+  assert.deepEqual(plain(updated.drafts.map((value) => value.name)), [
+    `${'x'.repeat(95)}(1/2)`,
+    `${'x'.repeat(95)}(2/2)`
+  ]);
+  const payloads = core.toSavePayloads(updated);
+  assert.equal(payloads.length, 2);
+  assert.notEqual(payloads[0], payloads[1]);
+  assert.notEqual(payloads[0].segments, payloads[1].segments);
+  assert.deepEqual(plain(payloads.map((value) => value.description)), ['shared', 'shared']);
+  assert.equal(updated.summary.pointCount, 2);
 });
 
 test('draft edits preserve identity and geometry while save payload is deeply whitelisted', () => {

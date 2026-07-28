@@ -217,6 +217,27 @@ function geoJson() {
   });
 }
 
+function interruptedGeoJson() {
+  return JSON.stringify({
+    type: 'FeatureCollection',
+    name: 'Morning walk',
+    features: [{
+      type: 'Feature',
+      geometry: {
+        type: 'LineString',
+        coordinates: [[139, 35, 10], [139.1, 35.1, 20], [140, 36, 30]]
+      },
+      properties: {
+        coordTimes: [
+          '2026-07-11T23:59:59Z',
+          '2026-07-12T00:00:01Z',
+          '2026-07-12T04:00:01Z'
+        ]
+      }
+    }]
+  });
+}
+
 function file(overrides = {}) {
   return {
     name: 'walk.geojson',
@@ -359,6 +380,54 @@ test('successful parsing opens preview through the sole preserve path and displa
   assert.match(setup.documentApi.getElementById('track-import-preview-summary').textContent, /2 point/);
   assert.doesNotMatch(setup.documentApi.getElementById('track-import-preview-summary').textContent, /139|140/);
   assert.equal(setup.state.submittedPayload, null);
+});
+
+test('GeoJSON generated routes use the common preview and resume a fixed failed payload in order', async () => {
+  const requests = [];
+  let failedSecond = false;
+  const setup = createController({
+    async callGAS(method, payload) {
+      assert.equal(method, 'saveTrackBundle');
+      const submitted = plain(payload);
+      delete submitted.__editToken;
+      requests.push(submitted);
+      if (submitted.name.endsWith('(2/2)') && !failedSecond) {
+        failedSecond = true;
+        throw new Error('response lost');
+      }
+      return {
+        ok: true,
+        track: {
+          ...submitted,
+          orderIndex: submitted.name.endsWith('(1/2)') ? 0 : 1
+        }
+      };
+    }
+  });
+  const imported = await setup.controller.importFile(file({
+    text: async () => interruptedGeoJson()
+  }));
+  assert.equal(imported.drafts.length, 2);
+  assert.deepEqual(plain(imported.drafts.map((value) => value.name)), [
+    'Morning walk(1/2)', 'Morning walk(2/2)'
+  ]);
+  setup.documentApi.getElementById('track-import-preview-name').value = 'Edited route';
+
+  assert.equal(await setup.controller.save(), false);
+  assert.deepEqual(requests.map((value) => value.name), [
+    'Edited route(1/2)', 'Edited route(2/2)'
+  ]);
+  assert.equal(setup.state.saveIndex, 1);
+  assert.equal(setup.state.retryable, true);
+  const failedPayload = plain(requests[1]);
+
+  assert.equal(await setup.controller.retry(), true);
+  assert.deepEqual(requests[2], failedPayload);
+  assert.deepEqual(setup.savedTracks.map((value) => value.name), [
+    'Edited route(1/2)', 'Edited route(2/2)'
+  ]);
+  assert.equal(setup.state.saveIndex, 2);
+  assert.equal(setup.state.saved, true);
 });
 
 test('metadata remains editable until first save then the submitted payload and controls are fixed', async () => {
