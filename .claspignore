@@ -1,3 +1,9 @@
+# Only runtime sources may be uploaded.
+**/**
+!Code.js
+!index.html
+!shared.html
+!appsscript.json
 docs/**
 .superpowers/**
 .codex-debug/**

@@ -215,10 +215,15 @@ function loadApi(configRows = [['設定項目', '値', '説明']], options = {})
       getActiveSpreadsheet: () => spreadsheet
     },
     HtmlService: {
-      createTemplateFromFile: (name) => createTemplateRecord('file', name),
+      createTemplateFromFile: (name) => name === 'index' ? {
+        getRawContent() {
+          htmlFileReads.push(name);
+          return options.rawIndexContent === undefined ? indexHtml : options.rawIndexContent;
+        }
+      } : createTemplateRecord('file', name),
       createHtmlOutputFromFile: (name) => {
         htmlFileReads.push(name);
-        return { getContent: () => options.rawIndexContent === undefined ? indexHtml : options.rawIndexContent };
+        return { getContent: () => (options.rawIndexContent === undefined ? indexHtml : options.rawIndexContent).replace(/<\?/g, '&lt;?') };
       },
       createTemplate: (source) => {
         templateSources.push(source);
@@ -510,6 +515,9 @@ test('index doGet strips the raw vendor prefix before creating and assigning the
   assert.equal(loaded.templateSources[0].includes('AUDIO_VENDOR_BUNDLE_END'), false);
   assert.equal(loaded.templateSources[0].includes('globalThis.Mediabunny='), false);
   assert.equal(loaded.templateSources[0].includes('globalThis.MediabunnyMp3Encoder='), false);
+  assert.equal(loaded.templateSources[0].includes('<? if (editToken)'), false);
+  assert.equal(loaded.templateSources[0].includes('&lt;?'), false);
+  assert.ok(loaded.templateSources[0].includes('data-dtp-audio-editor-boundary="start"'));
   assert.equal(loaded.templates[0].execUrl, 'https://script.google.com/macros/s/deploy/exec');
   assert.equal(loaded.templates[0].token, 'share-token');
   assert.match(loaded.templates[0].editToken, /^edt_[A-Za-z0-9]+$/);
@@ -579,6 +587,10 @@ test('doGet issues edit tokens only for matching edit mode and key', () => {
     ]);
     loaded.api.doGet({ parameter });
     assert.equal(loaded.templates[0].editToken, '');
+    if (parameter.view !== 'shared') {
+      assert.equal(loaded.templateSources[0].includes('data-dtp-audio-editor-boundary="start"'), false);
+      assert.equal(loaded.templateSources[0].includes('&lt;?'), false);
+    }
   });
 });
 

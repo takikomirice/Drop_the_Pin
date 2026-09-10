@@ -320,7 +320,7 @@ test('Drive management and map row failures use distinct safe actionable message
     ['IMPORT_DRIVE_FILE_FAILED', '管理対象の写真を保存できませんでした。再試行してください。', true],
     ['DRIVE_SOURCE_NOT_EDITABLE', '選択したDrive写真を表示用ファイルとして利用できません。写真を選び直してください。', false],
     ['DRIVE_SOURCE_CHECK_FAILED', '選択したDrive写真を確認できませんでした。再試行してください。', true],
-    ['DRIVE_LINK_SHARING_DENIED', '組織のGoogle Drive共有ポリシーにより写真を公開できません。公開可能な保存先を設定するか、Google Workspace管理者へリンク共有設定を確認してください。', false],
+    ['DRIVE_LINK_SHARING_DENIED', '写真のリンク共有を設定できません。保存先フォルダから継承した共有設定、ファイルの共有変更権限、または組織の共有制限を確認してください。', false],
     ['DRIVE_LINK_SHARING_FAILED', '管理用写真のリンク共有を確認できませんでした。再試行してください。', true],
     ['DRIVE_MANAGED_COPY_CREATE_FAILED', '管理用の写真コピーを作成できませんでした。保存先Driveの作成権限を確認してください。', true],
     ['DRIVE_MANAGED_COPY_FINALIZE_FAILED', '管理用の写真コピーを確定できませんでした。再試行してください。', true],

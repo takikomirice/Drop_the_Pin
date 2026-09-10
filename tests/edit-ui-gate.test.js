@@ -100,7 +100,7 @@ test('initial data loading blocks edit entry and canEdit until the snapshot sett
 test('beforeunload protection is registered before initialization awaits external data', () => {
   const body = sourceFunctionBody(indexHtml, 'initializeApp');
   const listenerIndex = body.indexOf("window.addEventListener('beforeunload'");
-  const firstAwaitIndex = body.indexOf('await loadAppSettings()');
+  const firstAwaitIndex = body.indexOf('await Promise.all(');
   assert.notEqual(listenerIndex, -1);
   assert.notEqual(firstAwaitIndex, -1);
   assert.ok(listenerIndex < firstAwaitIndex);

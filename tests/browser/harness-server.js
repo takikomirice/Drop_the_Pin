@@ -475,7 +475,15 @@ function ensureNoTemplateDirectives(source, name) {
   return source;
 }
 
-function productionEditPage() {
+function realMapAssets() {
+  return '<link rel="stylesheet" href="/leaflet.css"><script src="/leaflet.js"></script>';
+}
+
+function stubMapExperience(html) {
+  return html.replace(/<!-- MAP_EXPERIENCE_START -->[\s\S]*?<!-- MAP_EXPERIENCE_END -->/, '<script>window.DtpMapExperience={attach:function(){return {pins:{removeLayer:function(){},addLayer:function(){},addLayers:function(){}},clearPins:function(){},closePin:function(){},openPin:function(){return false;}}}};</script>');
+}
+
+function productionEditPage(realMap = false) {
   let html = withoutAudioVendorPrefix(indexSource);
   html = replaceUniqueText(
     html,
@@ -485,14 +493,23 @@ function productionEditPage() {
   );
   html = evaluateEditTokenWrapper(html);
   html = withoutRemoteAssets(html);
-  html = html.replace('<head>', '<head>' + commonInstrumentationScript() + gasMockScript() + productionBrowserStubsScript());
+  if (!realMap) html = stubMapExperience(html);
+  html = html.replace('<head>', '<head>' + commonInstrumentationScript() + gasMockScript() + productionBrowserStubsScript() + (realMap ? realMapAssets() : ''));
   html = html.replace(
     '    initializeApp();',
     `    state.initializing = false;
     state.narrowView = false;
     window.__productionEdit = Object.freeze({
       state: state,
+      renderPins: renderPins,
+      focusPin: focusPin,
+      loadMapData: loadMapData,
+      loadTracks: loadTracks,
+      renderAccessMode: renderAccessMode,
       openPinDetail: openPinDetail,
+      openPinEditor: openPinEditor,
+      cancelPinEditor: cancelPinEditor,
+      hasPendingMutationWork: hasPendingMutationWork,
       closePinDetail: closePinDetail,
       openPinAudioSource: openPinAudioSource,
       removeAudioFromPinDetail: removeAudioFromPinDetail,
@@ -510,7 +527,7 @@ function productionEditPage() {
   return ensureNoTemplateDirectives(html, 'index.html');
 }
 
-function productionSharedPage() {
+function productionSharedPage(realMap = false) {
   let html = sharedSource;
   html = replaceUniqueText(
     html,
@@ -525,11 +542,14 @@ function productionSharedPage() {
     'Shared token JSON expression'
   );
   html = withoutRemoteAssets(html);
-  html = html.replace('<head>', '<head>' + commonInstrumentationScript() + gasMockScript() + productionBrowserStubsScript());
+  if (!realMap) html = stubMapExperience(html);
+  html = html.replace('<head>', '<head>' + commonInstrumentationScript() + gasMockScript() + productionBrowserStubsScript() + (realMap ? realMapAssets() : ''));
   html = html.replace(
     '    initializeSharedView();',
     `    window.__productionShared = Object.freeze({
       state: state,
+      renderSharedMap: renderSharedMap,
+      ensureSharedMap: ensureSharedMap,
       openSharedDetail: openSharedDetail,
       closeSharedDetail: closeSharedDetail,
       renderSharedPins: renderSharedPins,
@@ -1039,22 +1059,40 @@ const server = http.createServer((request, response) => {
     response.end(audioVendorSource);
     return;
   }
+  if (requestUrl.pathname === '/leaflet.js' || requestUrl.pathname === '/leaflet.css') {
+    response.writeHead(200, { 'content-type': requestUrl.pathname.endsWith('.js') ? 'text/javascript' : 'text/css' });
+    response.end(fs.readFileSync(path.join(projectRoot, 'node_modules/leaflet/dist', requestUrl.pathname.slice(1))));
+    return;
+  }
   let html;
-  if (requestUrl.pathname === '/editor') html = editorPage();
+  if (requestUrl.pathname === '/') html = page('Drop the Pin development', `
+    <h1>Drop the Pin 開発用ハーネス</h1>
+    <p>Google API・地図はスタブです。実データは変更しません。実アプリの初期化と保存はGASの開発用URLで確認してください。</p>
+    <ul>
+      <li><a href="/production-edit">編集テンプレート（初期化なし）</a></li>
+      <li><a href="/production-shared">共有テンプレート（初期化なし）</a></li>
+      <li><a href="/editor">音声エディタ</a></li>
+      <li><a href="/workflow">音声取込</a></li>
+      <li><a href="/player">音声プレーヤー</a></li>
+      <li><a href="/shared">共有音声プレーヤー</a></li>
+    </ul>`);
+  else if (requestUrl.pathname === '/editor') html = editorPage();
   else if (requestUrl.pathname === '/player') html = playerPage(false);
   else if (requestUrl.pathname === '/shared') html = playerPage(true);
   else if (requestUrl.pathname === '/workflow') html = workflowPage();
   else if (requestUrl.pathname === '/production-edit') html = productionEditPage();
+  else if (requestUrl.pathname === '/map-edit') html = productionEditPage(true);
+  else if (requestUrl.pathname === '/map-shared') html = productionSharedPage(true);
   else if (requestUrl.pathname === '/production-shared') html = productionSharedPage();
   else html = page('Not found', '<h1>Not found</h1>');
-  response.writeHead(requestUrl.pathname === '/' ? 404 : 200, {
+  response.writeHead(html.includes('<h1>Not found</h1>') ? 404 : 200, {
     'content-type': 'text/html; charset=utf-8',
     'cache-control': 'no-store'
   });
   response.end(html);
 });
 
-server.listen(port, host);
+server.listen(port, host, () => console.log(`Development harness: http://${host}:${port}`));
 
 function stop() {
   server.close(function() { process.exit(0); });

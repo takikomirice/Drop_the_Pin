@@ -347,7 +347,7 @@ test('shared route pin rows copy index order typography and retain readonly deta
     assert.equal(declaration(sharedOrder, property), declaration(indexOrder, property), property);
   });
   assert.match(builder, /className = 'shared-route-pin-action'/);
-  assert.match(builder, /openSharedDetail\(pin\)/);
+  assert.match(builder, /focusSharedPin\(pin\)/);
   assert.match(builder, /highlightLinkedMarker\(pin\.id\)/);
   assert.doesNotMatch(builder, /(?:edit|delete|remove|drag|reorder)/i);
 });

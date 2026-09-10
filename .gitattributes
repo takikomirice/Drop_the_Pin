@@ -6,3 +6,4 @@ design/pencil/*.pen -text
 index.html text eol=lf
 shared.html text eol=lf
 vendor/*.txt text eol=lf
+src/map-experience.css text eol=lf

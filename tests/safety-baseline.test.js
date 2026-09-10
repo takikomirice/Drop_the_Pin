@@ -78,7 +78,7 @@ test('application loads Leaflet, OpenStreetMap tiles, and exif-js', () => {
   assertIncludes(indexHtml, 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js');
   assertIncludes(sharedHtml, 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css');
   assertIncludes(sharedHtml, 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js');
-  assertIncludes(indexHtml, 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png');
+  assertIncludes(indexHtml, 'https://tile.openstreetmap.org/{z}/{x}/{y}.png');
   assertIncludes(sharedHtml, '{s}.tile.openstreetmap.org/{z}/{x}/{y}.png');
   assertIncludes(indexHtml, 'https://cdn.jsdelivr.net/npm/exif-js@2.3.0');
   assertIncludes(indexHtml, 'https://router.project-osrm.org/route/v1/driving/');

@@ -582,7 +582,8 @@ test('Drive GPS and no-GPS saves notify onSaved once into placed/map and unplace
 test('edit startup bootstraps the media hierarchy after pins render without blocking app initialization', async () => {
   assert.match(indexHtml, /id="settings-media-drive-banner"[^>]*hidden/);
   const initialize = sourceFunction(indexHtml, 'initializeApp');
-  const pinsAt = initialize.indexOf('await loadMapData()');
+  const pinsAt = initialize.indexOf('await Promise.all([settingsRequest, pinsRequest, tracksRequest])');
+  assert.match(initialize, /const pinsRequest = loadMapData\(\)/);
   const readyAt = initialize.indexOf('state.initializing = false;');
   const bootstrapAt = initialize.indexOf('bootstrapMediaDriveStructure()');
   assert.notEqual(pinsAt, -1);

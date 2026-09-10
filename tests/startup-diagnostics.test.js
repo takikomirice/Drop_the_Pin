@@ -188,17 +188,18 @@ test('startup failure paths never log or display raw exceptions IDs or filenames
   assert.doesNotMatch(initialize, /message:[^\n]*(?:error|caught|reason)/);
 });
 
-test('startup GAS calls keep their original count order and parallel relationship', () => {
+test('startup GAS calls keep their original count while independent reads start together', () => {
   assert.deepEqual(noArgGasCalls('loadAppSettings'), ['getAppSettings']);
   assert.deepEqual(noArgGasCalls('loadMapData'), ['getMapData']);
   assert.deepEqual(noArgGasCalls('loadRouteGroups'), ['getRouteGroups']);
   assert.deepEqual(noArgGasCalls('loadTracks'), ['getTracks']);
 
   const initialize = functionBody(indexHtml, 'initializeApp');
-  const settingsAt = initialize.indexOf('await loadAppSettings()');
-  const pinsAt = initialize.indexOf('await loadMapData()');
-  const tracksAt = initialize.indexOf('await loadTracks()');
-  assert.ok(settingsAt !== -1 && settingsAt < pinsAt && pinsAt < tracksAt);
+  const firstAwait = initialize.indexOf('await Promise.all(');
+  for (const call of ['loadAppSettings()', 'loadMapData()', 'loadTracks()']) {
+    const callAt = initialize.indexOf(call);
+    assert.ok(callAt !== -1 && callAt < firstAwait);
+  }
   assert.doesNotMatch(initialize, /listInputPresets|loadInputPresetCatalog|ensureInputPresetsLoaded/);
 
   const mapLoad = functionBody(indexHtml, 'loadMapData');

@@ -2065,7 +2065,7 @@ test('Workspace link-sharing denial is specific, non-retryable, journaled, and s
   assert.equal(result.ok, false);
   assert.equal(result.errorCode, 'DRIVE_LINK_SHARING_DENIED');
   assert.equal(result.retryable, false);
-  assert.match(result.error, /Google Drive共有ポリシー/);
+  assert.match(result.error, /共有設定.*共有変更権限.*組織の共有制限/);
   const receipt = harness.sheets.get('import_receipts').rows[1];
   assert.equal(receipt[receiptColumn('lastErrorCode')], 'DRIVE_LINK_SHARING_DENIED');
   assert.equal(harness.sheets.get('map_info').rows.length, 1);

@@ -5,6 +5,20 @@
 const SPREADSHEET_LITERAL_MARKER_ = '\u200Bdtp-sheet:v1:';
 const SPREADSHEET_LITERAL_VALUE_PREFIX_ = SPREADSHEET_LITERAL_MARKER_ + 'v:';
 const SPREADSHEET_LITERAL_ESCAPE_PREFIX_ = SPREADSHEET_LITERAL_MARKER_ + 'e:';
+// Apps Script globals are scoped to one execution. Resolve the sheet timezone
+// once when reading legacy Date cells, without changing stored values.
+let mapInfoTimeZone_ = null;
+
+function readStoredPinEventAt_(value) {
+  if (value instanceof Date) {
+    if (!Number.isFinite(value.getTime())) return '';
+    if (mapInfoTimeZone_ === null) {
+      mapInfoTimeZone_ = openDataSpreadsheet_().getSpreadsheetTimeZone();
+    }
+    value = Utilities.formatDate(value, mapInfoTimeZone_, "yyyy-MM-dd'T'HH:mm:ss");
+  }
+  return PinData.normalizeEventAt(value);
+}
 
 function encodeSpreadsheetLiteral_(value) {
   const source = String(value == null ? '' : value);
@@ -186,7 +200,7 @@ const PinData = (function() {
       links: deserializeLinks(row[9] || ''),
       status: String(row[10] || '').trim(),
       tags: deserializeTags(decodeSpreadsheetLiteral_(row[11])),
-      eventAt: normalizeEventAt(row[12]),
+      eventAt: readStoredPinEventAt_(row[12]),
       updatedAt: row[13] ? String(row[13]) : '',
       icon: normalizeIcon(row[14]),
       audioId: audioIdColumnIndex === -1 ? '' : String(row[audioIdColumnIndex] || '')
@@ -471,22 +485,31 @@ function moveSheetToFirst_(ss, sheet) {
 function doGet(e) {
   var params = (e && e.parameter) || {};
   var templateName = params.view === 'shared' ? 'shared' : 'index';
+  var requestEditToken = templateName === 'index' ? issueEditTokenFromRequest_(params) : '';
   var template;
   if (templateName === 'shared') {
     template = HtmlService.createTemplateFromFile('shared');
   } else {
-    var rawIndex = HtmlService.createHtmlOutputFromFile('index').getContent();
+    var rawIndex = HtmlService.createTemplateFromFile('index').getRawContent();
     var vendorLocation = locateAudioVendorBundleInIndex_(rawIndex);
     var strippedIndex = stripAudioVendorBundleFromIndex_(rawIndex, vendorLocation);
-    template = HtmlService.createTemplate(strippedIndex);
+    template = HtmlService.createTemplate(prepareIndexTemplate_(strippedIndex, requestEditToken, params.debugStartup === '1'));
   }
   template.execUrl = getConfiguredWebAppUrl_();
   template.token = params.token || '';
-  template.editToken = templateName === 'index' ? issueEditTokenFromRequest_(params) : '';
+  template.editToken = requestEditToken;
   return template.evaluate()
     .setTitle('Drop the Pin!')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+function prepareIndexTemplate_(source, editToken, debugStartup) {
+  // Resolve the editor condition before GAS parses the large inline script.
+  // Server-side editor APIs continue to enforce the issued edit token.
+  return String(source).replace('window.__STARTUP_DEBUG__ = false;', 'window.__STARTUP_DEBUG__ = ' + (editToken && debugStartup === true ? 'true' : 'false') + ';').replace(/<\?\s*if\s*\(editToken\)\s*\{\s*\?>\s*(<template data-dtp-audio-editor-boundary="start"><\/template>[\s\S]*?<template data-dtp-audio-editor-boundary="end"><\/template>)\s*<\?\s*\}\s*\?>/, function(_match, editor) {
+    return editToken ? editor : '';
+  });
 }
 
 const AUDIO_VENDOR_VERSION_ = '1.50.8';
@@ -5234,7 +5257,7 @@ function importItemFailureFromError_(error) {
     IMPORT_DRIVE_SOURCE_DELETE_FAILED: '以前のDrive取込の保存状態を確認できませんでした。再読み込みしてください。',
     DRIVE_SOURCE_NOT_EDITABLE: '選択したDrive写真を表示用ファイルとして利用できません。写真を選び直してください。',
     DRIVE_SOURCE_CHECK_FAILED: '選択したDrive写真を確認できませんでした。再試行してください。',
-    DRIVE_LINK_SHARING_DENIED: '組織のGoogle Drive共有ポリシーにより写真を公開できません。公開可能な保存先を設定するか、Google Workspace管理者へリンク共有設定を確認してください。',
+    DRIVE_LINK_SHARING_DENIED: '写真のリンク共有を設定できません。保存先フォルダから継承した共有設定、ファイルの共有変更権限、または組織の共有制限を確認してください。',
     DRIVE_LINK_SHARING_FAILED: '管理用写真のリンク共有を確認できませんでした。再試行してください。',
     DRIVE_MANAGED_COPY_CREATE_FAILED: '管理用の写真コピーを作成できませんでした。保存先Driveの作成権限を確認してください。',
     DRIVE_MANAGED_COPY_FINALIZE_FAILED: '管理用の写真コピーを確定できませんでした。再試行してください。',
@@ -5598,6 +5621,7 @@ function appendMapInfoRow_(sheet, row) {
   storageRow[2] = spreadsheetLiteral_(storageRow[2]);
   storageRow[11] = spreadsheetLiteral_(storageRow[11]);
   sheet.appendRow(storageRow);
+  return storageRow;
 }
 
 function mapInfoRowToPinResult_(row, folderUrl) {
@@ -8643,9 +8667,9 @@ function duplicatePin(data) {
     icon,
     ''
   ];
-  sheet.appendRow(row);
+  const storageRow = appendMapInfoRow_(sheet, row);
 
-  const pin = toClientPin_(PinData.rowToPin(row));
+  const pin = toClientPin_(PinData.rowToPin(storageRow));
   pin.folderUrl = '';
   return { ok: true, pin: pin };
 }
@@ -8671,9 +8695,9 @@ function updatePinDetails(data) {
     });
     let links = PinData.normalizeLinks(row[9] || '');
 
-    output[1] = title;
+    output[1] = spreadsheetLiteral_(title);
     if (Object.prototype.hasOwnProperty.call(data, 'description')) {
-      output[2] = String(data.description || '');
+      output[2] = spreadsheetLiteral_(String(data.description || ''));
     }
     if (Object.prototype.hasOwnProperty.call(data, 'color')) {
       output[5] = data.color || row[5] || DEFAULT_COLOR;
@@ -8693,7 +8717,7 @@ function updatePinDetails(data) {
       output[10] = PinData.normalizeStatus(String(data.status));
     }
     if (Object.prototype.hasOwnProperty.call(data, 'tags') && data.tags != null) {
-      output[11] = PinData.serializeTags(data.tags);
+      output[11] = spreadsheetLiteral_(PinData.serializeTags(data.tags));
     }
     const updatedAt = currentUpdatedAt_();
     output[13] = updatedAt;
@@ -8886,7 +8910,7 @@ function bulkUpdatePinMetadata(data) {
       const row = rows[currentRowIndex];
       let currentTags;
       try {
-        currentTags = PinData.normalizeTags(PinData.deserializeTags(row[11] || ''));
+        currentTags = PinData.normalizeTags(PinData.deserializeTags(decodeSpreadsheetLiteral_(row[11])));
       } catch (error) {
         validationError = error && error.message ? error.message : String(error);
         return;
@@ -8912,7 +8936,7 @@ function bulkUpdatePinMetadata(data) {
           return;
         }
         normalizedTagsById[pinId] = nextTags;
-        const serializedTags = PinData.serializeTags(nextTags);
+        const serializedTags = spreadsheetLiteral_(PinData.serializeTags(nextTags));
         if (String(row[11] || '') !== serializedTags) {
           row[11] = serializedTags;
           changedTagRows.push(currentRowIndex);
