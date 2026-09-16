@@ -184,7 +184,7 @@ export function attach(map, config={}) {
       if(!(pin.fileId||pin.imageUrl)) {photoStatus.textContent=pin.hasAudio?'音声のあるピン':'写真なし';}
       else if(config.photoLoader) {
         loader=config.photoLoader(renderPhoto);
-        retryPhoto.onclick=()=>{retryPhoto.hidden=true;loader.close();loader.open(pin.id,title);};
+        retryPhoto.onclick=()=>{retryPhoto.hidden=true;loader.retry();};
         loader.open(pin.id,title);
       } else {
         retryPhoto.onclick=()=>{retryPhoto.hidden=true;showSource(pin.imageUrl);};showSource(pin.imageUrl);

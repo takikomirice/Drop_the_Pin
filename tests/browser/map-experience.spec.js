@@ -158,6 +158,44 @@ test('closing a loading photo prevents late responses reopening or replacing it'
   await expect(page.locator('.dtp-pin-card')).toHaveCount(0);
 });
 
+test('photo data is reused between map popups and details and refreshed after a revision',async({page})=>{
+  await setup(page);
+  await page.locator('.leaflet-marker-icon').first().click();
+  await expect(page.locator('.dtp-pin-photo')).toBeEnabled();
+  await page.locator('.dtp-photo-popup .leaflet-popup-close-button').click();
+  await expect(page.locator('.dtp-pin-card')).toHaveCount(0);
+  await page.locator('.leaflet-marker-icon').first().click();
+  await expect(page.locator('.dtp-pin-photo')).toBeEnabled();
+  await page.getByRole('button',{name:'詳細情報',exact:true}).click();
+  await page.locator('.dtp-pin-card').getByRole('button',{name:'その他の操作',exact:true}).click();
+  await expect(page.locator('#pin-detail-image')).toBeVisible();
+  expect(await page.locator('#pin-detail-image').evaluate(img=>img.complete && img.naturalWidth>0)).toBe(true);
+  expect(await page.evaluate(()=>window.__gasMock.calls.filter(call=>call.method==='getPinPhotoData').length)).toBe(1);
+  await page.locator('#pin-detail-close').click();
+  await page.evaluate(photo=>{
+    window.__productionEdit.state.pins[0].updatedAt='2026-09-16T12:00:00';
+    window.__gasMock.enqueue('getPinPhotoData',{response:photo});
+    window.__productionEdit.renderPins();
+  },photo);
+  await page.locator('.leaflet-marker-icon').first().click();
+  await expect(page.locator('.dtp-pin-photo')).toBeEnabled();
+  expect(await page.evaluate(()=>window.__gasMock.calls.filter(call=>call.method==='getPinPhotoData').length)).toBe(2);
+});
+
+test('map photo retry discards cached bytes that failed image decoding',async({page})=>{
+  await setup(page);
+  await page.evaluate(()=>{
+    window.__gasMock.clear();
+    window.__gasMock.enqueue('getPinPhotoData',{response:{ok:true,mimeType:'image/png',byteLength:4,base64:'AQIDBA=='}});
+  });
+  await page.locator('.leaflet-marker-icon').first().click();
+  await expect(page.locator('.dtp-photo-retry')).toBeVisible();
+  await page.evaluate(photo=>window.__gasMock.enqueue('getPinPhotoData',{response:photo}),photo);
+  await page.locator('.dtp-photo-retry').click();
+  await expect(page.locator('.dtp-pin-photo')).toBeEnabled();
+  expect(await page.evaluate(()=>window.__gasMock.calls.filter(call=>call.method==='getPinPhotoData').length)).toBe(2);
+});
+
 test('mobile photo card and info controls stay inside the visible map',async({page})=>{
   await page.setViewportSize({width:375,height:812});
   await setup(page);

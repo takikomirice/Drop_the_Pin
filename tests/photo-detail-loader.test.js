@@ -96,8 +96,13 @@ function loadFactory() {
 globalThis.__createPinPhotoLoader = createPinPhotoLoader;`,
     context
   );
+  if (indexHtml.includes('function createPinPhotoCache(')) {
+    vm.runInContext(`${functionSource(indexHtml, 'createPinPhotoCache')}
+globalThis.__createPinPhotoCache = createPinPhotoCache;`, context);
+  }
   return {
     create: context.__createPinPhotoLoader,
+    createCache: context.__createPinPhotoCache,
     created,
     revoked
   };
@@ -147,6 +152,137 @@ test('photo loader is lazy and coalesces the same in-flight pin request', async 
   assert.equal(views.at(-1).status, 'ready');
   assert.equal(views.at(-1).objectUrl, 'blob:photo-1');
   assert.equal(loaded.created[0].blob.type, 'image/jpeg');
+});
+
+test('photo cache avoids refetching across closed and destroyed views without retaining URLs', async () => {
+  const loaded = loadFactory();
+  assert.equal(typeof loaded.createCache, 'function');
+  const cache = loaded.createCache();
+  let fetches = 0;
+  const config = {
+    cache,
+    fetchPhoto() { fetches += 1; return Promise.resolve(response()); },
+    renderState() {},
+    lifecycleTarget: lifecycleTarget()
+  };
+  const first = loaded.create(config);
+  await first.open('a', 'A');
+  first.close();
+  assert.deepEqual(loaded.revoked, ['blob:photo-1']);
+  await first.open('a', 'A');
+  first.destroy();
+  const second = loaded.create(config);
+  assert.equal(await second.open('a', 'A'), true);
+  assert.equal(fetches, 1);
+  assert.equal(loaded.created.length, 3);
+  assert.deepEqual(loaded.revoked, ['blob:photo-1', 'blob:photo-2']);
+});
+
+test('photo cache expires from fetch time even when repeatedly revisited', async () => {
+  const loaded = loadFactory();
+  assert.equal(typeof loaded.createCache, 'function');
+  let time = 0;
+  let fetches = 0;
+  const cache = loaded.createCache({ now: () => time });
+  const controller = loaded.create({ cache,
+    fetchPhoto() { fetches += 1; return Promise.resolve(response()); },
+    renderState() {}, lifecycleTarget: lifecycleTarget()
+  });
+  await controller.open('a', 'A');
+  controller.close();
+  time = 59999;
+  await controller.open('a', 'A');
+  assert.equal(fetches, 1);
+  controller.close();
+  time = 60000;
+  await controller.open('a', 'A');
+  assert.equal(fetches, 2);
+});
+
+test('photo cache evicts least recently viewed photos at both entry and byte limits', () => {
+  const loaded = loadFactory();
+  assert.equal(typeof loaded.createCache, 'function');
+  const cache = loaded.createCache();
+  const small = { size: 1 };
+  for (const key of ['a', 'b', 'c']) cache.put(key, small);
+  assert.equal(cache.get('a'), small);
+  cache.put('d', small);
+  assert.equal(cache.get('b'), null);
+  assert.equal(cache.get('a'), small);
+  cache.clear();
+  const large = { size: 13 * 1024 * 1024 };
+  cache.put('a', large);
+  cache.put('b', large);
+  assert.equal(cache.get('a'), null);
+  assert.equal(cache.get('b'), large);
+  cache.put('too-large', { size: 25 * 1024 * 1024 });
+  assert.equal(cache.get('too-large'), null);
+  cache.clear();
+  assert.equal(cache.get('b'), null);
+});
+
+test('photo revisions retry and explicit invalidation bypass cached data', async () => {
+  const loaded = loadFactory();
+  assert.equal(typeof loaded.createCache, 'function');
+  const cache = loaded.createCache();
+  let revision = 'v1';
+  let fetches = 0;
+  const controller = loaded.create({ cache, getCacheKey: id => id + revision,
+    fetchPhoto() { fetches += 1; return Promise.resolve(response()); },
+    renderState() {}, lifecycleTarget: lifecycleTarget()
+  });
+  await controller.open('a', 'A');
+  revision = 'v2';
+  await controller.open('a', 'A');
+  assert.equal(fetches, 2);
+  await controller.retry();
+  assert.equal(fetches, 3);
+  controller.invalidate('a');
+  await controller.open('a', 'A');
+  assert.equal(fetches, 4);
+});
+
+test('invalid failed and stale photo responses never enter the cache', async () => {
+  const loaded = loadFactory();
+  assert.equal(typeof loaded.createCache, 'function');
+  const cache = loaded.createCache();
+  const gate = deferred();
+  const replies = [response(4, 'text/plain'), Promise.reject(new Error('offline')), gate.promise, response()];
+  replies[1].catch(() => {});
+  let fetches = 0;
+  const controller = loaded.create({ cache,
+    fetchPhoto() { return replies[fetches++]; },
+    renderState() {}, lifecycleTarget: lifecycleTarget()
+  });
+  assert.equal(await controller.open('a', 'A'), false);
+  assert.equal(await controller.open('a', 'A'), false);
+  const pending = controller.open('a', 'A');
+  controller.close();
+  gate.resolve(response());
+  assert.equal(await pending, false);
+  assert.equal(await controller.open('a', 'A'), true);
+  assert.equal(fetches, 4);
+});
+
+test('a photo changed during fetch exposes retry and does not cache the previous revision', async () => {
+  const loaded = loadFactory();
+  const cache = loaded.createCache();
+  const gate = deferred();
+  let revision = 'v1';
+  let fetches = 0;
+  const views = [];
+  const controller = loaded.create({ cache, getCacheKey: id => id + revision,
+    fetchPhoto() { fetches += 1; return fetches === 1 ? gate.promise : response(); },
+    renderState(view) { views.push(view); }, lifecycleTarget: lifecycleTarget()
+  });
+  const pending = controller.open('a', 'A');
+  revision = 'v2';
+  gate.resolve(response());
+  assert.equal(await pending, false);
+  assert.equal(views.at(-1).status, 'error');
+  assert.equal(cache.get('av1'), null);
+  assert.equal(await controller.retry(), true);
+  assert.equal(fetches, 2);
 });
 
 test('photo loader rejects switched closed and retried stale responses', async () => {
