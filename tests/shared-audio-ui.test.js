@@ -45,13 +45,13 @@ test('shared detail wires the common minimal player with share token only', () =
   assert.equal(sharedHtml.includes("withGAS('getPinAudioData'"), false);
   assert.equal(sharedHtml.includes('withEditToken'), false);
 
-  const openSource = functionSource('openSharedDetail');
+  const openSource = functionSource('mountSharedPopupDetails');
   const closeSource = functionSource('closeSharedDetail');
   assert.match(openSource, /pin\.hasAudio[\s\S]*?sharedPinAudioPlayer\.open\s*\(\s*pin\.id\s*\)/);
   assert.ok(
-    openSource.indexOf("openSharedSurface('shared-detail-overlay')")
+    openSource.indexOf("move('pin-audio-player', audioSlot)")
       < openSource.indexOf('sharedPinAudioPlayer.open'),
-    'audio fetch must start after the shared detail is opened'
+    'audio fetch must start after the player is mounted in the shared popup'
   );
   assert.match(openSource, /sharedPinAudioPlayer\.close\s*\(\)/);
   assert.match(closeSource, /sharedPinAudioPlayer\.close\s*\(\)/);

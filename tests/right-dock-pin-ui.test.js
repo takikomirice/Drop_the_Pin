@@ -161,11 +161,14 @@ test('edit actions stay hidden and guarded when edit permission is unavailable',
   assert.match(functionBody('applyBulkStatus'), /if \(!canEdit\(\)\) return/);
 });
 
-test('desktop detail uses the dock while the existing overlay contract remains', () => {
+test('desktop pin detail opens the map popup while its singleton controls retain their hidden home', () => {
   assert.equal(countId('pin-detail-overlay'), 1);
   assert.match(indexHtml, /#pin-detail-overlay\.open/);
   assert.match(indexHtml, /@media \(min-width:\s*900px\)[\s\S]*?body:not\(\.panel-hidden\) #pin-detail-overlay\.open/);
   assert.match(indexHtml, /@media not all and \(min-width:\s*900px\)[\s\S]*?#pin-detail-overlay/);
-  assert.match(functionBody('openPinDetail'), /openOverlay\('pin-detail-overlay'\)/);
+  assert.match(functionBody('openPinDetail'), /mapExperience\.openPin\(pin, state\.markers\[pin\.id\]\)/);
+  assert.doesNotMatch(functionBody('openPinDetail'), /openOverlay/);
+  assert.match(functionBody('mountPinPopupDetails'), /placeholder\.replaceWith\(node\)/);
+  assert.match(functionBody('closePinDetail'), /mapExperience\.closePin\(\)/);
   assert.match(functionBody('closePinDetail'), /closeOverlay\('pin-detail-overlay'/);
 });

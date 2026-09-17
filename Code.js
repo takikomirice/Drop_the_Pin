@@ -626,6 +626,23 @@ function getPinPhotoData(payload) {
   }
 }
 
+// V8 encoding avoids the per-byte GAS service marshalling cost. The input is
+// validated by the media readers; GAS signed bytes are normalized with & 255.
+function encodeMediaBytes_(bytes) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const chunks = [];
+  let chunk = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const a = bytes[i] & 255, b = bytes[i + 1] & 255, c = bytes[i + 2] & 255;
+    chunk += alphabet[a >> 2] + alphabet[((a & 3) << 4) | (b >> 4)]
+      + (i + 1 < bytes.length ? alphabet[((b & 15) << 2) | (c >> 6)] : '=')
+      + (i + 2 < bytes.length ? alphabet[c & 63] : '=');
+    if (chunk.length >= 32768) { chunks.push(chunk); chunk = ''; }
+  }
+  chunks.push(chunk);
+  return chunks.join('');
+}
+
 function pinPhotoDataFromBlob_(blob) {
   const mimeType = blob ? String(blob.getContentType() || '').toLowerCase() : '';
   if (!isPinPhotoReadMimeType_(mimeType)) {
@@ -640,7 +657,7 @@ function pinPhotoDataFromBlob_(blob) {
     ok: true,
     mimeType: mimeType,
     byteLength: byteLength,
-    base64: Utilities.base64Encode(bytes)
+    base64: encodeMediaBytes_(bytes)
   };
 }
 
@@ -657,7 +674,7 @@ function pinAudioDataFromBlob_(blob) {
     ok: true,
     mimeType: 'audio/mpeg',
     byteLength: byteLength,
-    base64: Utilities.base64Encode(bytes)
+    base64: encodeMediaBytes_(bytes)
   };
 }
 

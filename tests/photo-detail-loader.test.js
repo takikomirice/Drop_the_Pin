@@ -54,7 +54,7 @@ function response(byteLength = 4, mimeType = 'image/jpeg') {
   };
 }
 
-function loadFactory() {
+function loadFactory(timers = {}) {
   const created = [];
   const revoked = [];
   let nextUrl = 0;
@@ -76,6 +76,8 @@ function loadFactory() {
     Number,
     String,
     Error,
+    setTimeout: timers.setTimeout || setTimeout,
+    clearTimeout: timers.clearTimeout || clearTimeout,
     atob(value) {
       return Buffer.from(String(value), 'base64').toString('binary');
     },
@@ -123,6 +125,73 @@ function lifecycleTarget() {
     }
   };
 }
+
+test('direct photo success avoids GAS, and retry bypasses a failed direct display', async () => {
+  const loaded = loadFactory();
+  const views = [];
+  let image, calls = 0;
+  const loader = loaded.create({
+    getDirectUrl: () => 'https://drive.google.com/thumbnail?id=photo',
+    createImage: () => (image = {}),
+    fetchPhoto: () => { calls++; return response(); },
+    renderState: view => views.push(view)
+  });
+  const opened = loader.open('pin');
+  assert.ok(image, 'direct image load starts before GAS');
+  image.onload();
+  assert.equal(await opened, true);
+  assert.equal(calls, 0);
+  assert.match(views.at(-1).objectUrl, /^https:/);
+  await loader.retry();
+  assert.equal(calls, 1);
+  assert.match(views.at(-1).objectUrl, /^blob:/);
+  assert.deepEqual(loaded.revoked, []);
+});
+
+test('direct failure falls back to authenticated bytes and close cancels late direct callbacks', async () => {
+  const loaded = loadFactory();
+  const views = [];
+  let image, calls = 0;
+  const loader = loaded.create({
+    getDirectUrl: () => 'https://drive.google.com/thumbnail?id=photo',
+    createImage: () => (image = {}),
+    fetchPhoto: () => { calls++; return response(); },
+    renderState: view => views.push(view)
+  });
+  const opened = loader.open('first');
+  assert.ok(image, 'direct image load starts before GAS');
+  image.onerror();
+  assert.equal(await opened, true);
+  assert.equal(calls, 1);
+  const next = loader.open('next');
+  const late = image.onload;
+  loader.close();
+  late();
+  assert.equal(await next, false);
+  assert.equal(calls, 1);
+  assert.equal(views.at(-1).status, 'hidden');
+});
+
+test('stalled direct image falls back and cannot replace the finished fallback', async () => {
+  let deadline;
+  const loaded = loadFactory({ setTimeout: fn => { deadline = fn; return 1; }, clearTimeout() {} });
+  let image, calls = 0;
+  const views = [];
+  const loader = loaded.create({
+    getDirectUrl: () => 'https://drive.google.com/thumbnail?id=photo',
+    createImage: () => (image = {}),
+    fetchPhoto: () => { calls++; return response(); },
+    renderState: view => views.push(view)
+  });
+  const opened = loader.open('pin');
+  const late = image.onload;
+  deadline();
+  assert.equal(await opened, true);
+  late();
+  assert.equal(calls, 1);
+  assert.match(views.at(-1).objectUrl, /^blob:/);
+  assert.equal(image.src, '');
+});
 
 test('photo loader is lazy and coalesces the same in-flight pin request', async () => {
   const loaded = loadFactory();

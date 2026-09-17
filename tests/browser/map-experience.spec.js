@@ -23,7 +23,59 @@ async function setup(page,shared=false,pins=[pin]) {
   // The production panels finish their 240 ms opening/resize transition.
   await page.waitForTimeout(300);
 }
+for (const directFails of [false, true]) {
+  test(`photo uses direct display with authenticated fallback (${directFails?'failure':'success'})`,async({page})=>{
+    const directPin={...pin,fileId:'real_photo_12345',imageUrl:'https://drive.google.com/thumbnail?id=real_photo_12345&sz=w1920'};
+    await setup(page,false,[directPin]);
+    if(directFails) await page.route('https://drive.google.com/thumbnail?**',route=>route.abort());
+    await page.getByRole('button',{name:'谷の写真のピン',exact:true}).click();
+    await expect(page.locator('.dtp-pin-photo')).toBeEnabled();
+    const source=await page.locator('.dtp-pin-photo img').getAttribute('src');
+    expect(source).toMatch(directFails?/^blob:/:/^https:\/\/drive.google.com\/thumbnail/);
+    expect(await page.evaluate(()=>window.__gasMock.calls.filter(c=>c.method==='getPinPhotoData').length)).toBe(directFails?1:0);
+    await page.locator('.dtp-pin-photo').click();
+    await expect(page.locator('#photo-viewer-overlay')).toBeVisible();
+    expect(await page.locator('#photo-viewer-image').getAttribute('src')).toMatch(directFails?/^blob:/:/^https:\/\/drive.google.com\/thumbnail/);
+    expect(await page.evaluate(()=>window.__gasMock.calls.filter(c=>c.method==='getPinPhotoData').length)).toBe(directFails?1:0);
+  });
+}
 for(const shared of [false,true]) {
+  test(`audio plays inside the popup and closing releases it (${shared?'shared':'edit'})`,async({page})=>{
+    await setup(page,shared,[{...pin,hasAudio:true,fileId:'',imageUrl:''}]);
+    await page.evaluate(shared=>window.__gasMock.enqueue(shared?'getSharedPinAudioData':'getPinAudioData',{audioSeed:1}),shared);
+    await page.getByRole('button',{name:'谷の写真のピン',exact:true}).click();
+    const audio=page.locator('.dtp-pin-audio audio');
+    await expect(audio).toBeVisible();
+    await expect(page.locator('.dtp-pin-card')).not.toContainText('音声のあるピン');
+    await expect(page.locator('.dtp-pin-media')).toHaveCSS('height','54px');
+    await page.getByRole('button',{name:'詳細情報',exact:true}).click();
+    await expect(page.locator('.dtp-pin-info')).toBeVisible();
+    await expect(page.locator('.dtp-pin-media')).toHaveCSS('height','205px');
+    await expect(page.locator('.dtp-pin-audio').getByRole('button',{name:'再試行',exact:true})).toBeHidden();
+    await expect(page.locator(shared?'#shared-detail-overlay':'#pin-detail-overlay')).not.toBeVisible();
+    await audio.evaluate(a=>{window.__popupAudio=a;window.__popupPauses=0;a.pause=()=>window.__popupPauses++;return a.play();});
+    await page.locator('.leaflet-popup-close-button').click();
+    await expect(page.locator('.dtp-pin-card')).toHaveCount(0);
+    expect(await page.evaluate(()=>window.__popupAudio.getAttribute('src'))).toBeNull();
+    expect(await page.evaluate(()=>window.__popupPauses)).toBeGreaterThan(0);
+  });
+  test(`all pin details stay in the popup (${shared?'shared':'edit'})`,async({page})=>{
+    await setup(page,shared);
+    await page.evaluate(shared=>{const api=shared?window.__productionShared:window.__productionEdit;api[shared?'openSharedDetail':'openPinDetail'](api.state.pins[0]);},shared);
+    await page.getByRole('button',{name:'詳細情報',exact:true}).click();
+    const card=page.locator('.dtp-pin-card');
+    await expect(card).toContainText(pin.description);
+    await expect(card).toContainText('イベント時刻');
+    await expect(card.getByRole('button',{name:'その他の操作',exact:true})).toHaveCount(0);
+    await expect(page.locator(shared?'#shared-detail-overlay':'#pin-detail-overlay')).not.toBeVisible();
+    if(!shared){
+      await card.getByRole('button',{name:'音声を追加',exact:true}).click();
+      await expect(page.locator('#pin-audio-source-overlay')).toBeVisible();
+      await page.locator('#pin-audio-source-cancel').click();
+      await expect(card).toHaveCount(1);
+      await expect(card).toBeVisible();
+    }
+  });
   test(`many pins are added in one cluster batch (${shared?'shared':'edit'})`,async({page})=>{
     await setup(page,shared);
     const result=await page.evaluate(shared=>{
@@ -158,7 +210,7 @@ test('closing a loading photo prevents late responses reopening or replacing it'
   await expect(page.locator('.dtp-pin-card')).toHaveCount(0);
 });
 
-test('photo data is reused between map popups and details and refreshed after a revision',async({page})=>{
+test('photo data is reused when reopening a popup and refreshed after a revision',async({page})=>{
   await setup(page);
   await page.locator('.leaflet-marker-icon').first().click();
   await expect(page.locator('.dtp-pin-photo')).toBeEnabled();
@@ -166,12 +218,10 @@ test('photo data is reused between map popups and details and refreshed after a 
   await expect(page.locator('.dtp-pin-card')).toHaveCount(0);
   await page.locator('.leaflet-marker-icon').first().click();
   await expect(page.locator('.dtp-pin-photo')).toBeEnabled();
-  await page.getByRole('button',{name:'詳細情報',exact:true}).click();
-  await page.locator('.dtp-pin-card').getByRole('button',{name:'その他の操作',exact:true}).click();
-  await expect(page.locator('#pin-detail-image')).toBeVisible();
-  expect(await page.locator('#pin-detail-image').evaluate(img=>img.complete && img.naturalWidth>0)).toBe(true);
+  await expect(page.locator('.dtp-pin-photo img')).toBeVisible();
+  expect(await page.locator('.dtp-pin-photo img').evaluate(img=>img.complete && img.naturalWidth>0)).toBe(true);
   expect(await page.evaluate(()=>window.__gasMock.calls.filter(call=>call.method==='getPinPhotoData').length)).toBe(1);
-  await page.locator('#pin-detail-close').click();
+  await page.locator('.leaflet-popup-close-button').click();
   await page.evaluate(photo=>{
     window.__productionEdit.state.pins[0].updatedAt='2026-09-16T12:00:00';
     window.__gasMock.enqueue('getPinPhotoData',{response:photo});
@@ -218,9 +268,49 @@ test('no-photo pin remains readable and exposes the existing operations',async({
   await page.locator('.leaflet-marker-icon').first().click();
   await expect(page.locator('.dtp-photo-status')).toHaveText('写真なし');
   await page.getByRole('button',{name:'詳細情報',exact:true}).click();
-  await page.locator('.dtp-pin-card').getByRole('button',{name:'その他の操作',exact:true}).click();
-  await expect(page.locator('#pin-detail-overlay')).toHaveClass(/open/);
+  await expect(page.locator('.dtp-pin-card')).toContainText(pin.description);
+  await expect(page.locator('#pin-detail-overlay')).not.toHaveClass(/open/);
+  await expect(page.locator('.dtp-pin-card')).toHaveCount(1);
+});
+
+test('unplaced pin opens a popup without assigning coordinates',async({page})=>{
+  await setup(page,false,[{...pin,lat:null,lng:null,fileId:'',imageUrl:''}]);
+  await page.evaluate(()=>window.__productionEdit.openPinDetail(window.__productionEdit.state.pins[0]));
+  await page.getByRole('button',{name:'詳細情報',exact:true}).click();
+  await expect(page.locator('.dtp-pin-card')).toContainText('未配置（場所はまだ指定されていません）');
+  expect(await page.evaluate(()=>{const p=window.__productionEdit.state.pins[0];return [p.lat,p.lng];})).toEqual([null,null]);
+  await expect(page.locator('#pin-detail-photo-add')).toBeVisible();
+});
+
+for(const shared of [false,true]) test(`popup audio retries and ignores a closed request (${shared?'shared':'edit'})`,async({page})=>{
+  await setup(page,shared,[{...pin,hasAudio:true}]);
+  const method=shared?'getSharedPinAudioData':'getPinAudioData';
+  await page.evaluate(method=>window.__gasMock.enqueue(method,{response:{ok:false}}),method);
+  await page.getByRole('button',{name:'谷の写真のピン',exact:true}).click();
+  await expect(page.locator('.dtp-pin-audio')).toContainText('音声を再生できませんでした');
+  await page.evaluate(method=>window.__gasMock.enqueue(method,{defer:'late-audio',audioSeed:2}),method);
+  await page.locator('.dtp-pin-audio').getByRole('button',{name:'再試行',exact:true}).click();
+  await expect(page.locator('.dtp-pin-audio')).toContainText('音声を準備中');
+  await page.locator('.leaflet-popup-close-button').click();
+  await page.evaluate(()=>window.__gasMock.resolve('late-audio'));
   await expect(page.locator('.dtp-pin-card')).toHaveCount(0);
+  await expect(page.locator('#pin-audio-runtime')).toBeHidden();
+  expect(await page.locator('#pin-audio-runtime').getAttribute('src')).toBeNull();
+});
+
+for(const shared of [false,true]) test(`mobile popup audio fits above the list (${shared?'shared':'edit'})`,async({page})=>{
+  await page.setViewportSize({width:375,height:812});
+  await setup(page,shared,[{...pin,hasAudio:true}]);
+  await page.evaluate(shared=>window.__gasMock.enqueue(shared?'getSharedPinAudioData':'getPinAudioData',{audioSeed:1}),shared);
+  await page.getByRole('button',{name:'谷の写真のピン',exact:true}).click();
+  await expect(page.locator('.dtp-pin-audio audio')).toBeVisible();
+  await page.waitForTimeout(350);
+  const card=await page.locator('.dtp-pin-card').boundingBox();
+  const panel=await page.locator(shared?'#shared-side-panel':'#side-panel').boundingBox();
+  expect(card.x).toBeGreaterThanOrEqual(0);
+  expect(card.x+card.width).toBeLessThanOrEqual(375);
+  expect(card.y).toBeGreaterThanOrEqual(56);
+  expect(card.y+card.height).toBeLessThanOrEqual(panel.y);
 });
 
 for(const shared of [false,true]) for(const width of [375,1280]) {

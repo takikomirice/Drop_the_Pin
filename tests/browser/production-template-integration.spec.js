@@ -1,5 +1,11 @@
 const { test, expect } = require('@playwright/test');
 
+test.beforeEach(async ({page}) => {
+  await page.route('https://tile.openstreetmap.org/**', route => route.fulfill({
+    contentType:'image/png', body:Buffer.from(photoResponse().base64,'base64')
+  }));
+});
+
 function observeRuntimeErrors(page) {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(String(error && error.message || error)));
@@ -49,9 +55,45 @@ function photoResponse() {
   };
 }
 
+test('audio cleanup notice retries the saved import after another draft is cancelled', async ({ page }) => {
+  await page.goto('/map-edit');
+  const pin = productionPin();
+  await enqueue(page, 'saveImportAudioItem', { response: { ok: true, pin, cleanupRequired: true, warning: '元音声を整理できませんでした。' } });
+  await page.evaluate(async () => {
+    const workflow = window.__productionEdit.audioPinImportWorkflow;
+    const input = (job) => ({
+      operation: { mediaKind:'audio', operationMode:'create-pin', selectionLimit:1, jobId:job, itemId:'item', idempotencyKey:job+':item', sourceKind:'local' },
+      sourceFileName:'recording.wav', editorResult:{blob:new Blob(['test audio'],{type:'audio/mpeg'})}
+    });
+    const draft = workflow.start(input('saved'));
+    workflow.setLocationChoice({kind:'unplaced'});
+    await workflow.save(draft);
+    workflow.start(input('next'));
+  });
+  await page.locator('#upload-cancel').click();
+  const notice = page.locator('#audio-cleanup-notices');
+  await expect(notice).toContainText('元音声を整理できませんでした');
+  await enqueue(page, 'saveImportAudioItem', { failure: 'offline' });
+  await notice.getByRole('button', { name:'整理を再試行' }).click();
+  await expect(notice).toContainText('音声は保存済み');
+  await enqueue(page, 'saveImportAudioItem', { response:{ok:true,pin,cleanupRequired:false} });
+  await notice.getByRole('button', { name:'整理を再試行' }).click();
+  await expect(notice.getByRole('button')).toHaveCount(0);
+  const result = await page.evaluate(() => ({
+    calls:window.__gasMock.calls.filter(c=>c.method==='saveImportAudioItem'),
+    count:window.__productionEdit.state.pins.length,
+    pending:window.__productionEdit.audioPinImportWorkflow.hasPendingDraft()
+  }));
+  expect(result.calls).toHaveLength(3);
+  expect(result.calls[1].payload).toEqual(result.calls[0].payload);
+  expect(result.calls[2].payload).toEqual(result.calls[0].payload);
+  expect(result.count).toBe(1);
+  expect(result.pending).toBe(false);
+});
+
 test('processed index template uses real detail, hasAudio and source chooser wiring', async ({ page }) => {
   const expectCleanRuntime = observeRuntimeErrors(page);
-  await page.goto('/production-edit');
+  await page.goto('/map-edit');
   await expect.poll(() => page.evaluate(() => typeof window.__productionEdit)).toBe('object');
   expect(await page.evaluate(() => window.__productionInitializationSuppressed)).toBe(true);
   await expect(page.locator('#audio-editor-overlay')).toHaveCount(1);
@@ -64,8 +106,9 @@ test('processed index template uses real detail, hasAudio and source chooser wir
     window.__productionEdit.openPinDetail(pin);
   }, pin);
 
-  await expect(page.locator('#pin-detail-overlay')).toHaveClass(/open/);
-  await expect(page.locator('#pin-detail-title')).toHaveText(pin.title);
+  await expect(page.locator('.dtp-pin-card')).toBeVisible();
+  await expect(page.locator('.dtp-pin-title')).toHaveText(pin.title);
+  await page.getByRole('button', { name: '詳細情報', exact: true }).click();
   await expect(page.locator('#pin-detail-audio-add')).toBeHidden();
   await expect(page.locator('#pin-detail-audio-replace')).toBeVisible();
   await expect(page.locator('#pin-detail-audio-delete')).toBeVisible();
@@ -88,7 +131,7 @@ test('processed index template uses real detail, hasAudio and source chooser wir
 
   await page.locator('#pin-audio-source-cancel').click();
   await expect(page.locator('#pin-audio-source-overlay')).not.toHaveClass(/open/);
-  await expect(page.locator('#pin-detail-overlay')).toHaveClass(/open/);
+  await expect(page.locator('.dtp-pin-card')).toBeVisible();
   expect(await page.evaluate(() => window.__gasMock.calls.length)).toBe(1);
 
   const noAudioPin = productionPin({
@@ -100,6 +143,7 @@ test('processed index template uses real detail, hasAudio and source chooser wir
     window.__productionEdit.state.pins.push(pin);
     window.__productionEdit.openPinDetail(pin);
   }, noAudioPin);
+  await page.getByRole('button', { name: '詳細情報', exact: true }).click();
   await expect(page.locator('#pin-detail-audio-add')).toBeVisible();
   await expect(page.locator('#pin-detail-audio-replace')).toBeHidden();
   await expect(page.locator('#pin-audio-player')).toBeHidden();
@@ -110,7 +154,7 @@ test('processed index template uses real detail, hasAudio and source chooser wir
 
 test('processed edit template lazy-loads photo bytes and hides unavailable mobile actions', async ({ page }) => {
   const expectCleanRuntime = observeRuntimeErrors(page);
-  await page.goto('/production-edit');
+  await page.goto('/map-edit');
   await expect.poll(() => page.evaluate(() => typeof window.__productionEdit)).toBe('object');
 
   const pin = productionPin({
@@ -121,14 +165,15 @@ test('processed edit template lazy-loads photo bytes and hides unavailable mobil
     fileId: 'private-drive-photo-id',
     imageUrl: 'https://drive.google.com/thumbnail?id=private-drive-photo-id'
   });
+  await page.route('https://drive.google.com/thumbnail?**', route => route.abort());
   await enqueue(page, 'getPinPhotoData', { response: photoResponse() });
   await page.evaluate((photoPin) => {
     window.__productionEdit.state.pins = [photoPin];
     window.__productionEdit.openPinDetail(photoPin);
   }, pin);
 
-  await expect(page.locator('#pin-detail-image-trigger')).toBeVisible();
-  const detailSource = await page.locator('#pin-detail-image').getAttribute('src');
+  await expect(page.locator('.dtp-pin-photo')).toBeVisible();
+  const detailSource = await page.locator('.dtp-pin-photo img').getAttribute('src');
   expect(detailSource).toMatch(/^blob:/);
   expect(detailSource).not.toContain('drive.google.com');
   const photoCalls = await page.evaluate(() =>
@@ -138,7 +183,7 @@ test('processed edit template lazy-loads photo bytes and hides unavailable mobil
     payload: { __editToken: 'edit-token-browser-test', pinId: pin.id }
   }]);
 
-  await page.locator('#pin-detail-image-trigger').click();
+  await page.locator('.dtp-pin-photo').click();
   await expect(page.locator('#photo-viewer-overlay')).toHaveClass(/open/);
   await expect(page.locator('#photo-viewer-image')).toHaveAttribute('src', detailSource);
 
@@ -162,7 +207,7 @@ test('processed edit template lazy-loads photo bytes and hides unavailable mobil
 
 test('edit preview keeps native audio playback while mutation actions stay hidden', async ({ page }) => {
   const expectCleanRuntime = observeRuntimeErrors(page);
-  await page.goto('/production-edit');
+  await page.goto('/map-edit');
   await expect.poll(() => page.evaluate(() => typeof window.__productionEdit)).toBe('object');
   const pin = productionPin({ id: 'preview-audio-pin' });
   await enqueue(page, 'getPinAudioData', { audioSeed: 13 });
@@ -225,7 +270,7 @@ test('real edit initialization warms vendor in background, tolerates failure and
 
 test('processed shared template consumes the projected DTO and never includes editor or vendor', async ({ page }) => {
   const expectCleanRuntime = observeRuntimeErrors(page);
-  await page.goto('/production-shared');
+  await page.goto('/map-shared');
   await expect.poll(() => page.evaluate(() => typeof window.__productionShared)).toBe('object');
   expect(await page.evaluate(() => window.__productionInitializationSuppressed)).toBe(true);
 
@@ -253,8 +298,8 @@ test('processed shared template consumes the projected DTO and never includes ed
 
   await enqueue(page, 'getSharedPinAudioData', { audioSeed: 12 });
   await page.locator(`#shared-list [data-pin-id="${allowedPin.id}"]`).click();
-  await expect(page.locator('#shared-detail-overlay')).toHaveClass(/open/);
-  await expect(page.locator('#shared-detail-title')).toHaveText(allowedPin.title);
+  await expect(page.locator('.dtp-pin-card')).toBeVisible();
+  await expect(page.locator('.dtp-pin-title')).toHaveText(allowedPin.title);
   await expect(page.locator('#pin-audio-runtime')).toBeVisible();
   await expect(page.locator('#pin-audio-runtime')).toHaveAttribute('controlsList', 'nodownload');
   expect(await page.locator('#pin-audio-runtime').evaluate((audio) => audio.controls)).toBe(true);
@@ -266,7 +311,7 @@ test('processed shared template consumes the projected DTO and never includes ed
   expect(audioCall.payload).not.toHaveProperty('editToken');
   expect(audioCall.payload).not.toHaveProperty('__editToken');
 
-  await page.locator('#shared-detail-close').click();
+  await page.locator('.leaflet-popup-close-button').click();
   await expect(page.locator('#shared-detail-overlay')).not.toHaveClass(/open/);
   await expect(page.locator('#pin-audio-player')).toBeHidden();
   await expectCleanRuntime();

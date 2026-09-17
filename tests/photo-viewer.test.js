@@ -340,13 +340,15 @@ test('surface cleanup closes viewers before owners revoke or replace photo URLs'
   assert.ok(closeImport.indexOf('clearImportPreviewPhoto') < closeImport.indexOf('releaseJobResources'));
   assert.match(functionSource(indexHtml, 'clearImportPreviewPhoto'), /closePhotoViewerForTrigger[\s\S]*sourceUrl:\s*''/);
 
-  assert.match(functionSource(indexHtml, 'openPinDetail'), /updatePhotoViewerTrigger/);
+  const mapSource = fs.readFileSync(path.resolve(__dirname, '..', 'src/map-experience.js'), 'utf8');
+  assert.match(functionSource(indexHtml, 'openPinDetail'), /mapExperience\.openPin/);
+  assert.match(mapSource, /config\.closePhoto\(photoButton\)[\s\S]*loader\.destroy\(\)/);
   assert.match(functionSource(indexHtml, 'closePinDetail'), /closePhotoViewerForTrigger[\s\S]*closeOverlay/);
-  assert.match(functionSource(sharedHtml, 'openSharedDetail'), /updateSharedPhotoViewerTrigger/);
+  assert.match(functionSource(sharedHtml, 'openSharedDetail'), /sharedMapExperience\.openPin/);
   assert.match(functionSource(sharedHtml, 'closeSharedDetail'), /closeSharedPhotoViewerForTrigger[\s\S]*closeSharedSurface/);
 });
 
-test('edit pin detail lazily loads authenticated photo bytes and never embeds the Drive URL', () => {
+test('edit popup lazily loads photos with the authenticated fallback and closes their loader', () => {
   const stateTag = openingTag(indexBody, 'pin-detail-photo-state');
   assert.match(stateTag, /aria-live="polite"/);
   assert.match(indexBody, /id="pin-detail-photo-status"/);
@@ -364,12 +366,16 @@ test('edit pin detail lazily loads authenticated photo bytes and never embeds th
 
   const openSource = functionSource(indexHtml, 'openPinDetail');
   assert.doesNotMatch(openSource, /sourceUrl:\s*pin\.imageUrl/);
-  assert.match(openSource, /hasEditToken\s*&&\s*hasPhoto/);
-  assert.match(openSource, /pinPhotoLoader\.open\(\s*pin\.id,\s*photoTitle\s*\)/);
-  assert.ok(
-    openSource.indexOf("openOverlay('pin-detail-overlay')") < openSource.indexOf('pinPhotoLoader.open'),
-    'photo fetch starts only after the detail is opened'
-  );
+  assert.match(openSource, /mapExperience\.openPin/);
+  assert.doesNotMatch(openSource, /openOverlay/);
+  const mapConfig = indexHtml.slice(indexHtml.indexOf('const mapExperience = DtpMapExperience.attach'), indexHtml.indexOf('function escHtml'));
+  assert.match(mapConfig, /photoLoader: hasEditToken \? function/);
+  assert.match(mapConfig, /getDirectUrl: getPinPhotoDirectUrl/);
+  assert.match(mapConfig, /withGAS\('getPinPhotoData', withEditToken\(\{ pinId: pinId \}\)\)/);
+  const mapSource = fs.readFileSync(path.resolve(__dirname, '..', 'src/map-experience.js'), 'utf8');
+  assert.ok(mapSource.indexOf('thisPopup.openOn(map)') < mapSource.indexOf('loader.open(pin.id,title)'),
+    'photo fetch starts only after the popup is opened');
+  assert.match(mapSource, /loader\.destroy\(\)/);
 
   const closeSource = functionSource(indexHtml, 'closePinDetail');
   assert.match(closeSource, /closePhotoViewerForTrigger[\s\S]*pinPhotoLoader\.close\(\)/);

@@ -120,7 +120,8 @@ test('preview and normal URLs do not expose edit-only actions or a persistent re
   assert.doesNotMatch(indexHtml, /body\.view-only:not\(\.share-mode\) #readonly-banner\s*\{\s*display:\s*block/);
   assert.match(functionBody('updateReadonlyBanner'), /deniedEditUrl[\s\S]*banner\.style\.display\s*=\s*'none'/);
   assert.match(indexHtml, /body\.preview-mode #mode-badge/);
-  assert.match(functionBody('openPinDetail'), /openOverlay\('pin-detail-overlay'\)/);
+  assert.match(functionBody('openPinDetail'), /mapExperience\.openPin\(pin, state\.markers\[pin\.id\]\)/);
+  assert.doesNotMatch(functionBody('openPinDetail'), /openOverlay/);
   assert.match(indexHtml, /pin-detail-share[\s\S]*?if \(!canEdit\(\)\) return/);
 });
 
@@ -242,7 +243,7 @@ test('mobile bottom sheet switches between pin list and all unified routes', () 
   assert.match(routePanel, /getUnifiedRouteEntriesForPanel\(\)/);
   assert.match(routePanel, /buildRouteItem/);
   assert.match(routePanel, /buildUnifiedTrackRouteItem/);
-  assert.match(functionBody('openPinDetail'), /openOverlay\('pin-detail-overlay'\)/);
+  assert.match(functionBody('openPinDetail'), /mapExperience\.openPin\(pin, state\.markers\[pin\.id\]\)/);
 });
 
 test('viewing cards are keyboard-sized detail links and only editable rows receive drag handles', () => {

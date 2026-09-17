@@ -13,6 +13,7 @@
 .dtp-photo-popup .leaflet-popup-tip{background:var(--color-surface-raised,#fff)}
 .dtp-photo-popup a.leaflet-popup-close-button{left:5px;right:auto;top:5px;width:44px;height:44px;border-radius:50%;background:#ffffffdf;color:#174a2d;z-index:5;font-size:24px;line-height:42px}
 .dtp-pin-media{position:relative;height:205px;background:var(--color-surface-muted,#edf1ec)}
+.dtp-pin-media.dtp-pin-media-audio{height:54px}.dtp-pin-media.dtp-pin-media-audio.is-expanded{height:205px}.dtp-pin-media-audio .dtp-pin-photo[hidden]{display:none}
 .dtp-pin-photo{width:100%;height:100%;padding:0;border:0;background:transparent;cursor:zoom-in}
 .dtp-pin-photo:disabled{cursor:default}.dtp-pin-photo img{width:100%;height:100%;object-fit:cover;display:block}.dtp-pin-photo img[hidden]{display:none}
 .dtp-pin-title{padding:10px 13px;font-size:14px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -21,5 +22,7 @@
 .dtp-pin-info p{margin:8px 0}.dtp-pin-info a{display:block;color:#174a2d}.dtp-info-time{font-size:11px}.dtp-pin-info[hidden]{display:none}
 .dtp-pin-more,.dtp-photo-retry,.dtp-map-retry{border:1px solid #b6cabc;border-radius:8px;padding:7px 10px;color:#174a2d;background:#f7f8f5;cursor:pointer;font:inherit}
 .dtp-photo-status{position:absolute;inset:65px 12px auto;text-align:center;font-size:13px;pointer-events:none}.dtp-photo-retry{position:absolute;top:105px;left:50%;transform:translateX(-50%);white-space:nowrap}
+.dtp-pin-audio{padding:0 10px 10px;min-height:66px}.dtp-pin-audio[hidden],.dtp-pin-audio [hidden]{display:none!important}.dtp-pin-audio .pin-audio-player{margin:0;padding:6px;border:0}.dtp-pin-audio audio{width:100%;max-width:100%;height:40px}
+.dtp-pin-info .inline-actions{flex-wrap:wrap}.dtp-pin-info .section-card{padding:8px}.dtp-pin-info .form-select{max-width:100%;font-size:12px}.dtp-pin-info button,.dtp-pin-info a{white-space:normal}.dtp-pin-info .dtp-pin-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.dtp-pin-unplaced{font-weight:600}
 .dtp-pin-card button:focus-visible,.dtp-map-control select:focus-visible{outline:3px solid var(--accent,#22643d);outline-offset:-3px}
 @media(max-height:550px){.dtp-pin-media{height:155px}.dtp-basemap-status{max-width:140px}}

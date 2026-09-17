@@ -218,14 +218,15 @@ test('a stale pin A response never overwrites pin B detail DOM', async () => {
   assert.equal(harness.pins[0].folderUrl, 'https://drive.google.com/drive/folders/a');
 });
 
-test('the map goto action clears the shown pin before closing its detail overlay', () => {
+test('popup cleanup clears the shown pin so late Drive responses cannot update a closed pin', () => {
   const openPinDetailSource = extractFunction(indexHtml, 'openPinDetail');
   const closePinDetailSource = extractFunction(indexHtml, 'closePinDetail');
-  const gotoHandlerStart = openPinDetailSource.indexOf('gotoBtn.onclick');
-  const gotoHandlerEnd = openPinDetailSource.indexOf('};', gotoHandlerStart);
-  const gotoHandler = openPinDetailSource.slice(gotoHandlerStart, gotoHandlerEnd);
-
-  assert.match(gotoHandler, /closePinDetail\(\)/);
+  const mountSource = extractFunction(indexHtml, 'mountPinPopupDetails');
+  assert.match(openPinDetailSource, /mapExperience\.openPin\(pin, state\.markers\[pin\.id\]\)/);
+  assert.match(mountSource, /state\.shownPinId = pin\.id/);
+  assert.match(mountSource, /loadPinDriveMetaForCurrentViews_\(pin\)/);
+  assert.match(mountSource, /return function\(\)[\s\S]*state\.shownPinId === pin\.id\) state\.shownPinId = null/);
+  assert.match(closePinDetailSource, /mapExperience\.closePin\(\)/);
   assert.match(closePinDetailSource, /state\.shownPinId = null;[\s\S]*closeOverlay\('pin-detail-overlay'/);
 });
 

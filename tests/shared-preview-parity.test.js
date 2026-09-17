@@ -405,31 +405,27 @@ test('shared readonly detail uses the index sheet hierarchy and desktop dock geo
   assert.equal(declaration(dockedSheet, 'box-shadow'), 'none');
 });
 
-test('shared readonly detail uses the index narrow bottom sheet and populates every viewing field', () => {
-  const narrowOverlay = ruleBody(sharedCss, 'body.shared-narrow-view #shared-detail-overlay.open');
-  assert.equal(declaration(narrowOverlay, 'display'), 'flex');
-  assert.equal(declaration(narrowOverlay, 'align-items'), 'flex-end');
-  assert.equal(declaration(narrowOverlay, 'justify-content'), 'stretch');
-  assert.equal(declaration(narrowOverlay, 'padding'), '0');
-  assert.equal(declaration(narrowOverlay, 'background'), 'transparent');
-  const narrowSheet = ruleBody(sharedCss, 'body.shared-narrow-view #shared-detail-overlay .sheet-body');
-  assert.equal(declaration(narrowSheet, 'width'), '100%');
-  assert.equal(declaration(narrowSheet, 'height'), 'min(75dvh, calc(var(--dialog-viewport-height, 100dvh) - env(safe-area-inset-top)), 634px)');
-  assert.equal(declaration(narrowSheet, 'max-height'), 'min(75dvh, calc(var(--dialog-viewport-height, 100dvh) - env(safe-area-inset-top)), 634px)');
-  assert.equal(declaration(narrowSheet, 'border-radius'), '20px 20px 0 0');
-  assert.equal(declaration(narrowSheet, 'border-bottom'), '0');
-
+test('shared readonly detail uses the common map popup and retains every viewing field', () => {
   const detail = functionSource(sharedHtml, 'openSharedDetail');
-  [
-    'shared-detail-title', 'shared-detail-image', 'shared-detail-status',
-    'shared-detail-tags', 'shared-detail-description', 'shared-detail-routes',
-    'shared-detail-links', 'shared-detail-time'
-  ].forEach((id) => assert.match(detail, new RegExp(`getElementById\\('${id}'\\)`)));
+  const mounted = functionSource(sharedHtml, 'mountSharedPopupDetails');
+  const mapSource = fs.readFileSync(path.join(root, 'src/map-experience.js'), 'utf8');
+  const mapCss = fs.readFileSync(path.join(root, 'src/map-experience.css'), 'utf8');
+  assert.match(detail, /ensureSharedMap\(\)/);
+  assert.match(detail, /sharedMapExperience\.openPin\(pin, sharedMarkers\[pin\.id\]\)/);
+  assert.match(mapCss, /\.dtp-photo-popup \.leaflet-popup-content\{[^}]*max-width:calc\(100vw - 64px\)/);
+  for (const field of ['title', 'description', 'status', 'tags', 'links', 'imageUrl']) {
+    assert.ok(mapSource.includes('pin.' + field), `popup retains ${field}`);
+  }
+  assert.match(mounted, /getSharedPinRouteLabels\(pin\.id\)/);
+  assert.match(mounted, /renderSharedPinTimeRows\(pin\)/);
+  assert.match(mounted, /move\('shared-detail-time', info\)/);
+  assert.match(mounted, /move\('shared-detail-routes', info\)/);
+  assert.match(mounted, /move\('pin-audio-player', audioSlot\)/);
+  assert.match(mounted, /homes\.forEach\(function\(restore\) \{ restore\(\); \}\)/);
   assert.doesNotMatch(detail, /sharedPinListIconMarkup|shared-detail-icon/);
-  assert.match(detail, /getSharedPinRouteLabels\(pin\.id\)/);
-  assert.match(detail, /renderTagChips\(pin\.tags\)/);
-  assert.match(detail, /openSharedSurface\('shared-detail-overlay'\)/);
+  assert.doesNotMatch(detail, /openSharedSurface/);
   assert.doesNotMatch(detail, /(?:編集|削除|保存|共有作成)/);
+  assert.doesNotMatch(mounted, /(?:編集|削除|保存|共有作成)/);
 });
 
 test('shared detail switches between docked non-modal and modal accessibility states', () => {

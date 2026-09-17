@@ -258,12 +258,18 @@ test('surface helpers avoid duplicate records and global listeners', () => {
 
 test('pin detail remains read-only and keeps protected photos plus route context', () => {
   const detail = functionSource('openSharedDetail');
+  const mounted = functionSource('mountSharedPopupDetails');
+  const mapSource = fs.readFileSync(path.resolve(__dirname, '..', 'src/map-experience.js'), 'utf8');
   assert.doesNotMatch(detail, /sharedPinListIconMarkup|shared-detail-icon|shared-detail-pin-icon/);
   assert.doesNotMatch(bodyMarkup, /id="shared-detail-icon"|class="shared-detail-pin-icon"/);
-  assert.match(detail, /pin\.status/);
-  assert.match(detail, /getSharedPinRouteLabels\(pin\.id\)/);
+  assert.match(detail, /sharedMapExperience\.openPin/);
+  assert.doesNotMatch(detail, /openSharedSurface/);
+  assert.match(mapSource, /pin\.status/);
+  assert.match(mounted, /getSharedPinRouteLabels\(pin\.id\)/);
   assert.match(bodyMarkup, /id="shared-detail-image" class="photo-fit-cover protected-photo" draggable="false"/);
-  assert.match(detail, /getElementById\('shared-detail-image'\)/);
+  assert.match(mapSource, /element\('img','protected-photo'\)/);
+  assert.match(mapSource, /img\.draggable=false/);
   assert.doesNotMatch(detail, /編集|削除|保存|共有作成/);
+  assert.doesNotMatch(mounted, /編集|削除|保存|共有作成|withEditToken/);
   assert.doesNotMatch(sharedHtml, /visualViewport/);
 });

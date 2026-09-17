@@ -122,25 +122,31 @@ export function attach(map, config={}) {
     if(popup) map.closePopup(popup);
   }
   function openPin(pin,marker) {
-    if(!marker || !pins.hasLayer(marker)) return false;
+    if(!pin) return false;
     closePin();
     const request=++revealGeneration;
-    pins.zoomToShowLayer(marker,()=>{
-      if(request!==revealGeneration || !pins.hasLayer(marker)) return;
-      marker.closeTooltip();
+    const hasMarker=!!marker&&pins.hasLayer(marker);
+    const located=pin.lat!=null&&pin.lng!=null&&Number.isFinite(Number(pin.lat))&&Number.isFinite(Number(pin.lng));
+    const position=hasMarker?marker.getLatLng():(located?[Number(pin.lat),Number(pin.lng)]:map.getCenter());
+    const reveal=()=>{
+      if(request!==revealGeneration || (hasMarker&&!pins.hasLayer(marker))) return;
+      if(hasMarker) marker.closeTooltip();
       if(config.beforeOpen) config.beforeOpen();
       const card=element('article','dtp-pin-card');
       const title=String(pin.title||'').trim()||'(無題)';
       const media=element('div','dtp-pin-media');
+      const audioOnly=pin.hasAudio&&!(pin.fileId||pin.imageUrl);
+      if(audioOnly) media.classList.add('dtp-pin-media-audio');
       const photoButton=button('','dtp-pin-photo');photoButton.setAttribute('aria-label','写真を拡大');photoButton.disabled=true;
-      const img=element('img');img.alt=title+'の写真';img.draggable=false;img.hidden=true;photoButton.append(img);
+      const img=element('img','protected-photo');img.alt=title+'の写真';img.draggable=false;img.hidden=true;photoButton.append(img);
       const photoStatus=element('div','dtp-photo-status','写真を読み込み中…');photoStatus.setAttribute('role','status');
       const retryPhoto=button('写真を再読み込み','dtp-photo-retry');retryPhoto.hidden=true;
       const infoButton=button('ⓘ','dtp-info-toggle');infoButton.setAttribute('aria-label','詳細情報');infoButton.setAttribute('aria-expanded','false');
       const info=element('div','dtp-pin-info');info.hidden=true;
       const description=element('p','',pin.description||'説明はありません。');
-      info.append(description);
-      if(config.timeText) info.append(element('p','dtp-info-time',config.timeText(pin)));
+      info.append(element('h3','dtp-info-title',title),description);
+      if(!located) info.append(element('p','dtp-pin-unplaced','未配置（場所はまだ指定されていません）'));
+      if(config.timeText&&!config.mountDetails) info.append(element('p','dtp-info-time',config.timeText(pin)));
       if(pin.status) info.append(element('p','',pin.status));
       if(Array.isArray(pin.tags)&&pin.tags.length) info.append(element('p','',pin.tags.map(tag=>'#'+tag).join(' ')));
       (Array.isArray(pin.links)?pin.links:[]).forEach(value=>{
@@ -149,13 +155,12 @@ export function attach(map, config={}) {
           const a=element('a','',value);a.href=url.href;a.target='_blank';a.rel='noopener noreferrer';info.append(a);
         } catch(_) {}
       });
-      const more=button(pin.hasAudio?'音声・その他の操作':'その他の操作','dtp-pin-more');
-      more.onclick=()=>{closePin();config.openDetails(pin);};info.append(more);
       infoButton.onclick=()=>{
         const expanded=info.hidden;info.hidden=!expanded;
         infoButton.setAttribute('aria-expanded',String(expanded));
         infoButton.setAttribute('aria-label',expanded?'写真に戻る':'詳細情報');
         infoButton.textContent=expanded?'←':'ⓘ';photoButton.tabIndex=expanded?-1:0;
+        if(audioOnly) {media.classList.toggle('is-expanded',expanded);if(popup) popup.update();}
       };
       let source='',loader=null;
       function showSource(url) {
@@ -171,17 +176,24 @@ export function attach(map, config={}) {
       }
       photoButton.onclick=()=>{if(source) config.openPhoto(source,title,photoButton);};
       media.append(photoButton,photoStatus,retryPhoto,info,infoButton);
-      card.append(media,element('div','dtp-pin-title',title));
+      card.append(media,element('div','dtp-pin-title',(located?'':'未配置 · ')+title));
+      const audioSlot=element('div','dtp-pin-audio');audioSlot.hidden=!pin.hasAudio;card.append(audioSlot);
+      let unmountDetails=null;
       L.DomEvent.disableClickPropagation(card);L.DomEvent.disableScrollPropagation(card);
-      popup=L.popup({className:'dtp-photo-popup',maxWidth:300,minWidth:220,autoPanPaddingTopLeft:[16,100],autoPanPaddingBottomRight:[16,bottomInset()+24],offset:[0,-32]}).setLatLng(marker.getLatLng()).setContent(card);
+      popup=L.popup({className:'dtp-photo-popup',maxWidth:300,minWidth:220,autoPanPaddingTopLeft:[16,100],autoPanPaddingBottomRight:[16,bottomInset()+24],offset:[0,-32]}).setLatLng(position).setContent(card);
       const thisPopup=popup;
       const cleanup=()=>{
         if(config.closePhoto) config.closePhoto(photoButton);
         img.onload=img.onerror=null;if(loader) loader.destroy();
+        if(unmountDetails) {const unmount=unmountDetails;unmountDetails=null;unmount();}
+        card.remove();
         if(popup===thisPopup) {popup=null;disposeCard=null;}
       };
       disposeCard=cleanup;thisPopup.on('remove',cleanup);thisPopup.openOn(map);
-      if(!(pin.fileId||pin.imageUrl)) {photoStatus.textContent=pin.hasAudio?'音声のあるピン':'写真なし';}
+      if(config.mountDetails) unmountDetails=config.mountDetails(pin,info,audioSlot);
+      thisPopup.update();
+      if(audioOnly) {photoStatus.hidden=true;photoButton.hidden=true;}
+      else if(!(pin.fileId||pin.imageUrl)) {photoStatus.textContent='写真なし';}
       else if(config.photoLoader) {
         loader=config.photoLoader(renderPhoto);
         retryPhoto.onclick=()=>{retryPhoto.hidden=true;loader.retry();};
@@ -190,7 +202,8 @@ export function attach(map, config={}) {
         retryPhoto.onclick=()=>{retryPhoto.hidden=true;showSource(pin.imageUrl);};showSource(pin.imageUrl);
       }
       infoButton.focus({preventScroll:true});
-    });
+    };
+    if(hasMarker) pins.zoomToShowLayer(marker,reveal);else reveal();
     return true;
   }
   function clearPins() {closePin();pins.clearLayers();}

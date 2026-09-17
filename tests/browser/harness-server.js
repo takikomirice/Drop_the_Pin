@@ -516,6 +516,7 @@ function productionEditPage(realMap = false) {
       handleLocalAudioImportSelected: handleLocalAudioImportSelected,
       handleDriveAudioImportButtonClick: handleDriveAudioImportButtonClick,
       saveAudioImportedPin: saveAudioImportedPin,
+      audioPinImportWorkflow: audioPinImportWorkflow,
       pinAudioPlayer: pinAudioPlayer,
       initializeApp: initializeApp,
       warmAudioVendorBundle: warmAudioVendorBundle,

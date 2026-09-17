@@ -326,8 +326,8 @@ test('Drive management and map row failures use distinct safe actionable message
     ['DRIVE_MANAGED_COPY_FINALIZE_FAILED', '管理用の写真コピーを確定できませんでした。再試行してください。', true],
     ['DRIVE_ORIGINAL_FOLDER_CREATE_FAILED', 'originalフォルダを作成できませんでした。Driveの作成権限を確認してください。', true],
     ['DRIVE_ORIGINAL_FOLDER_AMBIGUOUS', 'originalフォルダが複数あります。1つに整理してから再試行してください。', false],
-    ['DRIVE_SOURCE_MOVE_FAILED', '元写真をoriginalフォルダへ移動できませんでした。ピンは登録していません。Driveの移動権限を確認してください。', true],
-    ['DRIVE_SOURCE_MOVE_VERIFY_FAILED', '元写真の移動結果を確認できませんでした。ピンは登録していません。Driveを確認して再試行してください。', true],
+    ['DRIVE_SOURCE_MOVE_FAILED', 'ピンは登録しましたが、元写真をoriginal/photosへ移動できませんでした。Driveの移動権限を確認して再試行してください。', true],
+    ['DRIVE_SOURCE_MOVE_VERIFY_FAILED', 'ピンは登録しましたが、元写真のoriginal/photosへの移動結果を確認できませんでした。Driveを確認して再試行してください。', true],
     ['IMPORT_MAP_ROW_FAILED_AFTER_SOURCE_MOVE', '元写真の整理は完了しましたが、ピン情報を保存できませんでした。再試行してください。', true],
     ['IMPORT_MAP_ROW_FAILED', 'ピン情報を登録できませんでした。再試行してください。', true]
   ];

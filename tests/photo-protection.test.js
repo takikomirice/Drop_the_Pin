@@ -63,9 +63,12 @@ test('normal detail image is marked as a non-draggable protected photo', () => {
   assertIncludes(indexHtml, '.protected-photo');
 });
 
-test('shared detail keeps the index static protected non-draggable photo slot', () => {
+test('shared detail delegates to the common protected non-draggable popup photo', () => {
   assertIncludes(sharedHtml, 'id="shared-detail-image" class="photo-fit-cover protected-photo" draggable="false"');
-  assertIncludes(sourceFunction(sharedHtml, 'openSharedDetail'), "getElementById('shared-detail-image')");
+  assertIncludes(sourceFunction(sharedHtml, 'openSharedDetail'), 'sharedMapExperience.openPin(pin, sharedMarkers[pin.id])');
+  const mapSource = fs.readFileSync(path.resolve(__dirname, '..', 'src/map-experience.js'), 'utf8');
+  assert.match(mapSource, /element\('img','protected-photo'\)/);
+  assert.match(mapSource, /img\.draggable=false/);
   assertIncludes(sharedHtml, '.protected-photo');
 });
 

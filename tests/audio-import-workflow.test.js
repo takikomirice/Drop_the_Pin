@@ -182,6 +182,36 @@ test('cleanup warning remains a successful save and cancel before save releases 
   assert.equal(releases, 2);
 });
 
+test('cleanup retry replays the committed payload without a second pin update or conversion', async () => {
+  const { api } = loadWorkflow();
+  const calls = [];
+  let released = 0, saved = 0, converted = 0;
+  const workflow = api.create({
+    blobToBase64: async () => { converted++; return 'audio'; },
+    callGAS: async (_method, payload) => {
+      calls.push(payload);
+      if (calls.length === 2) throw new Error('offline');
+      return { ok: true, pin: { id: 'saved-pin' }, cleanupRequired: calls.length === 1 };
+    },
+    onSaved: () => saved++,
+    releaseEditorResult: () => released++
+  });
+  const draft = workflow.start({ operation: operation(), sourceFileName: 'source.wav', editorResult: result() });
+  workflow.setLocationChoice({ kind: 'unplaced' });
+  await workflow.save(draft);
+  await assert.rejects(workflow.retry(), /offline/);
+  const response = await workflow.retry();
+  assert.equal(response.cleanupRequired, false);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[0], calls[1]);
+  assert.equal(calls[0], calls[2]);
+  assert.equal(saved, 1);
+  assert.equal(released, 1);
+  assert.equal(converted, 1);
+  await workflow.retry();
+  assert.equal(calls.length, 3);
+});
+
 test('valid save commits before fallible observers and releases the editor result exactly once', async () => {
   const { api } = loadWorkflow();
   let gasCalls = 0;

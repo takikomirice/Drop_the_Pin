@@ -73,6 +73,7 @@ function createHarness() {
     updateSharedPhotoViewerTrigger() { return false; },
     closeSharedPhotoViewer() { return context.closeSharedSurface('shared-photo-viewer-overlay'); },
     sharedPinAudioPlayer: { close() { return true; } },
+    sharedMapExperience: { closePin() { return true; } },
     document: {
       activeElement: null,
       body: { children: [], classList: classList() },

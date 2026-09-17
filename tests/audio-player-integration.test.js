@@ -133,10 +133,10 @@ test('edit playback authenticates and rejects invalid pins or malformed managed 
   );
 });
 
-test('edit detail alone starts playback fetch and always closes or destroys the controller', () => {
+test('mounted edit popup starts authorized playback and always closes or destroys the controller', () => {
   assert.match(indexHtml, /AudioPinPlayer\.create\s*\(/);
   assert.match(indexHtml, /getPinAudioData[\s\S]*?withEditToken\s*\(\s*\{\s*pinId:/);
-  const openSource = functionSource(indexHtml, 'openPinDetail');
+  const openSource = functionSource(indexHtml, 'mountPinPopupDetails');
   const closeSource = functionSource(indexHtml, 'closePinDetail');
   assert.match(
     openSource,
@@ -144,8 +144,8 @@ test('edit detail alone starts playback fetch and always closes or destroys the 
   );
   assert.doesNotMatch(openSource, /canEdit\(\)\s*&&\s*pin\.hasAudio/);
   assert.ok(
-    openSource.indexOf("openOverlay('pin-detail-overlay')") < openSource.indexOf('pinAudioPlayer.open'),
-    'audio fetch starts only after detail is opened'
+    openSource.indexOf("move('pin-audio-player', audioSlot)") < openSource.indexOf('pinAudioPlayer.open'),
+    'audio fetch starts only after the player is mounted in the popup'
   );
   assert.match(openSource, /pinAudioPlayer\.close\s*\(\)/);
   assert.match(closeSource, /pinAudioPlayer\.close\s*\(\)/);
